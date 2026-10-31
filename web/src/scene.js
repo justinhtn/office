@@ -469,29 +469,50 @@ function projector(team,x0,cz,uniform){
   const width=4.2,height=2.1,y=2.55,x=x0+.14
   box(world,.1,height+.18,width+.18,0x2b2f36,x-.07,y,cz)
   ;[-1,1].forEach(side=>box(world,.07,y-1.3,.07,0x2b2f36,x-.07,(y+1.3)/2-.5,cz+side*(width/2-.2)))
-  const canvas=document.createElement('canvas');canvas.width=840;canvas.height=420
+  const canvas=document.createElement('canvas');canvas.width=1680;canvas.height=840
   const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.01,y,cz);world.add(panel)
   const g=canvas.getContext('2d'),lead=team.lead,accent=`#${uniform.getHexString()}`
+  g.scale(2,2)
   const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
-  g.fillStyle='#10151c';g.fillRect(0,0,840,420)
-  g.fillStyle=accent;g.fillRect(0,0,840,8)
-  g.fillStyle='#fff';g.font='600 30px Inter,sans-serif';g.textAlign='left';g.fillText(fit(`${lead.name}'s team`,420),28,52)
-  g.fillStyle='#93a0ae';g.font='19px Inter,sans-serif';g.fillText(fit(lead.title,520),28,82)
+  const margin=34,right=840-margin,nameX=margin+18,statusX=196,workX=340
+  g.fillStyle='#10141a';g.fillRect(0,0,840,420)
+  g.textAlign='left';g.fillStyle='#f4f6f8';g.font='600 21px Inter,sans-serif';g.fillText(fit(`${lead.name}'s team`,430),margin,44)
+  g.fillStyle='#8a95a3';g.font='13px Inter,sans-serif';g.fillText(fit(lead.title,470),margin,65)
+  g.fillStyle=accent;g.fillRect(margin,16,26,3)
   if(lead.progress&&lead.progress[1]){
     const [done,total]=lead.progress
-    g.textAlign='right';g.fillStyle='#d6dde5';g.font='600 21px Inter,sans-serif';g.fillText(`${done} of ${total} tasks`,812,46)
-    g.fillStyle='#2c3644';g.fillRect(612,58,200,10);g.fillStyle=accent;g.fillRect(612,58,200*done/total,10);g.textAlign='left'
+    g.textAlign='right';g.fillStyle='#aab3be';g.font='12px Inter,sans-serif';g.fillText(`${done} of ${total} tasks`,right,42)
+    g.fillStyle='#2a323d';g.fillRect(right-120,51,120,4);g.fillStyle=accent;g.fillRect(right-120,51,120*done/total,4);g.textAlign='left'
   }
-  team.members.slice(0,6).forEach((p,i)=>{
-    const y=124+i*48,status=p.request?['Asking for you','#ff6b5e']:p.meetingWith?.length?['In a meeting','#c9a5ff']:p.isWaiting?['Waiting on a job','#f0b458']:p.isFinished?['Finished','#f0b458']:p.isRunning?['Working','#59c7ff']:['Idle','#79859a']
+  g.fillStyle='#6e7886';g.font='11px Inter,sans-serif'
+  g.fillText('Name',nameX,98);g.fillText('Status',statusX,98);g.fillText('Working on',workX,98)
+  g.fillStyle='#262e38';g.fillRect(margin,108,right-margin,1)
+  const rows=team.members.slice(0,7)
+  rows.forEach((p,i)=>{
+    const y=136+i*38,status=p.request?['Asking for you','#ff7d70']:p.meetingWith?.length?['In a meeting','#c4a6f5']:p.isWaiting?['Waiting on a job','#e6ae55']:p.isFinished?['Finished','#e6ae55']:p.isRunning?['Working','#62c4f5']:['Idle','#6e7886']
     const doing=p.jobs?.[0]||(p.isRunning?p.step:'')||p.label||p.title
-    g.fillStyle=status[1];g.beginPath();g.arc(38,y-7,7,0,7);g.fill()
-    g.fillStyle='#fff';g.font='600 23px Inter,sans-serif';g.fillText(fit(p.name,130),56,y)
-    g.fillStyle=status[1];g.font='18px Inter,sans-serif';g.fillText(fit(status[0],165),196,y)
-    g.fillStyle='#c5ced8';g.font='20px Inter,sans-serif';g.fillText(fit(doing,445),372,y)
+    g.fillStyle=status[1];g.beginPath();g.arc(margin+4,y-4,3.5,0,7);g.fill()
+    g.fillStyle='#e8ecf0';g.font='500 14px Inter,sans-serif';g.fillText(fit(p.name,statusX-nameX-12),nameX,y)
+    g.fillStyle=status[1];g.font='12.5px Inter,sans-serif';g.fillText(fit(status[0],workX-statusX-12),statusX,y)
+    g.fillStyle='#b4bdc8';g.font='13px Inter,sans-serif';g.fillText(fit(doing,right-workX),workX,y)
+    if(i<rows.length-1){g.fillStyle='#1c232c';g.fillRect(margin,y+16,right-margin,1)}
   })
-  if(team.members.length>6){g.fillStyle='#93a0ae';g.font='18px Inter,sans-serif';g.fillText(`+${team.members.length-6} more`,56,410)}
+  if(team.members.length>7){g.fillStyle='#8a95a3';g.font='12px Inter,sans-serif';g.fillText(`+${team.members.length-7} more`,nameX,404)}
+}
+// What an agent is on, from its task list or latest step. Never its private reasoning.
+function drawThought(el,p,showWords,detailed){
+  const plan=p.plan||[],line=p.step||p.recent?.[p.recent.length-1]||''
+  const key=JSON.stringify([showWords,detailed,line,detailed?plan:0,detailed&&!plan.length?p.recent:0])
+  if(el.dataset.key===key)return
+  el.dataset.key=key
+  el.textContent=''
+  el.classList.toggle('open',showWords&&Boolean(line||plan.length))
+  el.classList.toggle('detailed',detailed&&Boolean(plan.length||p.recent?.length))
+  if(!showWords||(!line&&!plan.length)){const dots=document.createElement('span');dots.className='thought-dots';dots.textContent='•••';el.appendChild(dots);return}
+  if(detailed&&plan.length){plan.forEach(item=>{const row=document.createElement('div');row.className=`thought-task ${item.status}`;const mark=document.createElement('i');row.appendChild(mark);row.appendChild(document.createTextNode(item.content));el.appendChild(row)});return}
+  if(detailed&&p.recent?.length){p.recent.forEach((step,i)=>{const row=document.createElement('div');row.className='thought-step'+(i===p.recent.length-1?' now':'');row.textContent=step;el.appendChild(row)});return}
+  el.textContent=line
 }
 function drawSpace(space,x0,z0){
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
@@ -542,7 +563,7 @@ function drawSpace(space,x0,z0){
   }
 }
 function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();fitDirty=true}
@@ -578,7 +599,8 @@ function loop(){const t=clock.getElapsedTime()
   })
   renderer.render(scene,camera)
   const w=stage.clientWidth,h=stage.clientHeight
-  tags.forEach(({el,a,key,isZone})=>{el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
+  let thoughtRoom=3
+  tags.forEach(({el,a,key,isZone})=>{if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(.72,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
 }
 const timer=setInterval(loop,33)
 let signature=''

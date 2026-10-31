@@ -252,3 +252,23 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .session-who { flex: 1 1 240px; flex-wrap: wrap; row-gap: 3px; }
 .open-app { white-space: nowrap; }
 .tag.quiet .say:not(.asks), .tag.quiet .call-badge.waiting { display: none; }
+.tag .thought { position: relative; max-width: 210px; margin-bottom: 11px; padding: 4px 9px; background: #fff; color: #2b2f36; border-radius: 13px; box-shadow: 0 2px 7px rgba(0, 0, 0, .22); font: 500 11px/1.3 Inter, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag .thought { overflow: visible; }
+.tag .thought::before, .tag .thought::after { content: ''; position: absolute; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.tag .thought::before { width: 7px; height: 7px; left: 50%; bottom: -6px; margin-left: -6px; }
+.tag .thought::after { width: 4px; height: 4px; left: 50%; bottom: -12px; margin-left: -2px; }
+.tag .thought.open:not(.detailed) { white-space: nowrap; max-width: 210px; }
+.thought-dots { display: inline-block; font-size: 9px; letter-spacing: 1px; color: #62626c; animation: thought-pulse 1.3s ease-in-out infinite; }
+@keyframes thought-pulse { 50% { opacity: .35; } }
+.tag .thought.detailed { width: 240px; max-width: 240px; padding: 8px 10px; white-space: normal; text-align: left; border-radius: 12px; }
+.thought-task { display: flex; align-items: flex-start; gap: 6px; padding: 1.5px 0; color: #3a3f47; }
+.thought-task i { flex: none; width: 10px; height: 10px; margin-top: 2px; border: 1.2px dashed #9096a0; border-radius: 50%; }
+.thought-task.in_progress { font-weight: 600; color: #17171c; }
+.thought-task.in_progress i { border: 2px solid #d4d6db; border-top-color: #2563eb; animation: thought-spin 1s linear infinite; }
+.thought-task.completed { color: #858a93; }
+.thought-task.completed i { border: 0; background: #5c6068; box-shadow: inset 0 0 0 2.5px #5c6068, inset 0 0 0 3.5px #fff; }
+@keyframes thought-spin { to { transform: rotate(360deg); } }
+.thought-step { color: #858a93; padding: 1px 0; } .thought-step.now { color: #17171c; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .thought-dots, .thought-task i { animation: none !important; } }
+.tag.lead { background: none; }
+.tag { transform-origin: 50% 100%; }

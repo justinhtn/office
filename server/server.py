@@ -126,6 +126,7 @@ class Office:
         self.seen_raw = None
         self.requests = {}
         self.meetings = {}
+        self.stamps = {}
         self.snapshot = {"people": [], "updatedAt": ""}
 
     @staticmethod
@@ -200,9 +201,9 @@ class Office:
             if one in ids and other in ids:
                 meetings[one].add(other)
                 meetings[other].add(one)
-        talking, helpers, jobs, job_age, steps, progress = {row["id"]: None for row in rows}, {}, {}, {}, {}, {}
+        talking, helpers, jobs, job_age, steps, progress, plans, recents = {row["id"]: None for row in rows}, {}, {}, {}, {}, {}, {}, {}
         for row in rows:
-            peer, helpers[row["id"]], jobs[row["id"]], job_age[row["id"]], steps[row["id"]], progress[row["id"]] = TRANSCRIPTS.live_state(row["id"])
+            peer, helpers[row["id"]], jobs[row["id"]], job_age[row["id"]], steps[row["id"]], progress[row["id"]], plans[row["id"]], recents[row["id"]] = TRANSCRIPTS.live_state(row["id"])
             if peer in ids:
                 talking[row["id"]] = peer
                 talking[peer] = talking[peer] or row["id"]
@@ -214,6 +215,9 @@ class Office:
                 "helpers": helpers[row["id"]],
                 "jobs": jobs[row["id"]],
                 "step": steps[row["id"]],
+                "plan": plans[row["id"]],
+                "recent": recents[row["id"]],
+                "isActing": bool(row.get("isRunning")),
                 "progress": progress[row["id"]],
                 # Between turns with a job still going, the agent is only waiting for it.
                 "isWaiting": bool(jobs[row["id"]]) and not row.get("isRunning"),
@@ -266,8 +270,19 @@ class Office:
         raw = read_json(RAW_SESSIONS, None)
         requests = self.read_requests()
         with self.lock:
-            if raw is None or (raw == self.seen_raw and requests == self.requests):
+            if raw is None:
                 return
+            stamps = {}
+            for row in raw.get("people", []):
+                path = TRANSCRIPTS.path_for(row["id"]) if row.get("isRunning") else None
+                if path is not None:
+                    try:
+                        stamps[row["id"]] = path.stat().st_mtime_ns
+                    except OSError:
+                        pass
+            if raw == self.seen_raw and requests == self.requests and stamps == self.stamps:
+                return
+            self.stamps = stamps
             self.requests = requests
             for row in raw.get("people", []):
                 if self.was_running.get(row["id"]) and not row.get("isRunning"):
@@ -522,6 +537,7 @@ class Transcripts:
         messages, seen_tools, activity = [], set(), {}
         plan, turn_started, last_peer = [], "", None
         helpers, jobs = {}, {}
+        recent = []
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 # A background helper's finish is queued as its own kind of record.
@@ -597,11 +613,12 @@ class Transcripts:
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label, detail = self.describe_tool(tool, tool_input)
+                            recent.append("Running a command" if tool == "Bash" and not tool_input.get("description") else label[:70])
                             item = {"role": "activity", "body": label, "detail": detail, "output": "", "isError": False}
                             activity[block.get("id")] = item
                             messages.append(item)
 
-        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values())}
+        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
 
     def load(self, session_id):
         path = self.path_for(session_id)
@@ -638,9 +655,9 @@ class Transcripts:
             step = next((i["content"] for i in plan if i["status"] == "in_progress"), "")
             progress = [sum(i["status"] == "completed" for i in plan), len(plan)]
 
-            return talking, helpers, jobs, max(ages, default=0), step, progress
+            return talking, helpers, jobs, max(ages, default=0), step, progress, plan[:12], parsed["recent"]
         except (Refused, OSError, ValueError, KeyError):
-            return None, [], [], 0, "", [0, 0]
+            return None, [], [], 0, "", [0, 0], [], []
 
     def page(self, session_id, before):
         cached = self.load(session_id)
