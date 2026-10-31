@@ -1,0 +1,5 @@
+node_modules/
+.DS_Store
+__pycache__/
+plugin/tsconfig.json
+plugin/.claude-plugin/types/

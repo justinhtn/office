@@ -1,0 +1,11 @@
+{
+  "name": "agent-office",
+  "owner": { "name": "Agent Office" },
+  "plugins": [
+    {
+      "name": "agent-office",
+      "source": "./plugin",
+      "description": "Feeds your Claude Code sessions to the local Agent Office workspace"
+    }
+  ]
+}
