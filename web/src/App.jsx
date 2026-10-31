@@ -5,7 +5,7 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  Check, Circle, CircleDot, Dices, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
+  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -15,24 +15,85 @@ import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } fro
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
 const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
-function Room({ people, selected, onPick }) {
+function Room({ people, selected, focus, onPick, onSpace, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
-  const pick = useRef(onPick)
+  const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
+  space.current = onSpace
   useEffect(() => {
-    scene.current = createScene(stage.current, canvas.current, tags.current, id => pick.current(id))
+    scene.current = createScene(stage.current, canvas.current, tags.current, id => pick.current(id), key => space.current(key))
 
     return () => scene.current.dispose()
   }, [])
   useEffect(() => {
-    scene.current.update(people, selected)
-  }, [people, selected])
+    scene.current.update(people, selected, focus)
+  }, [people, selected, focus])
 
   return (
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
+      {children}
     </div>
+  )
+}
+
+const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0
+
+// Teams as the office lays them out: anyone idle and alone is in the lounge.
+function officeTeams(active) {
+  return teamsOf(active, active).filter(team => team.members.length > 1 || isBusy(team.lead))
+}
+
+function teamStatus(team) {
+  const working = team.members.filter(member => member.isRunning).length
+  const finished = team.members.filter(member => member.isFinished).length
+  if (working) return `${working} working`
+  if (finished) return `${finished} finished`
+
+  return `${team.members.length} ${team.members.length === 1 ? 'person' : 'people'}, idle`
+}
+
+function TeamBar({ teams, hasLounge, focus, onTeam, onPlace }) {
+  const place = (key, label, Icon) => (
+    <button key={key} className={`team-button ${focus === key ? 'on' : ''}`} onClick={() => onPlace(key)}>
+      <span className="place-icon"><Icon size={17} /></span><b>{label}</b>
+    </button>
+  )
+
+  return (
+    <nav className="team-bar" aria-label="Go to a team">
+      <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
+        <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
+      </button>
+      <span className="team-divider" />
+      {teams.map((team, index) => (
+        <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
+          <Avatar person={team.lead} size={28} />
+          {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
+          <span><b>{team.members.length > 1 ? `${team.lead.name}'s team` : team.lead.name}</b><small>{team.lead.project} · {teamStatus(team)}</small></span>
+        </button>
+      ))}
+      <span className="team-divider" />
+      {place('meeting', 'Meeting room', Presentation)}
+      {hasLounge && place('lounge', 'Lounge', Armchair)}
+      {place('office', 'Your office', DoorOpen)}
+    </nav>
+  )
+}
+
+function Teammates({ person, teams, onPick }) {
+  const team = teams.find(one => one.members.some(member => member.id === person.id))
+  if (!team || team.members.length < 2) return null
+
+  return (
+    <nav className="teammates" aria-label="Team members">
+      {team.members.map(member => (
+        <button key={member.id} className={`mate ${member.id === person.id ? 'on' : ''}`} onClick={() => onPick(member.id)}>
+          <Avatar person={member} size={22} />{member.name}{member.id === team.lead.id ? ' · lead' : ''}
+        </button>
+      ))}
+    </nav>
   )
 }
 
@@ -644,7 +705,7 @@ function RequestBanner({ person, onShow }) {
   )
 }
 
-function Session({ person, everyone, tab, onTab, onClose, onPick }) {
+function Session({ person, everyone, teams, tab, onTab, onClose, onPick }) {
   const [showPath, setShowPath] = useState(null)
   const [stage, setStage] = useState(null)
   useEffect(() => setStage(null), [person.id])
@@ -678,6 +739,7 @@ function Session({ person, everyone, tab, onTab, onClose, onPick }) {
         {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
         <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
       </header>
+      <Teammates person={person} teams={teams} onPick={onPick} />
       <nav className="session-tabs" role="tablist">
         {SESSION_TABS.map(({ id, label, icon: Icon }) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
@@ -726,6 +788,7 @@ export default function App() {
   const [tab, setTab] = useState('chat')
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
+  const [place, setPlace] = useState(null)
 
   useEffect(() => {
     const poll = () =>
@@ -738,6 +801,7 @@ export default function App() {
 
     return () => clearInterval(timer)
   }, [])
+  const keyActions = useRef({ overview() {}, team() {} })
   useEffect(() => {
     const onKey = event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -748,6 +812,10 @@ export default function App() {
         setIsPaletteOpen(false)
         setIsAwayOpen(false)
       }
+      const isTyping = /^(INPUT|TEXTAREA)$/.test(event.target.tagName) || event.target.isContentEditable
+      if (isTyping || event.metaKey || event.ctrlKey) return
+      if (event.key === 'Escape' && !document.querySelector('.stage')) keyActions.current.overview()
+      if (/^[1-9]$/.test(event.key)) keyActions.current.team(Number(event.key) - 1)
     }
     window.addEventListener('keydown', onKey)
 
@@ -761,13 +829,33 @@ export default function App() {
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
 
+  const teams = useMemo(() => officeTeams(active), [active])
+  const loungers = active.filter(other => !teams.some(team => team.members.some(member => member.id === other.id)))
+  const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
+  const focus = place || (person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
+
+  function goToPlace(key) {
+    setSelected(null)
+    setPlace(key)
+  }
+  function goToSpace(key) {
+    const team = teams.find(one => one.lead.id === key)
+    if (team) pick(team.lead.id)
+    else goToPlace(key)
+  }
   function pick(id) {
     const target = everyone.find(other => other.id === id)
     setSelected(id)
+    setPlace(null)
     setTab('chat')
     setIsAwayOpen(false)
     setIsPaletteOpen(false)
     if (target?.isFinished) api('/api/seen', { id }).catch(() => {})
+  }
+
+  keyActions.current = {
+    overview: () => goToPlace(null),
+    team: index => { if (teams[index]) pick(teams[index].lead.id) },
   }
 
   return (
@@ -792,17 +880,21 @@ export default function App() {
       </div>
 
       {problem && <p className="error banner">{problem}</p>}
-      <PanelGroup direction="horizontal" className="work" autoSaveId={person ? 'office-session' : 'office-floor'}>
-        <Panel id="floor" order={1} minSize={20} defaultSize={person ? 34 : 100}>
+      <PanelGroup direction="horizontal" className="work" autoSaveId={person ? 'office-chat-open' : 'office-floor'}>
+        <Panel id="floor" order={1} minSize={25} defaultSize={person ? 60 : 100}>
           {active.length > 0
-            ? <Room people={active} selected={selected} onPick={pick} />
+            ? (
+              <Room people={active} selected={selected} focus={focus} onPick={pick} onSpace={goToSpace}>
+                <TeamBar teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
+              </Room>
+            )
             : !problem && <Empty text="Waiting for session data…" />}
         </Panel>
         {person && (
           <>
             <PanelResizeHandle className="handle" />
-            <Panel id="session" order={2} minSize={35} defaultSize={66}>
-              <Session person={person} everyone={cast} tab={tab} onTab={setTab} onPick={pick} onClose={() => setSelected(null)} />
+            <Panel id="session" order={2} minSize={28} defaultSize={40}>
+              <Session person={person} everyone={cast} teams={teams} tab={tab} onTab={setTab} onPick={pick} onClose={() => goToPlace(null)} />
             </Panel>
           </>
         )}

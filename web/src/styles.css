@@ -225,3 +225,18 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .call-badge { margin-top: 3px; padding: 2px 6px; border-radius: 9px; background: #1d6fd1; color: #fff; font: 600 10px Inter, system-ui, sans-serif; white-space: nowrap; }
 .helpers { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .helper { display: inline-flex; align-items: center; gap: 5px; }
+.zone-tag { pointer-events: auto; cursor: pointer; }
+.zone-tag:hover { background: #2b1d3a; }
+.team-bar { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 2; display: flex; gap: 6px; overflow-x: auto; padding: 5px; background: rgba(255, 255, 255, .88); color: #17171c; border: 1px solid rgba(0, 0, 0, .08); border-radius: 10px; scrollbar-width: none; }
+.team-button { flex: none; position: relative; display: flex; align-items: center; gap: 7px; height: 40px; padding: 0 10px 0 6px; border-radius: 7px; white-space: nowrap; text-align: left; }
+.team-button:hover { background: rgba(0, 0, 0, .06); }
+.team-button.on { background: #e8e8fd; }
+.team-button b { display: block; font-size: 12px; font-weight: 600; line-height: 1.2; }
+.team-button small { display: block; font-size: 10px; color: #62626c; line-height: 1.2; }
+.team-button .place-icon { width: 26px; display: grid; place-items: center; color: #52525c; }
+.team-button .alert { position: absolute; top: 4px; left: 4px; width: 9px; height: 9px; border-radius: 50%; background: #dc2626; border: 1.5px solid #fff; }
+.team-divider { flex: none; width: 1px; margin: 6px 2px; background: rgba(0, 0, 0, .12); }
+.teammates { flex: none; display: flex; gap: 4px; overflow-x: auto; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+.mate { flex: none; display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 3px; border-radius: 14px; font-size: 12px; }
+.mate:hover { background: var(--bg-hover); }
+.mate.on { background: var(--accent-wash); font-weight: 600; }
