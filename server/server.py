@@ -30,6 +30,8 @@ RAW_SESSIONS = DATA / "sessions.raw.json"
 PEOPLE = DATA / "people.json"
 NAMES = DATA / "names.json"
 FINISHED = DATA / "finished.json"
+LOOKS = DATA / "looks.json"
+LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
 WATCH_S = 2
 NAME_POOL = [
@@ -60,6 +62,8 @@ MAX_MESSAGE = 20_000
 BRIDGE_TIMEOUT_S = 30
 SESSION_ID = re.compile(r"^local_[0-9a-f-]{36}$")
 CURSOR = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+JOB_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 '&/.+-]{0,31}$")
+FILLER_WORDS = {"a", "an", "and", "at", "for", "from", "in", "of", "on", "the", "to", "with", "btw:", "her", "his", "their", "my", "our"}
 AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12)|id_(rsa|ed25519)|credentials(\.json)?)$", re.I)
 
@@ -68,6 +72,19 @@ class Refused(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+def short_label(title):
+    """A few meaningful words from a session's title, for its name tag."""
+    title = re.sub(r"\s*\(.*?\)", "", title)
+    words = [word for word in title.split() if word.lower() not in FILLER_WORDS]
+    label = ""
+    for word in words:
+        if len(label) + len(word) + 1 > 22:
+            break
+        label = f"{label} {word}".strip()
+
+    return label or title[:22]
 
 
 def read_json(path, fallback):
@@ -90,10 +107,38 @@ class Office:
         self.lock = threading.Lock()
         self.names = read_json(NAMES, {})
         self.finished = set(read_json(FINISHED, []))
+        self.looks = read_json(LOOKS, {})
+        self.labels = read_json(LABELS, {})
         self.was_running = {}
         self.seen_raw = None
         self.requests = {}
         self.snapshot = {"people": [], "updatedAt": ""}
+
+    def next_look(self):
+        return max(self.looks.values(), default=-1) + 1
+
+    def assign_looks(self, rows):
+        changed = False
+        for row in rows:
+            if row["id"] not in self.looks:
+                self.looks[row["id"]] = self.next_look()
+                changed = True
+        if changed:
+            write_json(LOOKS, self.looks)
+
+    def reroll(self, session_id):
+        with self.lock:
+            self.looks[session_id] = self.next_look()
+            write_json(LOOKS, self.looks)
+            if self.seen_raw:
+                self.rebuild()
+
+    def set_label(self, session_id, label):
+        with self.lock:
+            self.labels[session_id] = label
+            write_json(LABELS, self.labels)
+            if self.seen_raw:
+                self.rebuild()
 
     def assign_names(self, rows):
         taken = set(self.names.values())
@@ -111,10 +156,13 @@ class Office:
     def rebuild(self):
         rows = self.seen_raw.get("people", [])
         self.assign_names(rows)
+        self.assign_looks(rows)
         people = [
             {
                 **row,
                 "name": self.names[row["id"]],
+                "look": self.looks[row["id"]],
+                "label": self.labels.get(row["id"]) or short_label(row.get("title", "")),
                 "isFinished": row["id"] in self.finished,
                 "request": self.requests.get(row["id"]),
             }
@@ -675,7 +723,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/send", "/api/seen", "/api/rename", "/api/dismiss"):
+            if route not in ("/api/send", "/api/seen", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -688,6 +736,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not AGENT_NAME.match(name):
                     raise Refused(400, "Use letters, numbers and spaces, up to 24 characters.")
                 OFFICE.rename(session_id, name)
+                self.reply(200, {"status": "ok"})
+                return
+            if route == "/api/reroll":
+                OFFICE.reroll(session_id)
+                self.reply(200, {"status": "ok"})
+                return
+            if route == "/api/label":
+                label = str(body.get("label", "")).strip()
+                if not JOB_LABEL.match(label):
+                    raise Refused(400, "Use letters and numbers, up to 32 characters.")
+                OFFICE.set_label(session_id, label)
                 self.reply(200, {"status": "ok"})
                 return
             if route == "/api/dismiss":

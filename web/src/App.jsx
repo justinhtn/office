@@ -5,11 +5,11 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  Check, Circle, CircleDot, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
+  Check, Circle, CircleDot, Dices, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { createScene } from './scene.js'
+import { createScene, sceneApi } from './scene.js'
 import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -34,6 +34,15 @@ function Room({ people, selected, onPick }) {
       <div className="tags" ref={tags} />
     </div>
   )
+}
+
+function Avatar({ person, everyone, size = 24 }) {
+  const isLead = everyone?.some(other => other.startedBy === person.id)
+  const url = sceneApi.portrait?.({ ...person, isLead })
+
+  return url
+    ? <img className="avatar" src={url} alt="" width={size} height={size} />
+    : <span className="avatar blank" style={{ width: size, height: size }}>{person.name[0]}</span>
 }
 
 function Empty({ text }) {
@@ -319,7 +328,7 @@ function Chat({ person, onPick, onExpand }) {
             </aside>
           ) : message.role === 'media' ? (
             <article key={index} className="bubble assistant media">
-              <header>{person.name}</header>
+              <header><Avatar person={person} size={18} />{person.name}</header>
               {message.caption && <p>{message.caption}</p>}
               <div className="media-row">
                 {message.files.map(file => <div key={file.url} className="media-item"><MediaItem file={file} controls /></div>)}
@@ -334,7 +343,7 @@ function Chat({ person, onPick, onExpand }) {
             <div key={index} className="tool">{message.body}</div>
           ) : (
             <article key={index} className={`bubble ${message.role}`}>
-              <header>{message.role === 'user' ? 'You' : message.role === 'peer' ? message.from : person.name}</header>
+              <header>{message.role === 'assistant' && <Avatar person={person} size={18} />}{message.role === 'user' ? 'You' : message.role === 'peer' ? message.from : person.name}</header>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -528,7 +537,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
           <Command.Group heading="Agents">
             {everyone.map(person => (
               <Command.Item key={person.id} value={`${person.name} ${person.title} ${person.project}`} onSelect={() => onPerson(person)}>
-                <span className={`dot ${statusOf(person)}`} /> <b>{person.name}</b> <small>{person.title}</small>
+                <Avatar person={person} everyone={everyone} size={22} /> <span className={`dot ${statusOf(person)}`} /> <b>{person.name}</b> <small>{person.label} · {person.title}</small>
               </Command.Item>
             ))}
           </Command.Group>
@@ -548,16 +557,16 @@ const SESSION_TABS = [
   { id: 'files', label: 'Files', icon: FolderTree },
 ]
 
-function NameEditor({ person }) {
+function EditableText({ value, label, className, onSave }) {
   const [draft, setDraft] = useState(null)
   const [error, setError] = useState('')
   if (draft === null) {
-    return <button className="name" title="Rename" onClick={() => setDraft(person.name)}>{person.name}<Pencil size={12} /></button>
+    return <button className={className} title={`Change ${label}`} onClick={() => setDraft(value)}>{value}<Pencil size={11} /></button>
   }
   async function save(event) {
     event.preventDefault()
     try {
-      if (draft.trim() !== person.name) await api('/api/rename', { id: person.id, name: draft })
+      if (draft.trim() !== value) await onSave(draft)
       setDraft(null)
       setError('')
     } catch (failure) {
@@ -567,7 +576,7 @@ function NameEditor({ person }) {
 
   return (
     <form className="name-form" onSubmit={save}>
-      <input autoFocus aria-label="Agent name" value={draft} onChange={event => setDraft(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Escape') { setError(''); setDraft(null) } }} />
+      <input autoFocus aria-label={label} value={draft} onChange={event => setDraft(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Escape') { setError(''); setDraft(null) } }} />
       {error && <small className="error">{error}</small>}
     </form>
   )
@@ -616,10 +625,12 @@ function Session({ person, everyone, tab, onTab, onClose, onPick }) {
     <section className="session">
       <header className="session-head">
         <div className="session-who">
-          <span className={`dot ${statusOf(person)}`} />
-          <NameEditor key={person.id} person={person} />
+          <Avatar person={person} everyone={everyone} size={36} />
+          <EditableText key={`name-${person.id}`} value={person.name} label="name" className="name" onSave={name => api('/api/rename', { id: person.id, name })} />
+          <EditableText key={`label-${person.id}`} value={person.label} label="job label" className="job" onSave={label => api('/api/label', { id: person.id, label })} />
+          <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
           <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : `Idle ${age(person.lastActivityAt)}`}</span>
-          <small className="session-title">{person.title}{boss ? ` · for ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
+          <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
         {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
         <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
@@ -651,6 +662,7 @@ function Away({ people, onPick, onClose }) {
               <h3>{project}</h3>
               {people.filter(person => person.project === project).map(person => (
                 <button key={person.id} className="row" onClick={() => onPick(person.id)}>
+                  <Avatar person={person} size={26} />
                   <span className="row-main"><b>{person.name}</b><small>{person.title}</small></span>
                   <small className="row-age">{age(person.lastActivityAt)}</small>
                 </button>
@@ -729,7 +741,7 @@ export default function App() {
         {needsYou.length === 0 && <small>Nothing right now</small>}
         {needsYou.map(target => (
           <button key={target.id} className="need" onClick={() => pick(target.id)}>
-            <span className={`dot ${target.request ? 'asks' : 'finished'}`} /><b>{target.name}</b>
+            <Avatar person={target} everyone={everyone} size={20} /><span className={`dot ${target.request ? 'asks' : 'finished'}`} /><b>{target.name}</b>
             {target.request ? <small className="asks-text">{target.request.message}</small> : <>finished <small>{target.title}</small></>}
           </button>
         ))}

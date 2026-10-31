@@ -216,3 +216,9 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .plan li svg { flex: none; margin-top: 2px; color: var(--faint); }
 .plan li.completed { color: var(--muted); } .plan li.completed svg { color: var(--accent-text); }
 .plan li.in_progress { font-weight: 500; } .plan li.in_progress svg { color: var(--working); }
+.avatar { flex: none; display: inline-grid; place-items: center; border-radius: 4px; image-rendering: pixelated; background: var(--bg-hover); font-size: 11px; font-weight: 600; color: var(--muted); }
+.bubble header { display: flex; align-items: center; gap: 5px; }
+.job { display: flex; align-items: center; gap: 5px; flex: none; color: var(--muted); font-size: 12px; }
+.job svg { opacity: 0; } .job:hover svg { opacity: 1; }
+.tag em { display: none; font-style: normal; }
+.tag:hover { z-index: 3; } .tag:hover em, .tag.on em { display: inline; }

@@ -14,8 +14,8 @@ It runs entirely on your computer and uses your existing Claude Code login.
 ## Install
 
 ```bash
-git clone <this repository>
-cd agent-office
+git clone https://github.com/justinhtn/office.git
+cd office
 ./scripts/install.sh
 ```
 
