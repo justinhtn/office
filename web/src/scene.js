@@ -11,7 +11,7 @@ const nameHash = s => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0))
 const uniformOf = project => UNIFORMS[nameHash(project) % UNIFORMS.length]
 export const helperCast=(label,index)=>(nameHash(label)+index*5)%CAST.length
 const MODEL_SCALE = .0122
-const CLIPS = { sit: 'sit_chair_idle_neutral_01', work: 'work_table', stand: 'idle_neutral_01', wave: 'wave_01', walk: 'walk_neutral' }
+const CLIPS = { sit: 'sit_chair_idle_neutral_01', work: 'sit_chair_idle_neutral_01', stand: 'idle_neutral_01', wave: 'wave_01', walk: 'walk_neutral' }
 const castOf = p => p.avatar || CAST[0]
 const sexOf = id => (/Female/.test(id) ? 'f' : 'm')
 const fbx = url => new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject))
@@ -91,7 +91,7 @@ export function portrait(p) {
 
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
-const home={center:new THREE.Vector3(0,1.1,0),dist:30}
+const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.72,el:.38}
 let focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
@@ -162,11 +162,33 @@ function drawScreen(a,t){
   else{g.fillStyle='#2b3440';g.fillRect(0,0,SCREEN_W,SCREEN_H)}
   texture.needsUpdate=true
 }
-const WORLD_UP=new THREE.Vector3(0,1,0),tempAxis=new THREE.Vector3(),tempTurn=new THREE.Quaternion(),tempWorld=new THREE.Quaternion()
+const fromPoint=new THREE.Vector3(),toPoint=new THREE.Vector3(),aimDirection=new THREE.Vector3(),WORLD_UP=new THREE.Vector3(0,1,0),tempAxis=new THREE.Vector3(),tempTurn=new THREE.Quaternion(),tempWorld=new THREE.Quaternion()
 // Added on top of the animation each frame, using world directions so the bone's own axes don't matter.
+function aimBone(bone,child,direction){
+  bone.getWorldPosition(fromPoint);child.getWorldPosition(toPoint)
+  const current=toPoint.sub(fromPoint).normalize()
+  tempTurn.setFromUnitVectors(current,direction)
+  bone.getWorldQuaternion(tempWorld)
+  const toLocal=tempWorld.clone().invert()
+  bone.quaternion.multiply(toLocal.multiply(tempTurn).multiply(tempWorld))
+  bone.updateMatrixWorld(true)
+}
+// Rocketbox has no typing animation, so the arms are posed on the keyboard over the sitting one.
+function typeOnKeyboard(a,t){
+  const life=a.life
+  life.model.updateMatrixWorld(true)
+  life.arms.forEach((arm,i)=>{
+    if(!arm.upper||!arm.fore||!arm.hand)return
+    const tap=Math.max(0,Math.sin(t*(11+i*2.3)+i*1.7+nameHash(a.p.id)%7))
+    aimDirection.set(arm.side*.17,-.84,.52).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.upper,arm.fore,aimDirection.clone())
+    aimDirection.set(-arm.side*.2,-.12+tap*.045,.97).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.fore,arm.hand,aimDirection.clone())
+    if(arm.finger){aimDirection.set(-arm.side*.1,-.22-tap*.22,.97).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.hand,arm.finger,aimDirection.clone())}
+  })
+}
 function liven(a,t,dt){
   const life=a.life
   if(!life||!life.head)return
+  if(a.pose==='work')typeOnKeyboard(a,t)
   if(t>life.nextGlance){life.goal=Math.random()<.35?0:(Math.random()-.5)*.8;life.nextGlance=t+2.5+Math.random()*5}
   life.yaw+=(life.goal-life.yaw)*Math.min(1,dt*3.5)
   life.head.getWorldQuaternion(tempWorld)
@@ -193,7 +215,7 @@ async function dress(a){
   const model=cloneSkinned(source);model.scale.setScalar(MODEL_SCALE);a.g.add(model)
   a.mixer=new THREE.AnimationMixer(model);a.sex=sex
   a.mixer.timeScale=.88+Math.random()*.24
-  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
+  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),arms:['L','R'].map(side=>({side:side==='L'?-1:1,upper:model.getObjectByName(`Bip01_${side}_UpperArm`),fore:model.getObjectByName(`Bip01_${side}_Forearm`),hand:model.getObjectByName(`Bip01_${side}_Hand`),finger:model.getObjectByName(`Bip01_${side}_Finger2`)})),model,yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
   setPose(a,a.pose)
 }
 async function setPose(a,pose){
@@ -219,10 +241,10 @@ function desk(parent,x,z,dir,isOn){
   ;[[-.96,-.46],[.96,-.46],[-.96,.46],[.96,.46]].forEach(([a,b])=>{const leg=box(parent,.05,1,.05,0x30343b,x+a,.5,z+b);leg.rotation.z=(a>0?-1:1)*.04})
   const back=z-dir*.28
   // A slim all-in-one display: foot, stand, aluminium body with a chin, and the screen.
-  box(parent,.34,.018,.24,SILVER,x,1.066,back)
-  const stand=box(parent,.22,.36,.022,SILVER,x,1.24,back-dir*.02);stand.rotation.x=-dir*.1
-  box(parent,1.08,.68,.026,SILVER,x,1.67,back)
-  const screen=box(parent,1.02,.54,.006,isOn?glow(0x59c7ff):mat(0x262a31),x,1.72,back+dir*.016)
+  box(parent,.28,.018,.2,SILVER,x,1.066,back)
+  const stand=box(parent,.18,.26,.022,SILVER,x,1.19,back-dir*.02);stand.rotation.x=-dir*.1
+  box(parent,.84,.52,.024,SILVER,x,1.52,back)
+  const screen=box(parent,.79,.41,.006,isOn?glow(0x59c7ff):mat(0x262a31),x,1.56,back+dir*.015)
   box(parent,.5,.016,.15,0xeceef0,x,1.066,z+dir*.16)
   box(parent,.075,.018,.12,0xeceef0,x+.38,1.066,z+dir*.16)
   const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.04,.11,12),mat(WHITE));cup.position.set(x+.78,1.11,z);parent.add(cup)
@@ -300,7 +322,7 @@ let fitDirty=true,floorSize={W:20,D:20}
 function fitCamera(){
   const first=!view.fitted
   fitDirty=false;view.fitted=true
-  const {W,D}=floorSize,ceilingRoom=(WALL_HEIGHT-1.2-home.center.y)/Math.sin(view.el)
+  const {W,D}=floorSize,ceilingRoom=(WALL_HEIGHT-1.2-home.center.y)/Math.sin(home.el)
   home.dist=Math.min(Math.max(14,Math.max(W,D)*.62),ceilingRoom)
   if(first){view.dist=home.dist;view.center.copy(home.center)}
 }
@@ -399,8 +421,11 @@ let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 function loop(){const t=clock.getElapsedTime()
   if(fitDirty)fitCamera()
   if(!isManual){
-    const spot=focusKey&&spots[focusKey],goal=spot?{x:spot.x,z:spot.z,d:Math.min(home.dist,Math.max(spot.W/Math.max(camera.aspect,.55)*.68,spot.D*.68)+2.2)}:{x:home.center.x,z:home.center.z,d:home.dist},ease=Math.min(1,.09)
-    view.center.x+=(goal.x-view.center.x)*ease;view.center.z+=(goal.z-view.center.z)*ease;view.dist+=(goal.d-view.dist)*ease
+    const spot=focusKey&&spots[focusKey],ease=.09
+    // From the end of the desks, low down, so both rows' faces clear the monitors.
+    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    view.center.x+=(goal.x-view.center.x)*ease;view.center.y+=(goal.y-view.center.y)*ease;view.center.z+=(goal.z-view.center.z)*ease
+    view.az+=(goal.az-view.az)*ease;view.el+=(goal.el-view.el)*ease;view.dist+=(goal.d-view.dist)*ease
     view.zoom+=(0-view.zoom)*ease
   }
   const fit=view.dist+view.zoom
@@ -413,11 +438,11 @@ function loop(){const t=clock.getElapsedTime()
     if(a.mixer)liven(a,t,dt)
     if(a.screen)drawScreen(a,t)
     if(a.route)walk(a,dt)
-    if(a.p.id===selected){marker.visible=true;marker.position.set(a.g.position.x,a.g.position.y+2.72+Math.sin(t*4)*.05,a.g.position.z);marker.rotation.y=t*2}
+    if(a.p.id===selected){marker.visible=true;marker.position.set(a.g.position.x,a.g.position.y+(a.pose==='wave'||a.pose==='walk'?2.95:2.4)+Math.sin(t*4)*.05,a.g.position.z);marker.rotation.y=t*2}
   })
   renderer.render(scene,camera)
   const w=stage.clientWidth,h=stage.clientHeight
-  tags.forEach(({el,a,key,isZone})=>{el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:2.2),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
+  tags.forEach(({el,a,key,isZone})=>{el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
 }
 const timer=setInterval(loop,33)
 let signature=''
