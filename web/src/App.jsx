@@ -247,7 +247,9 @@ function WorkingLine({ person, plan, turnStartedAt }) {
   return (
     <div className="working-line">
       <span className="dot working" />
-      {person.name} is working{current ? ` on: ${current.content}` : ''}
+      {person.isWaiting
+        ? `${person.name} is waiting on a job: ${person.jobs[0]}${person.jobs.length > 1 ? ` (+${person.jobs.length - 1})` : ''}`
+        : `${person.name} is working${current ? ` on: ${current.content}` : ''}`}
       {turnStartedAt && <small> · {age(turnStartedAt)}</small>}
     </div>
   )
@@ -844,7 +846,7 @@ export default function App() {
         <button className="search" onClick={() => setIsPaletteOpen(true)}>
           <Search size={14} /><span>Search agents and rooms</span><kbd>⌘</kbd><kbd>K</kbd>
         </button>
-        <span className="counts"><span className="dot working" />{working.length} working</span>
+        <span className="counts"><span className="dot working" />{working.filter(other => !other.isWaiting).length} working{working.some(other => other.isWaiting) ? ` · ${working.filter(other => other.isWaiting).length} waiting` : ''}</span>
       </header>
 
       <div className="needs" aria-label="Needs you">

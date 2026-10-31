@@ -143,8 +143,8 @@ function drawFace(g,person,x,y,w,h){
 }
 function drawScreen(a,t){
   const {canvas,texture}=a.screen,g=canvas.getContext('2d'),p=a.p,other=p.talkingTo&&people.find(x=>x.id===p.talkingTo)
-  const helpers=p.helpers||[],live=!p.request&&!other&&!helpers.length&&p.isRunning
-  const key=p.request?'request':other?`call:${other.id}`:helpers.length?`helpers:${helpers.join()}`:live?`code:${Math.floor(t*2)}`:'idle'
+  const helpers=p.helpers||[],waiting=!p.request&&!other&&!helpers.length&&p.isWaiting,live=!p.request&&!other&&!helpers.length&&!waiting&&p.isRunning
+  const key=p.request?'request':other?`call:${other.id}`:helpers.length?`helpers:${helpers.join()}`:waiting?`job:${Math.floor(t*6)}`:live?`code:${Math.floor(t*2)}`:'idle'
   if(a.screen.drawn===key)return
   a.screen.drawn=key
   if(p.request){g.fillStyle='#b4281f';g.fillRect(0,0,SCREEN_W,SCREEN_H);g.fillStyle='#fff';g.font='600 22px Inter,sans-serif';g.textAlign='center';g.fillText('Calling you…',SCREEN_W/2,SCREEN_H/2+8)}
@@ -153,6 +153,12 @@ function drawScreen(a,t){
     const shown=helpers.slice(0,4),cols=shown.length>2?2:shown.length,rows=shown.length>2?2:1,w=SCREEN_W/cols,h=SCREEN_H/rows
     shown.forEach((label,i)=>drawFace(g,{avatar:CAST[helperCast(label,i)],project:p.project,name:label},(i%cols)*w,Math.floor(i/cols)*h,w-1,h-1))
     if(helpers.length>4){g.fillStyle='rgba(0,0,0,.65)';g.fillRect(SCREEN_W-44,SCREEN_H-24,44,24);g.fillStyle='#fff';g.font='14px Inter,sans-serif';g.textAlign='left';g.fillText(`+${helpers.length-4}`,SCREEN_W-38,SCREEN_H-7)}
+  }
+  else if(waiting){
+    g.fillStyle='#14202c';g.fillRect(0,0,SCREEN_W,SCREEN_H)
+    g.strokeStyle='#2c4258';g.lineWidth=8;g.beginPath();g.arc(SCREEN_W/2,56,24,0,7);g.stroke()
+    g.strokeStyle='#59c7ff';g.beginPath();const turn=Math.floor(t*6)/6*Math.PI*2;g.arc(SCREEN_W/2,56,24,turn,turn+1.7);g.stroke()
+    g.fillStyle='#d6dde5';g.font='13px Inter,sans-serif';g.textAlign='center';g.fillText((p.jobs?.[0]||'Job running').slice(0,34),SCREEN_W/2,112)
   }
   else if(live){
     g.fillStyle='#14202c';g.fillRect(0,0,SCREEN_W,SCREEN_H)
@@ -189,6 +195,11 @@ function liven(a,t,dt){
   const life=a.life
   if(!life||!life.head)return
   if(a.pose==='work')typeOnKeyboard(a,t)
+  if(a.p.isWaiting&&!a.route&&life.spine){
+    life.spine.getWorldQuaternion(tempWorld)
+    tempAxis.set(1,0,0).applyQuaternion(a.g.quaternion).applyQuaternion(tempWorld.invert())
+    life.spine.quaternion.multiply(tempTurn.setFromAxisAngle(tempAxis,-.16+Math.sin(t*.7)*.015))
+  }
   if(t>life.nextGlance){life.goal=Math.random()<.35?0:(Math.random()-.5)*.8;life.nextGlance=t+2.5+Math.random()*5}
   life.yaw+=(life.goal-life.yaw)*Math.min(1,dt*3.5)
   life.head.getWorldQuaternion(tempWorld)
@@ -215,8 +226,9 @@ async function dress(a){
   const model=cloneSkinned(source);model.scale.setScalar(MODEL_SCALE);a.g.add(model)
   a.mixer=new THREE.AnimationMixer(model);a.sex=sex
   a.mixer.timeScale=.88+Math.random()*.24
-  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),arms:['L','R'].map(side=>({side:side==='L'?-1:1,upper:model.getObjectByName(`Bip01_${side}_UpperArm`),fore:model.getObjectByName(`Bip01_${side}_Forearm`),hand:model.getObjectByName(`Bip01_${side}_Hand`),finger:model.getObjectByName(`Bip01_${side}_Finger2`)})),model,yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
+  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),arms:['L','R'].map(side=>({side:side==='L'?-1:1,upper:model.getObjectByName(`Bip01_${side}_UpperArm`),fore:model.getObjectByName(`Bip01_${side}_Forearm`),hand:model.getObjectByName(`Bip01_${side}_Hand`),finger:model.getObjectByName(`Bip01_${side}_Finger2`)})),model,spine:model.getObjectByName('Bip01_Spine1'),yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
   setPose(a,a.pose)
+  if(a.holdsMug)giveMug(a)
 }
 async function setPose(a,pose){
   a.pose=pose
@@ -318,7 +330,8 @@ function planSpaces(){
   const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
   const spaces=groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project)).map(t=>({kind:'team',team:t,W:Math.max(6.4,Math.ceil(t.members.length/2)*2.5+1.6),D:7.4}))
   spaces.push({kind:'meeting',W:8.4,D:7})
-  if(idle.length)spaces.push({kind:'lounge',people:idle,W:Math.max(7,idle.length*2.3+1.6),D:6.4})
+  const onBreak=people.filter(p=>p.isOnBreak).length
+  if(idle.length||onBreak)spaces.push({kind:'lounge',people:idle,W:Math.max(9,(idle.length+onBreak)*2.3+3.6),D:7.8,breaks:onBreak})
   spaces.push({kind:'office',W:7.4,D:7})
   return spaces
 }
@@ -353,7 +366,7 @@ function build(){
   const reach=Math.max(W,D)*.85
   Object.assign(sun.shadow.camera,{left:-reach,right:reach,top:reach,bottom:-reach,near:.5,far:Math.max(W,D)*3});sun.shadow.camera.updateProjectionMatrix()
   let z0=back+2
-  meetingSeats=[];officeSpots=[]
+  meetingSeats=[];officeSpots=[];breakSeats=[];breakers=0
   rows.forEach(row=>{
     let x0=left+1.5
     row.forEach(space=>{drawSpace(space,x0,z0);x0+=space.W+AISLE_GAP})
@@ -373,30 +386,37 @@ function fitCamera(){
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;world.add(m);return m}
 const WALK_SPEED=2.4, arrived=new Map()
-let meetingSeats=[],officeSpots=[],visitors=0
+let meetingSeats=[],officeSpots=[],breakSeats=[],visitors=0,breakers=0
 const faceToward=(a,x,z)=>{a.g.rotation.y=Math.atan2(x-a.g.position.x,z-a.g.position.z)}
 function startWalk(a){
   a.walkPending=false
-  const toOffice=Boolean(a.p.request)
-  const target=toOffice?officeSpots[visitors++%Math.max(1,officeSpots.length)]:meetingSeats[visitors++%Math.max(1,meetingSeats.length)]
+  const p=a.p,toOffice=Boolean(p.request),toMeeting=!toOffice&&Boolean(p.meetingWith&&p.meetingWith.length)
+  const target=toOffice?officeSpots[visitors++%Math.max(1,officeSpots.length)]:toMeeting?meetingSeats[visitors++%Math.max(1,meetingSeats.length)]:breakSeats[breakers++]
   if(!target)return
-  const key=toOffice?`office:${a.p.request.id}`:`meeting:${[a.p.id,...a.p.meetingWith].sort().join()}`
-  a.visit={target,key,toOffice}
-  if(arrived.get(a.p.id)===key){a.g.position.set(target.x,0,target.z);a.g.rotation.y=target.face;a.pose=toOffice?'wave':'sit';return}
+  const key=toOffice?`office:${p.request.id}`:toMeeting?`meeting:${[p.id,...p.meetingWith].sort().join()}`:`break:${p.jobs?.[0]}`
+  const arrive=toOffice?'wave':'sit'
+  a.visit={target,key,arrive,mug:!toOffice&&!toMeeting}
+  if(arrived.get(p.id)===key){a.g.position.set(target.x,target.y||0,target.z);a.g.rotation.y=target.face;a.pose=arrive;a.holdsMug=a.visit.mug;return}
   a.pose='walk'
-  a.route=[new THREE.Vector3(a.g.position.x,0,a.front),new THREE.Vector3(target.x,0,a.front),new THREE.Vector3(target.x,0,target.z)]
+  a.route=[new THREE.Vector3(a.g.position.x,0,a.front),new THREE.Vector3(target.x,0,a.front),new THREE.Vector3(target.x,target.y||0,target.z)]
+}
+function giveMug(a){
+  a.holdsMug=true
+  const hand=a.life?.arms?.[1]?.hand
+  if(!hand||a.mug)return
+  const mug=new THREE.Mesh(new THREE.CylinderGeometry(4.2,3.6,9,12),mat(WHITE));mug.position.set(9,2,5);hand.add(mug);a.mug=mug
 }
 function walk(a,dt){
   const target=a.route[0],gap=target.clone().sub(a.g.position);gap.y=0
   const step=WALK_SPEED*dt
   if(gap.length()<=step){
     a.g.position.copy(target);a.route.shift()
-    if(!a.route.length){a.route=null;arrived.set(a.p.id,a.visit.key);a.g.rotation.y=a.visit.target.face;setPose(a,a.visit.toOffice?'wave':'sit')}
+    if(!a.route.length){a.route=null;arrived.set(a.p.id,a.visit.key);a.g.rotation.y=a.visit.target.face;setPose(a,a.visit.arrive);if(a.visit.mug)giveMug(a)}
     return
   }
   a.g.rotation.y=Math.atan2(gap.x,gap.z);a.g.position.add(gap.setLength(step))
 }
-const wantsToWalk=p=>Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
+const wantsToWalk=p=>Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)||Boolean(p.isOnBreak)
 function seat(p,x,z,rotation,front,pose,y=0){
   const a=character(p);a.pose=pose;a.front=front;a.g.position.set(x,y,z);a.g.rotation.y=rotation;world.add(a.g);actors.push(a)
   if(wantsToWalk(p))a.walkPending=true
@@ -409,6 +429,35 @@ function glassWall(x,z,length,alongX,height=2.5){
   const count=Math.max(1,Math.round(length/2.4))
   for(let i=0;i<=count;i++){const t=-length/2+i*length/count;box(world,.06,height,.06,CHARCOAL,alongX?x+t:x,height/2,alongX?z:z+t)}
 }
+// A wall screen at the end of the team's table, facing down its length.
+function projector(team,x0,cz,uniform){
+  const width=4.2,height=2.1,y=2.55,x=x0+.14
+  box(world,.1,height+.18,width+.18,0x2b2f36,x-.07,y,cz)
+  ;[-1,1].forEach(side=>box(world,.07,y-1.3,.07,0x2b2f36,x-.07,(y+1.3)/2-.5,cz+side*(width/2-.2)))
+  const canvas=document.createElement('canvas');canvas.width=840;canvas.height=420
+  const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.01,y,cz);world.add(panel)
+  const g=canvas.getContext('2d'),lead=team.lead,accent=`#${uniform.getHexString()}`
+  const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+  g.fillStyle='#10151c';g.fillRect(0,0,840,420)
+  g.fillStyle=accent;g.fillRect(0,0,840,8)
+  g.fillStyle='#fff';g.font='600 30px Inter,sans-serif';g.textAlign='left';g.fillText(fit(`${lead.name}'s team`,420),28,52)
+  g.fillStyle='#93a0ae';g.font='19px Inter,sans-serif';g.fillText(fit(lead.title,520),28,82)
+  if(lead.progress&&lead.progress[1]){
+    const [done,total]=lead.progress
+    g.textAlign='right';g.fillStyle='#d6dde5';g.font='600 21px Inter,sans-serif';g.fillText(`${done} of ${total} tasks`,812,46)
+    g.fillStyle='#2c3644';g.fillRect(612,58,200,10);g.fillStyle=accent;g.fillRect(612,58,200*done/total,10);g.textAlign='left'
+  }
+  team.members.slice(0,6).forEach((p,i)=>{
+    const y=124+i*48,status=p.request?['Asking for you','#ff6b5e']:p.meetingWith?.length?['In a meeting','#c9a5ff']:p.isWaiting?['Waiting on a job','#f0b458']:p.isFinished?['Finished','#f0b458']:p.isRunning?['Working','#59c7ff']:['Idle','#79859a']
+    const doing=p.jobs?.[0]||(p.isRunning?p.step:'')||p.label||p.title
+    g.fillStyle=status[1];g.beginPath();g.arc(38,y-7,7,0,7);g.fill()
+    g.fillStyle='#fff';g.font='600 23px Inter,sans-serif';g.fillText(fit(p.name,130),56,y)
+    g.fillStyle=status[1];g.font='18px Inter,sans-serif';g.fillText(fit(status[0],165),196,y)
+    g.fillStyle='#c5ced8';g.font='20px Inter,sans-serif';g.fillText(fit(doing,445),372,y)
+  })
+  if(team.members.length>6){g.fillStyle='#93a0ae';g.font='18px Inter,sans-serif';g.fillText(`+${team.members.length-6} more`,56,410)}
+}
 function drawSpace(space,x0,z0){
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
   spots[key]={x:cx,z:cz,W,D}
@@ -419,6 +468,7 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,uniform.clone().lerp(new THREE.Color(0xffffff),.82).getHex(),cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
+    if(isTeam)projector(team,x0,cz,uniform)
     label(isTeam?`${team.lead.name}'s team · ${team.lead.project}`:`${team.lead.name} · ${team.lead.project}`)
     const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
@@ -426,14 +476,17 @@ function drawSpace(space,x0,z0){
     team.members.forEach((p,i)=>{
       const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.74:cz+row*1.16
       const screen=workstation(world,sx,deskZ,isShared?row:row,p.isRunning,p.id);chair(world,sx,seatZ,row)
-      const a=seat(p,sx,seatZ,row===-1?0:Math.PI,front,p.isFinished?'wave':p.isRunning||p.helpers?.length||p.talkingTo?'work':'sit')
+      const a=seat(p,sx,seatZ,row===-1?0:Math.PI,front,p.isFinished?'wave':p.isWaiting?'sit':p.isRunning||p.helpers?.length||p.talkingTo?'work':'sit')
       attachScreen(a,screen);addTag(a,isTeam&&p.id===team.lead.id);dress(a)
     })
   }
   if(kind==='lounge'){
     floors.push(Object.assign(flat(W,D,0xe6d8c4,cx,.02,cz),{spaceKey:key}));label('Lounge')
-    couch(world,cx,cz-1,W-1.2);box(world,W*.4,.3,1,WOOD,cx,.3,cz+1)
-    space.people.forEach((p,i)=>{const sx=cx-(W-2.4)/2+(i+.5)*(W-2.4)/space.people.length,a=seat(p,sx,cz-.82,0,front,'sit',-.1);addTag(a,false);dress(a)})
+    couch(world,cx,cz-.1,W-1.2);box(world,W*.4,.3,1,WOOD,cx,.3,cz+2)
+    const places=space.people.length+space.breaks,spotAt=i=>cx-(W-2.4)/2+(i+.5)*(W-2.4)/Math.max(1,places)
+    space.people.forEach((p,i)=>{const a=seat(p,spotAt(i),cz+.08,0,front,'sit',-.1);addTag(a,false);dress(a)})
+    breakSeats=Array.from({length:space.breaks},(_,i)=>({x:spotAt(space.people.length+i),z:cz+.08,face:0,y:-.1}))
+    box(world,2.4,1.02,.75,WOOD,x0+W-1.5,.51,z0+.45);box(world,.42,.5,.38,CHARCOAL,x0+W-2.1,1.27,z0+.45);box(world,.26,.05,.2,SILVER,x0+W-2.1,1.08,z0+.58);coffee(world,x0+W-1.1,z0+.5,0);coffee(world,x0+W-.75,z0+.32,1)
     plant(world,x0+W-.6,z0+D-.7,.9)
   }
   if(kind==='meeting'){
@@ -454,7 +507,7 @@ function drawSpace(space,x0,z0){
   }
 }
 function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();fitDirty=true}
@@ -490,7 +543,7 @@ function loop(){const t=clock.getElapsedTime()
   })
   renderer.render(scene,camera)
   const w=stage.clientWidth,h=stage.clientHeight
-  tags.forEach(({el,a,key,isZone})=>{el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
+  tags.forEach(({el,a,key,isZone})=>{if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
 }
 const timer=setInterval(loop,33)
 let signature=''
@@ -498,7 +551,7 @@ return {
   update(nextPeople,nextSelected,nextFocus){
     selected=nextSelected
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.request&&p.request.id]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.step,p.progress,p.request&&p.request.id]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
   },

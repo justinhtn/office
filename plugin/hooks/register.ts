@@ -76,6 +76,11 @@ async function appSessionId($: EngineInterface): Promise<string> {
   return $.session.id()
 }
 
+// The app's tools can still be connecting when a session starts.
+async function ensureSelf($: EngineInterface): Promise<void> {
+  if (!selfId.startsWith('local_')) selfId = await appSessionId($)
+}
+
 async function holdsLease($: EngineInterface): Promise<boolean> {
   const path = `${dataFolder}/lease.json`
   let lease = { owner: '', at: 0 }
@@ -92,6 +97,8 @@ async function holdsLease($: EngineInterface): Promise<boolean> {
 
 async function publish($: EngineInterface): Promise<void> {
   try {
+    await ensureSelf($)
+    if (!selfId.startsWith('local_')) return
     if (!(await holdsLease($))) return
     const listed = await $.mcp.call(SESSION_TOOLS, 'list_sessions', { limit: 200 })
     if (listed.isError) return
@@ -139,6 +146,7 @@ async function answerBridge($: EngineInterface): Promise<void> {
   if (isBridging) return
   isBridging = true
   try {
+    await ensureSelf($)
     const folder = `${dataFolder}/bridge`
     if (!(await $.fs.exists(folder))) return
     for (const entry of await $.fs.list(folder)) {
@@ -186,6 +194,7 @@ async function raiseRequest(
   $: EngineInterface,
   input: { message?: unknown; show?: unknown },
 ): Promise<string> {
+  await ensureSelf($)
   const message = String(input.message ?? '').trim().slice(0, MAX_MESSAGE)
   if (!message) throw new Error('A message is required.')
   const show = (Array.isArray(input.show) ? input.show : []).map(String).slice(0, MAX_FILES)

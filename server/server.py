@@ -38,6 +38,8 @@ WATCH_S = 2
 CALL_S = 60
 MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
+JOB_MAX_AGE_S = 6 * 3600
+COFFEE_BREAK_S = 180
 CAST = {
     "f": ["Female_Adult_01", "Female_Adult_03", "Female_Adult_04", "Female_Adult_07", "Female_Adult_08",
           "Female_Adult_12", "Female_Adult_13", "Female_Adult_17", "Female_Party_02", "Business_Female_01"],
@@ -198,11 +200,9 @@ class Office:
             if one in ids and other in ids:
                 meetings[one].add(other)
                 meetings[other].add(one)
-        talking, helpers = {row["id"]: None for row in rows}, {}
+        talking, helpers, jobs, job_age, steps, progress = {row["id"]: None for row in rows}, {}, {}, {}, {}, {}
         for row in rows:
-            peer, running = TRANSCRIPTS.live_state(row["id"])
-            # A session that stopped leaves unfinished helpers in its transcript.
-            helpers[row["id"]] = running if row.get("isRunning") else []
+            peer, helpers[row["id"]], jobs[row["id"]], job_age[row["id"]], steps[row["id"]], progress[row["id"]] = TRANSCRIPTS.live_state(row["id"])
             if peer in ids:
                 talking[row["id"]] = peer
                 talking[peer] = talking[peer] or row["id"]
@@ -212,10 +212,19 @@ class Office:
                 "meetingWith": sorted(meetings[row["id"]]),
                 "talkingTo": talking[row["id"]],
                 "helpers": helpers[row["id"]],
+                "jobs": jobs[row["id"]],
+                "step": steps[row["id"]],
+                "progress": progress[row["id"]],
+                # Between turns with a job still going, the agent is only waiting for it.
+                "isWaiting": bool(jobs[row["id"]]) and not row.get("isRunning"),
+                "isOnBreak": bool(jobs[row["id"]]) and not row.get("isRunning") and job_age[row["id"]] > COFFEE_BREAK_S,
+                "jobStartedAt": now - job_age[row["id"]] if jobs[row["id"]] else None,
+                # The app calls a session idle once its turn ends, even with work still going.
+                "isRunning": bool(row.get("isRunning") or jobs[row["id"]] or helpers[row["id"]]),
                 "name": self.names[row["id"]],
                 "avatar": self.avatars[row["id"]],
                 "label": self.labels.get(row["id"]) or short_label(row.get("title", "")),
-                "isFinished": row["id"] in self.finished,
+                "isFinished": row["id"] in self.finished and not jobs[row["id"]] and not helpers[row["id"]],
                 "request": self.requests.get(row["id"]),
             }
             for row in rows
@@ -512,13 +521,14 @@ class Transcripts:
     def parse(self, session_id, path):
         messages, seen_tools, activity = [], set(), {}
         plan, turn_started, last_peer = [], "", None
-        helpers = {}
+        helpers, jobs = {}, {}
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 # A background helper's finish is queued as its own kind of record.
                 if '"type":"queue-operation"' in line or '"type":"attachment"' in line:
                     for done_id in re.findall(r"<tool-use-id>([^<\\]+)</tool-use-id>", line):
                         helpers.pop(done_id, None)
+                        jobs.pop(done_id, None)
                     continue
                 if '"type":"user"' not in line and '"type":"assistant"' not in line:
                     continue
@@ -539,6 +549,7 @@ class Transcripts:
                     if kind == "text" and record["type"] == "user":
                         for done_id in re.findall(r"<tool-use-id>([^<]+)</tool-use-id>", block.get("text", "")):
                             helpers.pop(done_id, None)
+                            jobs.pop(done_id, None)
                         cleaned = self.clean_user_text(block.get("text", ""))
                         if cleaned:
                             messages.append(cleaned)
@@ -548,6 +559,8 @@ class Transcripts:
                     elif kind == "text" and block.get("text", "").strip():
                         messages.append({"role": "assistant", "body": block["text"].strip()})
                     elif kind == "tool_result":
+                        if block.get("is_error"):
+                            jobs.pop(block.get("tool_use_id"), None)
                         helper = helpers.get(block.get("tool_use_id"))
                         if helper is not None:
                             # A background helper answers at once and reports later by notification.
@@ -567,6 +580,8 @@ class Transcripts:
                         seen_tools.add(block.get("id"))
                         tool = block.get("name", "tool")
                         tool_input = block.get("input") or {}
+                        if tool_input.get("run_in_background") and tool != "Agent":
+                            jobs[block.get("id")] = {"label": str(tool_input.get("description") or "Background job")[:70], "at": record.get("timestamp", "")}
                         if tool == "mcp__ccd_turn__update_plan":
                             plan = self.apply_plan(plan, tool_input)
                         elif tool == "mcp__ccd_turn__wrap_up":
@@ -586,7 +601,7 @@ class Transcripts:
                             activity[block.get("id")] = item
                             messages.append(item)
 
-        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastPeer": last_peer, "helpers": list(helpers.values())}
+        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values())}
 
     def load(self, session_id):
         path = self.path_for(session_id)
@@ -615,10 +630,17 @@ class Transcripts:
             peer = parsed["lastPeer"]
             talking = peer["id"] if peer and self.seconds_since(peer["at"]) < CALL_S else None
             helpers = [h["label"] for h in parsed["helpers"] if self.seconds_since(h["at"]) < HELPER_MAX_AGE_S]
+            jobs = [j["label"] for j in parsed["jobs"] if self.seconds_since(j["at"]) < JOB_MAX_AGE_S]
 
-            return talking, helpers
+            ages = [self.seconds_since(j["at"]) for j in parsed["jobs"] if self.seconds_since(j["at"]) < JOB_MAX_AGE_S]
+
+            plan = parsed["plan"]
+            step = next((i["content"] for i in plan if i["status"] == "in_progress"), "")
+            progress = [sum(i["status"] == "completed" for i in plan), len(plan)]
+
+            return talking, helpers, jobs, max(ages, default=0), step, progress
         except (Refused, OSError, ValueError, KeyError):
-            return None, []
+            return None, [], [], 0, "", [0, 0]
 
     def page(self, session_id, before):
         cached = self.load(session_id)
