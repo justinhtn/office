@@ -235,20 +235,65 @@ function plant(parent,x,z,size=1){
 const WOOD_TOP=()=>new THREE.MeshLambertMaterial({map:paintTex(512,256,(g,w,h)=>{g.fillStyle='#b98450';g.fillRect(0,0,w,h);for(let i=0;i<90;i++){const y=(i*53)%h;g.strokeStyle=i%3?'rgba(112,70,34,.2)':'rgba(226,179,126,.26)';g.lineWidth=1+(i%3);g.beginPath();g.moveTo(0,y);g.bezierCurveTo(w*.3,y+(i%9)-4,w*.7,y-(i%7)+3,w,y+(i%5)-2);g.stroke()}})})
 let woodTop=null
 const SILVER=0xc9ccd1
-function desk(parent,x,z,dir,isOn){
+function tableTop(parent,x,z,length,depth){
   woodTop=woodTop||WOOD_TOP()
-  box(parent,2.1,.07,1.1,woodTop,x,1.02,z)
-  ;[[-.96,-.46],[.96,-.46],[-.96,.46],[.96,.46]].forEach(([a,b])=>{const leg=box(parent,.05,1,.05,0x30343b,x+a,.5,z+b);leg.rotation.z=(a>0?-1:1)*.04})
-  const back=z-dir*.28
-  // A slim all-in-one display: foot, stand, aluminium body with a chin, and the screen.
+  box(parent,length,.07,depth,woodTop,x,1.02,z)
+  const legRows=Math.max(1,Math.round(length/2.6))
+  for(let i=0;i<=legRows;i++){const lx=x-length/2+.08+i*(length-.16)/legRows;[-1,1].forEach(side=>box(parent,.05,1,.05,0x30343b,lx,.5,z+side*(depth/2-.1)))}
+}
+function deskPlant(parent,x,z){
+  const pot=new THREE.Mesh(new THREE.CylinderGeometry(.09,.07,.14,10),mat(WHITE));pot.position.set(x,1.125,z);pot.castShadow=true;parent.add(pot)
+  for(let i=0;i<6;i++){const a=i*1.05,leaf=new THREE.Mesh(new THREE.IcosahedronGeometry(.075,0),mat(i%2?LEAF:0x3fa867));leaf.scale.set(.7,1.7,.7);leaf.position.set(x+Math.cos(a)*.07,1.27+(i%3)*.05,z+Math.sin(a)*.07);leaf.rotation.set(Math.sin(a)*.5,a,Math.cos(a)*.5);leaf.castShadow=true;parent.add(leaf)}
+}
+function folders(parent,x,z,seed){
+  const colors=[0xd9503f,0x2f7dd1,0xe8a93a,0x4aa56a,0x8a5bc7]
+  for(let i=0,n=2+seed%3;i<n;i++){const f=box(parent,.34,.035,.25,colors[(seed+i)%5],x+(i%2)*.018,1.077+i*.037,z-(i%2)*.012);f.rotation.y=(i%2?1:-1)*.05}
+  box(parent,.3,.01,.21,0xf8f6ef,x,1.08+n0(seed)*.037,z)
+}
+const n0=seed=>2+seed%3
+function coffee(parent,x,z,seed){
+  const color=[WHITE,ORANGE,0x2f3540,0x2f7dd1][seed%4],cup=new THREE.Mesh(new THREE.CylinderGeometry(.055,.048,.115,12),mat(color));cup.position.set(x,1.115,z);cup.castShadow=true;parent.add(cup)
+  const drink=new THREE.Mesh(new THREE.CylinderGeometry(.047,.047,.005,12),mat(0x4a2c1a));drink.position.set(x,1.17,z);parent.add(drink)
+  const handle=new THREE.Mesh(new THREE.TorusGeometry(.03,.009,6,10),mat(color));handle.position.set(x+.06,1.115,z);parent.add(handle)
+}
+function notebook(parent,x,z,seed){
+  box(parent,.24,.02,.32,[0x2f3540,0xa33d2e,0x276b52][seed%3],x,1.066,z).rotation.y=.12
+  const pen=box(parent,.012,.012,.2,seed%2?0x2f7dd1:0x1c1c20,x+.02,1.083,z);pen.rotation.y=.4
+}
+function penCup(parent,x,z){
+  const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.12,10),mat(0x8d939c));cup.position.set(x,1.115,z);parent.add(cup)
+  ;[0x2f7dd1,0xd9503f,0x1c1c20].forEach((c,i)=>{const pen=box(parent,.012,.2,.012,c,x-.018+i*.018,1.2,z+(i-1)*.012);pen.rotation.z=(i-1)*.12})
+}
+function deskLamp(parent,x,z,dir){
+  box(parent,.16,.02,.16,0x30343b,x,1.067,z)
+  const arm=box(parent,.018,.42,.018,0x30343b,x,1.26,z);arm.rotation.x=dir*.2
+  const shade=new THREE.Mesh(new THREE.ConeGeometry(.09,.12,12),mat(0xe8a93a));shade.position.set(x,1.47,z+dir*.09);shade.castShadow=true;parent.add(shade)
+}
+function photo(parent,x,z,dir){
+  const frame=box(parent,.17,.21,.015,0x5e4630,x,1.17,z);frame.rotation.x=-dir*.18
+  const image=box(parent,.135,.175,.004,0x8dbcd8,x,1.17,z+dir*.012);image.rotation.x=-dir*.18
+}
+// One person's place at a table, with their own mix of things around the keyboard.
+function workstation(parent,x,z,dir,isOn,owner=''){
+  const seed=nameHash(owner),back=z-dir*.28
   box(parent,.28,.018,.2,SILVER,x,1.066,back)
   const stand=box(parent,.18,.26,.022,SILVER,x,1.19,back-dir*.02);stand.rotation.x=-dir*.1
   box(parent,.84,.52,.024,SILVER,x,1.52,back)
   const screen=box(parent,.79,.41,.006,isOn?glow(0x59c7ff):mat(0x262a31),x,1.56,back+dir*.015)
   box(parent,.5,.016,.15,0xeceef0,x,1.066,z+dir*.16)
   box(parent,.075,.018,.12,0xeceef0,x+.38,1.066,z+dir*.16)
-  const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.04,.11,12),mat(WHITE));cup.position.set(x+.78,1.11,z);parent.add(cup)
+  coffee(parent,x-.42,z+dir*.2,seed)
+  const left=x-.82,right=x+.82,rear=z-dir*.2,near=z+dir*.13
+  const side=[[deskPlant,folders],[folders,notebook],[notebook,deskPlant],[penCup,folders],[deskPlant,notebook]][seed%5]
+  ;[[side[0],left,rear],[side[1],right,near]].forEach(([item,ix,iz])=>item(parent,ix,iz,seed))
+  if(seed%3===0)deskLamp(parent,right,rear,dir)
+  else if(seed%3===1)photo(parent,left+.3,rear,dir)
+  else penCup(parent,right,rear)
   return screen
+}
+function desk(parent,x,z,dir,isOn,owner){
+  tableTop(parent,x,z,2.1,1.1)
+  return workstation(parent,x,z,dir,isOn,owner)
 }
 function chair(parent,x,z,dir){
   box(parent,.74,.11,.72,CHARCOAL,x,.66,z)
@@ -375,9 +420,12 @@ function drawSpace(space,x0,z0){
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
     label(isTeam?`${team.lead.name}'s team · ${team.lead.project}`:`${team.lead.name} · ${team.lead.project}`)
+    const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
+    tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
+    if(isShared)box(world,columns*2.5,.09,.03,0xd9d6cf,cx,1.1,cz)
     team.members.forEach((p,i)=>{
-      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(Math.ceil(team.members.length/2)-1)*1.25+col*2.5,deskZ=cz+row*.58,seatZ=cz+row*1.74
-      const screen=desk(world,sx,deskZ,row,p.isRunning);chair(world,sx,seatZ,row)
+      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.74:cz+row*1.16
+      const screen=workstation(world,sx,deskZ,isShared?row:row,p.isRunning,p.id);chair(world,sx,seatZ,row)
       const a=seat(p,sx,seatZ,row===-1?0:Math.PI,front,p.isFinished?'wave':p.isRunning||p.helpers?.length||p.talkingTo?'work':'sit')
       attachScreen(a,screen);addTag(a,isTeam&&p.id===team.lead.id);dress(a)
     })
@@ -399,7 +447,7 @@ function drawSpace(space,x0,z0){
   if(kind==='office'){
     floors.push(Object.assign(flat(W,D,0xcfdde6,cx,.02,cz),{spaceKey:key}));label('Your office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
-    desk(world,cx,cz-.5,1,true);chair(world,cx,cz-1.7,-1)
+    desk(world,cx,cz-.5,1,true,'you');chair(world,cx,cz-1.7,-1)
     ;[-1.2,0,1.2].forEach(dx=>officeSpots.push({x:cx+dx,z:cz+1.6,face:Math.PI}))
     plant(world,x0+W-.6,z0+.7,1.1)
     box(world,1.8,.8,.35,WOOD,x0+1.2,.4,z0+.28)
