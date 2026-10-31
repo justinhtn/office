@@ -5,15 +5,15 @@ import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 const cloneSkinned = model => SkeletonUtils.clone(model)
 
 const AVATARS = '/assets/avatars'
-export const CAST = [...['01','02','03','04','05','06','07','08'].map(n => `Female_Adult_${n}`), ...['01','02','03','04','05','06','07','08'].map(n => `Male_Adult_${n}`)]
+export const CAST = ['Female_Adult_01','Female_Adult_03','Female_Adult_04','Female_Adult_07','Female_Adult_08','Female_Adult_12','Female_Adult_13','Female_Adult_17','Female_Party_02','Business_Female_01','Male_Adult_01','Male_Adult_02','Male_Adult_04','Male_Adult_06','Male_Adult_08','Male_Adult_09','Male_Adult_10','Male_Adult_12','Male_Adult_16','Male_Adult_17']
 const UNIFORMS = [0xe0342c,0x2a5bd7,0x1fa24a,0xf08a24,0x8a4bd7,0x18a7a0,0xd23ba8,0x8b6b3d]
 const nameHash = s => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7)
 const uniformOf = project => UNIFORMS[nameHash(project) % UNIFORMS.length]
 export const helperCast=(label,index)=>(nameHash(label)+index*5)%CAST.length
 const MODEL_SCALE = .0122
 const CLIPS = { sit: 'sit_chair_idle_neutral_01', work: 'work_table', stand: 'idle_neutral_01', wave: 'wave_01', walk: 'walk_neutral' }
-const castOf = p => CAST[p.cast ?? ((p.look || 0) % CAST.length)]
-const sexOf = id => (id.startsWith('Female') ? 'f' : 'm')
+const castOf = p => p.avatar || CAST[0]
+const sexOf = id => (/Female/.test(id) ? 'f' : 'm')
 const fbx = url => new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject))
 const textures = new THREE.TextureLoader()
 const templates = new Map(), clips = new Map()
@@ -126,7 +126,7 @@ function skyline(seed,rx=1){return paintTex(1536,512,(g,w,h)=>{
 const WHITE=0xf6f4ef,ORANGE=0xe0682f,WOOD=0xc98f55,CHARCOAL=0x2f3540,LEAF=0x2f8f54
 const SCREEN_W=256,SCREEN_H=144,faces=new Map()
 function faceImage(person){
-  const key=`${person.cast}|${person.project}`
+  const key=`${castOf(person)}|${person.project}`
   if(!faces.has(key)){const entry={image:null};faces.set(key,entry);portrait(person).then(url=>{const image=new Image();image.onload=()=>{entry.image=image;actors.forEach(a=>{if(a.screen)a.screen.drawn=''})};image.src=url},()=>{})}
   return faces.get(key).image
 }
@@ -151,7 +151,7 @@ function drawScreen(a,t){
   else if(other){drawFace(g,other,0,0,SCREEN_W,SCREEN_H);g.fillStyle='rgba(0,0,0,.6)';g.fillRect(0,SCREEN_H-26,SCREEN_W,26);g.fillStyle='#fff';g.font='15px Inter,sans-serif';g.textAlign='left';g.fillText(other.name,8,SCREEN_H-8)}
   else if(helpers.length){
     const shown=helpers.slice(0,4),cols=shown.length>2?2:shown.length,rows=shown.length>2?2:1,w=SCREEN_W/cols,h=SCREEN_H/rows
-    shown.forEach((label,i)=>drawFace(g,{cast:helperCast(label,i),look:0,project:p.project,name:label},(i%cols)*w,Math.floor(i/cols)*h,w-1,h-1))
+    shown.forEach((label,i)=>drawFace(g,{avatar:CAST[helperCast(label,i)],project:p.project,name:label},(i%cols)*w,Math.floor(i/cols)*h,w-1,h-1))
     if(helpers.length>4){g.fillStyle='rgba(0,0,0,.65)';g.fillRect(SCREEN_W-44,SCREEN_H-24,44,24);g.fillStyle='#fff';g.font='14px Inter,sans-serif';g.textAlign='left';g.fillText(`+${helpers.length-4}`,SCREEN_W-38,SCREEN_H-7)}
   }
   else if(live){
@@ -210,18 +210,22 @@ function plant(parent,x,z,size=1){
   const pot=new THREE.Mesh(new THREE.CylinderGeometry(.42*size,.32*size,.8*size,12),mat(WHITE));pot.position.set(x,.4*size,z);pot.castShadow=true;parent.add(pot)
   for(let i=0;i<9;i++){const a=i*2.4,r=i===0?0:.34*size,l=new THREE.Mesh(new THREE.IcosahedronGeometry((.44-.012*i)*size,0),mat(i%3?LEAF:0x3fa867));l.scale.set(1,1.25,.8);l.position.set(x+Math.cos(a)*r,(1.05+i*.16)*size,z+Math.sin(a)*r);l.rotation.y=a;l.castShadow=true;parent.add(l)}
 }
+const WOOD_TOP=()=>new THREE.MeshLambertMaterial({map:paintTex(512,256,(g,w,h)=>{g.fillStyle='#b98450';g.fillRect(0,0,w,h);for(let i=0;i<90;i++){const y=(i*53)%h;g.strokeStyle=i%3?'rgba(112,70,34,.2)':'rgba(226,179,126,.26)';g.lineWidth=1+(i%3);g.beginPath();g.moveTo(0,y);g.bezierCurveTo(w*.3,y+(i%9)-4,w*.7,y-(i%7)+3,w,y+(i%5)-2);g.stroke()}})})
+let woodTop=null
+const SILVER=0xc9ccd1
 function desk(parent,x,z,dir,isOn){
-  box(parent,2.05,.08,1.1,WHITE,x,1.02,z)
-  ;[-.95,.95].forEach(a=>box(parent,.06,1,1,CHARCOAL,x+a,.5,z))
-  box(parent,.45,.72,.8,0xe4e2dc,x-.68,.64,z)
-  const back=z-dir*.3
-  box(parent,.2,.03,.16,CHARCOAL,x,1.08,back)
-  box(parent,.05,.26,.05,CHARCOAL,x,1.2,back)
-  box(parent,.9,.54,.04,CHARCOAL,x,1.5,back)
-  const screen=box(parent,.82,.46,.012,isOn?glow(0x59c7ff):mat(0x46505e),x,1.5,back+dir*.03)
-  box(parent,.56,.025,.17,0xdededa,x,1.07,z+dir*.14)
-  box(parent,.1,.02,.15,0xdededa,x+.42,1.07,z+dir*.14)
-  const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.04,.11,10),mat(ORANGE));cup.position.set(x+.72,1.115,z);parent.add(cup)
+  woodTop=woodTop||WOOD_TOP()
+  box(parent,2.1,.07,1.1,woodTop,x,1.02,z)
+  ;[[-.96,-.46],[.96,-.46],[-.96,.46],[.96,.46]].forEach(([a,b])=>{const leg=box(parent,.05,1,.05,0x30343b,x+a,.5,z+b);leg.rotation.z=(a>0?-1:1)*.04})
+  const back=z-dir*.28
+  // A slim all-in-one display: foot, stand, aluminium body with a chin, and the screen.
+  box(parent,.34,.018,.24,SILVER,x,1.066,back)
+  const stand=box(parent,.22,.36,.022,SILVER,x,1.24,back-dir*.02);stand.rotation.x=-dir*.1
+  box(parent,1.08,.68,.026,SILVER,x,1.67,back)
+  const screen=box(parent,1.02,.54,.006,isOn?glow(0x59c7ff):mat(0x262a31),x,1.72,back+dir*.016)
+  box(parent,.5,.016,.15,0xeceef0,x,1.066,z+dir*.16)
+  box(parent,.075,.018,.12,0xeceef0,x+.38,1.066,z+dir*.16)
+  const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.04,.11,12),mat(WHITE));cup.position.set(x+.78,1.11,z);parent.add(cup)
   return screen
 }
 function chair(parent,x,z,dir){
@@ -421,7 +425,7 @@ return {
   update(nextPeople,nextSelected,nextFocus){
     selected=nextSelected
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.look,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.cast,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.request&&p.request.id]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.request&&p.request.id]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
   },

@@ -104,32 +104,11 @@ function Avatar({ person, size = 24 }) {
     portrait(person).then(made => { if (isCurrent) setUrl(made) }, () => {})
 
     return () => { isCurrent = false }
-  }, [person.cast, person.look, person.project])
+  }, [person.avatar, person.project])
 
   return url
     ? <img className="avatar" src={url} alt="" width={size} height={size} />
     : <span className="avatar blank" style={{ width: size, height: size }}>{person.name[0]}</span>
-}
-
-// Active agents never share a face. Away agents can, since they aren't on the floor together.
-function withCast(everyone, isActive) {
-  const taken = new Set()
-  const placed = new Map()
-  const free = look => {
-    for (let step = 0; step < CAST.length; step++) {
-      const index = (look + step) % CAST.length
-      if (!taken.has(index)) return index
-    }
-
-    return look % CAST.length
-  }
-  ;[...everyone].filter(isActive).sort((a, b) => a.look - b.look).forEach(person => {
-    const index = free(person.look || 0)
-    taken.add(index)
-    placed.set(person.id, index)
-  })
-
-  return everyone.map(person => ({ ...person, cast: placed.get(person.id) ?? (person.look || 0) % CAST.length }))
 }
 
 function Empty({ text }) {
@@ -282,7 +261,7 @@ function Helpers({ person }) {
       <small>{person.helpers.length} helper{person.helpers.length > 1 ? 's' : ''} working</small>
       {person.helpers.map((label, index) => (
         <span key={`${label}-${index}`} className="helper">
-          <Avatar person={{ cast: helperCast(label, index), look: 0, project: person.project, name: label }} size={22} />
+          <Avatar person={{ avatar: CAST[helperCast(label, index)], project: person.project, name: label }} size={22} />
           {label}
         </span>
       ))}
@@ -822,7 +801,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const cast = useMemo(() => withCast(everyone, isActive), [everyone])
+  const cast = everyone
   const active = useMemo(() => cast.filter(isActive), [cast])
   const away = useMemo(() => cast.filter(person => !isActive(person)), [cast])
   const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)]

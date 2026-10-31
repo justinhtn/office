@@ -31,19 +31,25 @@ RAW_SESSIONS = DATA / "sessions.raw.json"
 PEOPLE = DATA / "people.json"
 NAMES = DATA / "names.json"
 FINISHED = DATA / "finished.json"
-LOOKS = DATA / "looks.json"
+AVATARS = DATA / "avatars.json"
 LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
 WATCH_S = 2
 CALL_S = 60
 MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
-NAME_POOL = [
-    "Greg", "Stephanie", "Maya", "Omar", "Priya", "Leo", "Nina", "Theo", "Ana", "Sam",
-    "Iris", "Marcus", "Lena", "Felix", "Tara", "Hugo", "Rosa", "Ben", "Yuki", "Dev",
-    "Clara", "Ravi", "Zoe", "Noah", "Elsa", "Kofi", "Mina", "Owen", "Sofia", "Jonah",
-    "Asha", "Paul", "Vera", "Ivan", "Dana", "Eli", "Nora", "Tomas", "June", "Amir",
-]
+CAST = {
+    "f": ["Female_Adult_01", "Female_Adult_03", "Female_Adult_04", "Female_Adult_07", "Female_Adult_08",
+          "Female_Adult_12", "Female_Adult_13", "Female_Adult_17", "Female_Party_02", "Business_Female_01"],
+    "m": ["Male_Adult_01", "Male_Adult_02", "Male_Adult_04", "Male_Adult_06", "Male_Adult_08",
+          "Male_Adult_09", "Male_Adult_10", "Male_Adult_12", "Male_Adult_16", "Male_Adult_17"],
+}
+NAME_POOL = {
+    "f": ["Stephanie", "Maya", "Priya", "Nina", "Ana", "Iris", "Lena", "Tara", "Rosa", "Yuki",
+          "Clara", "Zoe", "Elsa", "Mina", "Sofia", "Asha", "Vera", "Dana", "Nora", "June"],
+    "m": ["Greg", "Omar", "Leo", "Theo", "Sam", "Marcus", "Felix", "Hugo", "Ben", "Dev",
+          "Ravi", "Noah", "Kofi", "Owen", "Jonah", "Paul", "Ivan", "Eli", "Tomas", "Amir"],
+}
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 APP_SESSIONS = Path.home() / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
 MEDIA_TYPES = {
@@ -112,7 +118,7 @@ class Office:
         self.lock = threading.Lock()
         self.names = read_json(NAMES, {})
         self.finished = set(read_json(FINISHED, []))
-        self.looks = read_json(LOOKS, {})
+        self.avatars = read_json(AVATARS, {})
         self.labels = read_json(LABELS, {})
         self.was_running = {}
         self.seen_raw = None
@@ -120,22 +126,42 @@ class Office:
         self.meetings = {}
         self.snapshot = {"people": [], "updatedAt": ""}
 
-    def next_look(self):
-        return max(self.looks.values(), default=-1) + 1
+    @staticmethod
+    def sex_of_avatar(avatar):
+        return "f" if avatar in CAST["f"] else "m"
 
-    def assign_looks(self, rows):
+    def sex_for_name(self, name):
+        """The sex of the characters a name suits. A name you chose gets whichever is less used."""
+        for sex, names in NAME_POOL.items():
+            if name in names:
+                return sex
+        used = [self.sex_of_avatar(a) for a in self.avatars.values()]
+
+        return "f" if used.count("f") <= used.count("m") else "m"
+
+    def least_used(self, sex, avoid=None):
+        used = list(self.avatars.values())
+        options = [a for a in CAST[sex] if a != avoid]
+
+        return min(options, key=lambda a: (used.count(a), CAST[sex].index(a)))
+
+    def assign_avatars(self, rows):
         changed = False
-        for row in rows:
-            if row["id"] not in self.looks:
-                self.looks[row["id"]] = self.next_look()
-                changed = True
+        # The most recently active choose first, so people on the floor don't share a face.
+        for row in sorted(rows, key=lambda r: r.get("lastActivityAt", ""), reverse=True):
+            current = self.avatars.get(row["id"])
+            if current in CAST["f"] or current in CAST["m"]:
+                continue
+            self.avatars[row["id"]] = self.least_used(self.sex_for_name(self.names[row["id"]]))
+            changed = True
         if changed:
-            write_json(LOOKS, self.looks)
+            write_json(AVATARS, self.avatars)
 
     def reroll(self, session_id):
         with self.lock:
-            self.looks[session_id] = self.next_look()
-            write_json(LOOKS, self.looks)
+            current = self.avatars.get(session_id, "")
+            self.avatars[session_id] = self.least_used(self.sex_of_avatar(current), avoid=current)
+            write_json(AVATARS, self.avatars)
             if self.seen_raw:
                 self.rebuild()
 
@@ -152,7 +178,8 @@ class Office:
         for row in rows:
             if row["id"] in self.names:
                 continue
-            name = next((n for n in NAME_POOL if n not in taken), f"Agent {len(taken) + 1}")
+            sex = min("fm", key=lambda one: sum(n in NAME_POOL[one] for n in taken))
+            name = next((n for n in NAME_POOL[sex] if n not in taken), f"Agent {len(taken) + 1}")
             self.names[row["id"]] = name
             taken.add(name)
             changed = True
@@ -162,7 +189,7 @@ class Office:
     def rebuild(self):
         rows = self.seen_raw.get("people", [])
         self.assign_names(rows)
-        self.assign_looks(rows)
+        self.assign_avatars(rows)
         ids = {row["id"] for row in rows}
         now = time.time()
         self.meetings = {pair: until for pair, until in self.meetings.items() if until > now}
@@ -186,7 +213,7 @@ class Office:
                 "talkingTo": talking[row["id"]],
                 "helpers": helpers[row["id"]],
                 "name": self.names[row["id"]],
-                "look": self.looks[row["id"]],
+                "avatar": self.avatars[row["id"]],
                 "label": self.labels.get(row["id"]) or short_label(row.get("title", "")),
                 "isFinished": row["id"] in self.finished,
                 "request": self.requests.get(row["id"]),
