@@ -51,3 +51,7 @@ Session data needs at least one Claude Code session open. Without one, the offic
 ```
 
 Add `--purge` to also delete `~/.agent-office`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

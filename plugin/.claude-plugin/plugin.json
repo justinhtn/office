@@ -1,5 +1,6 @@
 {
   "name": "agent-office",
   "version": "0.1.0",
-  "description": "Feeds your Claude Code sessions to the local Agent Office workspace"
+  "description": "Feeds your Claude Code sessions to the local Agent Office workspace",
+  "license": "MIT"
 }
