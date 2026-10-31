@@ -222,3 +222,6 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .job svg { opacity: 0; } .job:hover svg { opacity: 1; }
 .tag em { display: none; font-style: normal; }
 .tag:hover { z-index: 3; } .tag:hover em, .tag.on em { display: inline; }
+.call-badge { margin-top: 3px; padding: 2px 6px; border-radius: 9px; background: #1d6fd1; color: #fff; font: 600 10px Inter, system-ui, sans-serif; white-space: nowrap; }
+.helpers { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.helper { display: inline-flex; align-items: center; gap: 5px; }

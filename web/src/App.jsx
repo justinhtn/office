@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { CAST, createScene, portrait } from './scene.js'
+import { CAST, createScene, helperCast, portrait } from './scene.js'
 import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -213,6 +213,22 @@ function WorkingLine({ person, plan, turnStartedAt }) {
   )
 }
 
+function Helpers({ person }) {
+  if (!person.helpers?.length) return null
+
+  return (
+    <div className="helpers">
+      <small>{person.helpers.length} helper{person.helpers.length > 1 ? 's' : ''} working</small>
+      {person.helpers.map((label, index) => (
+        <span key={`${label}-${index}`} className="helper">
+          <Avatar person={{ cast: helperCast(label, index), look: 0, project: person.project, name: label }} size={22} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function Chat({ person, onPick, onExpand }) {
   const [latest, setLatest] = useState(null)
   const [older, setOlder] = useState([])
@@ -332,6 +348,7 @@ function Chat({ person, onPick, onExpand }) {
   return (
     <div className="chat">
       <WorkingLine person={person} plan={plan} turnStartedAt={turnStartedAt} />
+      <Helpers person={person} />
       {plan.length > 0 && <Plan plan={plan} />}
       <div className="scroll pad messages" ref={scroller}>
         {error && <p className="error">{error}</p>}
@@ -575,7 +592,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isRunning || person.isFinished || Boolean(person.request) ||
+  person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },

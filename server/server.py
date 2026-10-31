@@ -8,6 +8,7 @@ Claude Code session.
 import glob
 import hashlib
 import hmac
+import datetime
 import json
 import os
 import re
@@ -34,6 +35,9 @@ LOOKS = DATA / "looks.json"
 LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
 WATCH_S = 2
+CALL_S = 60
+MEETING_S = 45
+HELPER_MAX_AGE_S = 3600
 NAME_POOL = [
     "Greg", "Stephanie", "Maya", "Omar", "Priya", "Leo", "Nina", "Theo", "Ana", "Sam",
     "Iris", "Marcus", "Lena", "Felix", "Tara", "Hugo", "Rosa", "Ben", "Yuki", "Dev",
@@ -113,6 +117,7 @@ class Office:
         self.was_running = {}
         self.seen_raw = None
         self.requests = {}
+        self.meetings = {}
         self.snapshot = {"people": [], "updatedAt": ""}
 
     def next_look(self):
@@ -158,9 +163,28 @@ class Office:
         rows = self.seen_raw.get("people", [])
         self.assign_names(rows)
         self.assign_looks(rows)
+        ids = {row["id"] for row in rows}
+        now = time.time()
+        self.meetings = {pair: until for pair, until in self.meetings.items() if until > now}
+        meetings = {row["id"]: set() for row in rows}
+        for (one, other) in self.meetings:
+            if one in ids and other in ids:
+                meetings[one].add(other)
+                meetings[other].add(one)
+        talking, helpers = {row["id"]: None for row in rows}, {}
+        for row in rows:
+            peer, running = TRANSCRIPTS.live_state(row["id"])
+            # A session that stopped leaves unfinished helpers in its transcript.
+            helpers[row["id"]] = running if row.get("isRunning") else []
+            if peer in ids:
+                talking[row["id"]] = peer
+                talking[peer] = talking[peer] or row["id"]
         people = [
             {
                 **row,
+                "meetingWith": sorted(meetings[row["id"]]),
+                "talkingTo": talking[row["id"]],
+                "helpers": helpers[row["id"]],
                 "name": self.names[row["id"]],
                 "look": self.looks[row["id"]],
                 "label": self.labels.get(row["id"]) or short_label(row.get("title", "")),
@@ -212,6 +236,8 @@ class Office:
             for row in raw.get("people", []):
                 if self.was_running.get(row["id"]) and not row.get("isRunning"):
                     self.finished.add(row["id"])
+                    if row.get("startedBy"):
+                        self.meetings[(row["id"], row["startedBy"])] = time.time() + MEETING_S
                 if row.get("isRunning"):
                     self.finished.discard(row["id"])
                 self.was_running[row["id"]] = bool(row.get("isRunning"))
@@ -404,7 +430,8 @@ class Transcripts:
         text = re.sub(r"^\[Image: [^\]]*\]\s*", "", text, flags=re.M).strip()
         peer = re.search(r'<cross-session-message[^>]*from-name="([^"]*)"[^>]*>(.*?)</cross-session-message>', text, re.S)
         if peer:
-            return {"role": "peer", "from": peer.group(1), "body": peer.group(2).strip()}
+            source = re.search(r'<cross-session-message[^>]*\bfrom="(local_[0-9a-f-]+)"', text)
+            return {"role": "peer", "from": peer.group(1), "fromId": source.group(1) if source else "", "body": peer.group(2).strip()}
         system = re.match(r"<([a-z-]+)\b", text)
         if system and system.group(1) in self.SYSTEM:
             return {"role": "tool", "isNote": True, "body": self.SYSTEM[system.group(1)]}
@@ -457,9 +484,15 @@ class Transcripts:
 
     def parse(self, session_id, path):
         messages, seen_tools, activity = [], set(), {}
-        plan, turn_started = [], ""
+        plan, turn_started, last_peer = [], "", None
+        helpers = {}
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
+                # A background helper's finish is queued as its own kind of record.
+                if '"type":"queue-operation"' in line or '"type":"attachment"' in line:
+                    for done_id in re.findall(r"<tool-use-id>([^<\\]+)</tool-use-id>", line):
+                        helpers.pop(done_id, None)
+                    continue
                 if '"type":"user"' not in line and '"type":"assistant"' not in line:
                     continue
                 try:
@@ -477,13 +510,23 @@ class Transcripts:
                         continue
                     kind = block.get("type")
                     if kind == "text" and record["type"] == "user":
+                        for done_id in re.findall(r"<tool-use-id>([^<]+)</tool-use-id>", block.get("text", "")):
+                            helpers.pop(done_id, None)
                         cleaned = self.clean_user_text(block.get("text", ""))
                         if cleaned:
                             messages.append(cleaned)
                             turn_started = record.get("timestamp", turn_started)
+                            if cleaned.get("fromId"):
+                                last_peer = {"id": cleaned["fromId"], "at": record.get("timestamp", "")}
                     elif kind == "text" and block.get("text", "").strip():
                         messages.append({"role": "assistant", "body": block["text"].strip()})
                     elif kind == "tool_result":
+                        helper = helpers.get(block.get("tool_use_id"))
+                        if helper is not None:
+                            # A background helper answers at once and reports later by notification.
+                            text = json.dumps(block.get("content"))[:400]
+                            if block.get("is_error") or not re.search(r"background|launched|async", text, re.I):
+                                helpers.pop(block.get("tool_use_id"), None)
                         item = activity.get(block.get("tool_use_id"))
                         if item is not None:
                             result = block.get("content")
@@ -509,14 +552,16 @@ class Transcripts:
                             if shown:
                                 messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
                         elif not HIDDEN_TOOLS.match(tool):
+                            if tool == "Agent":
+                                helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label, detail = self.describe_tool(tool, tool_input)
                             item = {"role": "activity", "body": label, "detail": detail, "output": "", "isError": False}
                             activity[block.get("id")] = item
                             messages.append(item)
 
-        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started}
+        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastPeer": last_peer, "helpers": list(helpers.values())}
 
-    def page(self, session_id, before):
+    def load(self, session_id):
         path = self.path_for(session_id)
         if path is None:
             raise Refused(404, "No transcript file for this session.")
@@ -527,6 +572,29 @@ class Transcripts:
             if not cached or cached[0] != stamp:
                 cached = (stamp, self.parse(session_id, path))
                 self.parsed[session_id] = cached
+
+        return cached
+
+    @staticmethod
+    def seconds_since(stamp):
+        sent = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+        return (datetime.datetime.now(datetime.timezone.utc) - sent).total_seconds()
+
+    def live_state(self, session_id):
+        """Who this session is on a call with, and which helpers it has running."""
+        try:
+            parsed = self.load(session_id)[1]
+            peer = parsed["lastPeer"]
+            talking = peer["id"] if peer and self.seconds_since(peer["at"]) < CALL_S else None
+            helpers = [h["label"] for h in parsed["helpers"] if self.seconds_since(h["at"]) < HELPER_MAX_AGE_S]
+
+            return talking, helpers
+        except (Refused, OSError, ValueError, KeyError):
+            return None, []
+
+    def page(self, session_id, before):
+        cached = self.load(session_id)
         messages = cached[1]["messages"]
         end = len(messages) if before is None else max(0, min(before, len(messages)))
         start = max(0, end - PAGE_SIZE)
