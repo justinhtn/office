@@ -4,9 +4,8 @@ import * as THREE from 'three'
 export const sceneApi = { portrait: null }
 
 export function createScene(stage, canvas, tagsEl, onPick) {
-const PIXEL_SCALE = 3
-const renderer = new THREE.WebGLRenderer({canvas, antialias:false})
-renderer.setPixelRatio(1)
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x7ec8f0)
 scene.fog = new THREE.Fog(0x7ec8f0, 30, 75)
@@ -67,8 +66,8 @@ function character(p,isLead){
   g.traverse(o=>{if(o.isMesh)o.userData.person=p})
   return {g,head,armL,armR,legL,legR,p,torso}
 }
-const PORTRAIT_SIZE=48
-const portraitRenderer=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true,alpha:true})
+const PORTRAIT_SIZE=192
+const portraitRenderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true,alpha:true})
 portraitRenderer.setPixelRatio(1);portraitRenderer.setSize(PORTRAIT_SIZE,PORTRAIT_SIZE,false)
 const portraitCache=new Map()
 function portrait(p){
@@ -77,7 +76,7 @@ function portrait(p){
   const stage=new THREE.Scene();stage.background=new THREE.Color(0xdcecf7)
   stage.add(new THREE.AmbientLight(0xfff2d8,.8));const light=new THREE.DirectionalLight(0xffffff,.6);light.position.set(3,6,8);stage.add(light)
   const {g,head}=character(p,p.isLead);stage.add(g)
-  const lens=new THREE.PerspectiveCamera(30,1,.1,30);lens.position.set(.45,head.position.y+.2,3.9);lens.lookAt(0,head.position.y-.15,0)
+  const lens=new THREE.PerspectiveCamera(30,1,.1,30);lens.position.set(.35,head.position.y+.12,3.2);lens.lookAt(0,head.position.y-.1,0)
   portraitRenderer.render(stage,lens)
   const url=portraitRenderer.domElement.toDataURL()
   portraitCache.set(key,url)
@@ -131,7 +130,7 @@ function build(){
     row.forEach(zone=>{drawZone(zone,x0,z0,zones.indexOf(zone));x0+=zone.W+AISLE})
     z0+=rowD(row)+AISLE
   })
-  view.center.set(0,1,0); view.dist=Math.max(W,D)*1.3+7
+  view.center.set(0,1,0); view.dist=Math.max(W,D)*1.2+5
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);world.add(m)}
 function drawZone(zone,x0,z0,index){
@@ -158,7 +157,7 @@ function seated(a,on){a.legL.rotation.x=a.legR.rotation.x=on?-1.45:0;a.g.childre
 function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.isFinished?'Finished: '+a.p.title:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a})}
 let tab='chat',chatTimer=null
 
-function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,Math.floor(w/PIXEL_SCALE)),Math.max(1,Math.floor(h/PIXEL_SCALE)),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix()}
+function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix()}
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 let drag=null,moved=false
 canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
