@@ -182,13 +182,24 @@ function aimBone(bone,child,direction){
 // Rocketbox has no typing animation, so the arms are posed on the keyboard over the sitting one.
 function typeOnKeyboard(a,t){
   const life=a.life
+  if(!a.keyboard)return
   life.model.updateMatrixWorld(true)
+  const right=new THREE.Vector3(1,0,0).applyQuaternion(a.g.quaternion),forward=new THREE.Vector3(0,0,1).applyQuaternion(a.g.quaternion)
   life.arms.forEach((arm,i)=>{
     if(!arm.upper||!arm.fore||!arm.hand)return
     const tap=Math.max(0,Math.sin(t*(11+i*2.3)+i*1.7+nameHash(a.p.id)%7))
-    aimDirection.set(arm.side*.17,-.84,.52).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.upper,arm.fore,aimDirection.clone())
-    aimDirection.set(-arm.side*.2,-.12+tap*.045,.97).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.fore,arm.hand,aimDirection.clone())
-    if(arm.finger){aimDirection.set(-arm.side*.1,-.22-tap*.22,.97).normalize().applyQuaternion(a.g.quaternion);aimBone(arm.hand,arm.finger,aimDirection.clone())}
+    const shoulder=arm.upper.getWorldPosition(new THREE.Vector3()),elbow=arm.fore.getWorldPosition(new THREE.Vector3()),wrist=arm.hand.getWorldPosition(new THREE.Vector3())
+    const upperLength=shoulder.distanceTo(elbow),foreLength=elbow.distanceTo(wrist)
+    const target=a.keyboard.clone().addScaledVector(right,-arm.side*.14).addScaledVector(forward,-.1);target.y+=.055-tap*.012
+    const toTarget=target.clone().sub(shoulder),reach=Math.min(toTarget.length(),(upperLength+foreLength)*.995)
+    toTarget.normalize()
+    const along=(upperLength*upperLength+reach*reach-foreLength*foreLength)/(2*reach),lift=Math.sqrt(Math.max(0,upperLength*upperLength-along*along))
+    const bend=new THREE.Vector3(0,-1,0).addScaledVector(right,-arm.side*.35)
+    bend.addScaledVector(toTarget,-bend.dot(toTarget)).normalize()
+    const elbowGoal=shoulder.clone().addScaledVector(toTarget,along).addScaledVector(bend,lift)
+    aimBone(arm.upper,arm.fore,elbowGoal.sub(shoulder).normalize())
+    aimBone(arm.fore,arm.hand,target.clone().sub(arm.fore.getWorldPosition(new THREE.Vector3())).normalize())
+    if(arm.finger)aimBone(arm.hand,arm.finger,forward.clone().multiplyScalar(.97).add(new THREE.Vector3(0,-.2-tap*.22,0)).normalize())
   })
 }
 function liven(a,t,dt){
@@ -257,20 +268,29 @@ function deskPlant(parent,x,z){
   const pot=new THREE.Mesh(new THREE.CylinderGeometry(.09,.07,.14,10),mat(WHITE));pot.position.set(x,1.125,z);pot.castShadow=true;parent.add(pot)
   for(let i=0;i<6;i++){const a=i*1.05,leaf=new THREE.Mesh(new THREE.IcosahedronGeometry(.075,0),mat(i%2?LEAF:0x3fa867));leaf.scale.set(.7,1.7,.7);leaf.position.set(x+Math.cos(a)*.07,1.27+(i%3)*.05,z+Math.sin(a)*.07);leaf.rotation.set(Math.sin(a)*.5,a,Math.cos(a)*.5);leaf.castShadow=true;parent.add(leaf)}
 }
-function folders(parent,x,z,seed){
-  const colors=[0xd9503f,0x2f7dd1,0xe8a93a,0x4aa56a,0x8a5bc7]
-  for(let i=0,n=2+seed%3;i<n;i++){const f=box(parent,.34,.035,.25,colors[(seed+i)%5],x+(i%2)*.018,1.077+i*.037,z-(i%2)*.012);f.rotation.y=(i%2?1:-1)*.05}
-  box(parent,.3,.01,.21,0xf8f6ef,x,1.08+n0(seed)*.037,z)
+const BOOK_COLORS=[0xa33d2e,0x274f7d,0xc08a2b,0x2f6b52,0x5a3f7a,0x2b2f36]
+let pageMaterial=null
+function book(parent,x,y,z,width,depth,thick,color,turn){
+  pageMaterial=pageMaterial||new THREE.MeshLambertMaterial({map:paintTex(32,32,(g,w,h)=>{g.fillStyle='#f3eee2';g.fillRect(0,0,w,h);g.fillStyle='#d9d2c1';for(let i=2;i<h;i+=3)g.fillRect(0,i,w,1)})})
+  const volume=new THREE.Group();volume.position.set(x,y,z);volume.rotation.y=turn;parent.add(volume)
+  const cover=.007
+  box(volume,width,cover,depth,color,0,-thick/2+cover/2,0);box(volume,width,cover,depth,color,0,thick/2-cover/2,0)
+  box(volume,.009,thick,depth,color,-width/2+.0045,0,0)
+  box(volume,width-.022,thick-cover*2,depth-.012,pageMaterial,.004,0,0)
+  box(volume,width*.42,.001,depth*.09,0xe9dfc8,0,thick/2+.0006,-depth*.22)
 }
-const n0=seed=>2+seed%3
+function folders(parent,x,z,seed){
+  let y=1.056
+  for(let i=0,n=2+seed%3;i<n;i++){const thick=.028+((seed>>>i)%3)*.012;book(parent,x+(i%2?.012:-.008),y+thick/2,z+(i%2?-.01:.006),.26-(i%2)*.02,.34-(i%3)*.012,thick,BOOK_COLORS[(seed+i*2)%6],(i%2?1:-1)*.06+(seed%5)*.02);y+=thick}
+}
 function coffee(parent,x,z,seed){
   const color=[WHITE,ORANGE,0x2f3540,0x2f7dd1][seed%4],cup=new THREE.Mesh(new THREE.CylinderGeometry(.055,.048,.115,12),mat(color));cup.position.set(x,1.115,z);cup.castShadow=true;parent.add(cup)
   const drink=new THREE.Mesh(new THREE.CylinderGeometry(.047,.047,.005,12),mat(0x4a2c1a));drink.position.set(x,1.17,z);parent.add(drink)
   const handle=new THREE.Mesh(new THREE.TorusGeometry(.03,.009,6,10),mat(color));handle.position.set(x+.06,1.115,z);parent.add(handle)
 }
 function notebook(parent,x,z,seed){
-  box(parent,.24,.02,.32,[0x2f3540,0xa33d2e,0x276b52][seed%3],x,1.066,z).rotation.y=.12
-  const pen=box(parent,.012,.012,.2,seed%2?0x2f7dd1:0x1c1c20,x+.02,1.083,z);pen.rotation.y=.4
+  book(parent,x,1.067,z,.22,.3,.022,[0x2b2f36,0xa33d2e,0x276b52][seed%3],.12)
+  const pen=new THREE.Mesh(new THREE.CylinderGeometry(.005,.005,.15,6),mat(seed%2?0x2f7dd1:0x1c1c20));pen.rotation.set(Math.PI/2,0,.4);pen.position.set(x+.03,1.084,z);parent.add(pen)
 }
 function penCup(parent,x,z){
   const cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.12,10),mat(0x8d939c));cup.position.set(x,1.115,z);parent.add(cup)
@@ -285,16 +305,31 @@ function photo(parent,x,z,dir){
   const frame=box(parent,.17,.21,.015,0x5e4630,x,1.17,z);frame.rotation.x=-dir*.18
   const image=box(parent,.135,.175,.004,0x8dbcd8,x,1.17,z+dir*.012);image.rotation.x=-dir*.18
 }
+const KEYBOARD_OFFSET=.36
+let keyboardMaterials=null
+function keyboard(parent,x,z,dir){
+  if(!keyboardMaterials){
+    const keys=paintTex(512,180,(g,w,h)=>{g.fillStyle='#d9dbde';g.fillRect(0,0,w,h);const rows=[14,14,13,12,10];rows.forEach((count,r)=>{const unit=(w-14)/14.4;let kx=7;for(let i=0;i<count;i++){const wide=(r===4&&i===4)?5.6:(r>0&&i===0)?1+r*.2:(i===count-1&&r>0)?1+r*.28:1;const kw=unit*wide-3;g.fillStyle='#fafbfb';g.fillRect(kx,7+r*34,kw,29);g.fillStyle='#c6c9cd';g.fillRect(kx,7+r*34+27,kw,2);kx+=kw+3}})})
+    keyboardMaterials=[mat(SILVER),mat(SILVER),new THREE.MeshLambertMaterial({map:keys}),mat(SILVER),mat(SILVER),mat(SILVER)]
+  }
+  const body=new THREE.Mesh(new THREE.BoxGeometry(.5,.012,.17),keyboardMaterials);body.position.set(x,1.064,z+dir*KEYBOARD_OFFSET);body.rotation.y=dir===1?Math.PI:0;body.rotation.x=dir*.035;body.castShadow=true;parent.add(body)
+  const mouse=new THREE.Mesh(new THREE.SphereGeometry(.05,14,10),mat(0xf2f3f4));mouse.scale.set(.65,.3,1.1);mouse.position.set(x+.36,1.066,z+dir*KEYBOARD_OFFSET);mouse.castShadow=true;parent.add(mouse)
+}
+function roundedPanel(width,height,depth,radius){
+  const w=width/2-radius,h=height/2-radius,shape=new THREE.Shape()
+  shape.moveTo(-w,-height/2);shape.lineTo(w,-height/2);shape.quadraticCurveTo(width/2,-height/2,width/2,-h);shape.lineTo(width/2,h);shape.quadraticCurveTo(width/2,height/2,w,height/2);shape.lineTo(-w,height/2);shape.quadraticCurveTo(-width/2,height/2,-width/2,h);shape.lineTo(-width/2,-h);shape.quadraticCurveTo(-width/2,-height/2,-w,-height/2)
+  const geometry=new THREE.ExtrudeGeometry(shape,{depth,bevelEnabled:false,curveSegments:6});geometry.translate(0,0,-depth/2);return geometry
+}
 // One person's place at a table, with their own mix of things around the keyboard.
 function workstation(parent,x,z,dir,isOn,owner=''){
   const seed=nameHash(owner),back=z-dir*.28
-  box(parent,.28,.018,.2,SILVER,x,1.066,back)
-  const stand=box(parent,.18,.26,.022,SILVER,x,1.19,back-dir*.02);stand.rotation.x=-dir*.1
-  box(parent,.84,.52,.024,SILVER,x,1.52,back)
-  const screen=box(parent,.79,.41,.006,isOn?glow(0x59c7ff):mat(0x262a31),x,1.56,back+dir*.015)
-  box(parent,.5,.016,.15,0xeceef0,x,1.066,z+dir*.16)
-  box(parent,.075,.018,.12,0xeceef0,x+.38,1.066,z+dir*.16)
-  coffee(parent,x-.42,z+dir*.2,seed)
+  const foot=new THREE.Mesh(roundedPanel(.25,.19,.012,.03),mat(SILVER));foot.rotation.x=Math.PI/2;foot.position.set(x,1.063,back);foot.castShadow=true;parent.add(foot)
+  const stand=box(parent,.15,.3,.014,SILVER,x,1.2,back-dir*.022);stand.rotation.x=-dir*.11
+  const body=new THREE.Mesh(roundedPanel(.88,.54,.018,.022),mat(SILVER));body.position.set(x,1.54,back);body.castShadow=true;parent.add(body)
+  const glass=new THREE.Mesh(roundedPanel(.86,.46,.002,.012),mat(0x101217));glass.position.set(x,1.565,back+dir*.0105);if(dir===-1)glass.rotation.y=Math.PI;parent.add(glass)
+  const screen=new THREE.Mesh(new THREE.PlaneGeometry(.81,.41),isOn?glow(0x59c7ff):mat(0x262a31));screen.position.set(x,1.565,back+dir*.0125);if(dir===-1)screen.rotation.y=Math.PI;parent.add(screen)
+  keyboard(parent,x,z,dir)
+  coffee(parent,x-.5,z+dir*.26,seed)
   const left=x-.82,right=x+.82,rear=z-dir*.2,near=z+dir*.13
   const side=[[deskPlant,folders],[folders,notebook],[notebook,deskPlant],[penCup,folders],[deskPlant,notebook]][seed%5]
   ;[[side[0],left,rear],[side[1],right,near]].forEach(([item,ix,iz])=>item(parent,ix,iz,seed))
@@ -468,16 +503,16 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,uniform.clone().lerp(new THREE.Color(0xffffff),.82).getHex(),cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
-    if(isTeam)projector(team,x0,cz,uniform)
+    if(isTeam){projector(team,x0,cz,uniform);spots[key].hasBoard=true}
     label(isTeam?`${team.lead.name}'s team · ${team.lead.project}`:`${team.lead.name} · ${team.lead.project}`)
     const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
     if(isShared)box(world,columns*2.5,.09,.03,0xd9d6cf,cx,1.1,cz)
     team.members.forEach((p,i)=>{
-      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.74:cz+row*1.16
+      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.44:cz+row*.88
       const screen=workstation(world,sx,deskZ,isShared?row:row,p.isRunning,p.id);chair(world,sx,seatZ,row)
       const a=seat(p,sx,seatZ,row===-1?0:Math.PI,front,p.isFinished?'wave':p.isWaiting?'sit':p.isRunning||p.helpers?.length||p.talkingTo?'work':'sit')
-      attachScreen(a,screen);addTag(a,isTeam&&p.id===team.lead.id);dress(a)
+      attachScreen(a,screen);a.keyboard=new THREE.Vector3(sx,1.09,deskZ+row*KEYBOARD_OFFSET);addTag(a,isTeam&&p.id===team.lead.id);dress(a)
     })
   }
   if(kind==='lounge'){
@@ -543,7 +578,7 @@ function loop(){const t=clock.getElapsedTime()
   })
   renderer.render(scene,camera)
   const w=stage.clientWidth,h=stage.clientHeight
-  tags.forEach(({el,a,key,isZone})=>{if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
+  tags.forEach(({el,a,key,isZone})=>{el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected)})
 }
 const timer=setInterval(loop,33)
 let signature=''
