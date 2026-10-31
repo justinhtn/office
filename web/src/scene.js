@@ -59,55 +59,66 @@ function chair(parent,x,z,dir){box(parent,.78,.12,.78,0x3f8f73,x,.66,z);box(pare
 function couch(parent,x,z,w){box(parent,w,.46,1,0x3f8f73,x,.42,z);box(parent,w,.8,.28,0x35795f,x,.82,z-.42);box(parent,.26,.62,1,0x35795f,x-w/2,.5,z);box(parent,.26,.62,1,0x35795f,x+w/2,.5,z)}
 
 
-let people=[], room=null, selected=null, actors=[], tags=[], view={az:.72,el:.6,dist:30,center:new THREE.Vector3()}
+let people=[], selected=null, actors=[], tags=[], view={az:.72,el:.6,dist:30,center:new THREE.Vector3()}
 function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&byId[l.startedBy]&&!seen.has(l.startedBy)){seen.add(l.startedBy);l=byId[l.startedBy]}return l}
 function teamsIn(list){const byId=Object.fromEntries(people.map(p=>[p.id,p]));const m=new Map();list.forEach(p=>{const l=leadOf(p,byId);if(!m.has(l.id))m.set(l.id,{lead:l,members:[]});m.get(l.id).members.push(p)});return [...m.values()].map(t=>({...t,members:[t.lead,...t.members.filter(x=>x.id!==t.lead.id)]})).sort((a,b)=>(b.lead.lastActivityAt||'').localeCompare(a.lead.lastActivityAt||''))}
-const busy=p=>p.isRunning||p.isFinished
+const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)
+const ZONE_WIDTH=15, AISLE=3, ZONE_RUGS=[[0x7d8fb5,0xa3b4d6],[0xb5897d,0xd6b0a3],[0x7db58f,0xa3d6b4],[0xa77db5,0xc7a3d6]]
+function layoutZone(list){
+  const teams=teamsIn(list), pods=teams.filter(t=>t.members.length>1||busy(t.lead)), lounge=teams.filter(t=>!pods.includes(t)).map(t=>t.lead)
+  let cx=0,cz=0,rowD=0,width=0; const placed=[]
+  pods.forEach(t=>{const cols=Math.ceil(t.members.length/2),w=cols*2.5+1.2,d=6.4;if(cx+w>ZONE_WIDTH&&cx>0){cx=0;cz+=rowD+.8;rowD=0}placed.push({t,x:cx,z:cz,w,d});cx+=w+.8;rowD=Math.max(rowD,d);width=Math.max(width,cx-.8)})
+  const podsD=placed.length?cz+rowD:0, lw=lounge.length?Math.max(5,lounge.length*2.3+1):0, ld=lounge.length?5:0
+  return {placed,lounge,lw,ld,podsD,W:Math.max(9,width+1,lw+1),D:podsD+ld+(placed.length&&ld?.8:0)+1.6}
+}
 function build(){
   scene.remove(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]
-  const list=people.filter(p=>p.project===room), teams=teamsIn(list)
-  const pods=teams.filter(t=>t.members.length>1||busy(t.lead)), lounge=teams.filter(t=>!pods.includes(t)).map(t=>t.lead)
-  const maxW=17; let cx=0,cz=0,rowD=0,totalW=0; const placed=[]
-  pods.forEach(t=>{const cols=Math.ceil(t.members.length/2),w=cols*2.5+1.2,d=6.4;if(cx+w>maxW&&cx>0){cx=0;cz+=rowD+.8;rowD=0}placed.push({t,x:cx,z:cz,w,d,cols});cx+=w+.8;rowD=Math.max(rowD,d);totalW=Math.max(totalW,cx)})
-  const podsD=placed.length?cz+rowD:0, lw=Math.max(8,lounge.length*2.3+1), ld=lounge.length?5.4:0
-  const W=Math.max(13,totalW+1.5,lw+2), D=Math.max(9.5,podsD+ld+(placed.length&&ld?1:0)+2.6)
+  const names=[...new Set(people.map(p=>p.project))]
+  const zones=names.map(name=>({name,...layoutZone(people.filter(p=>p.project===name))}))
+  const perRow=Math.max(1,Math.round(Math.sqrt(zones.length)))
+  const rows=[];zones.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
+  const rowW=row=>row.reduce((n,z)=>n+z.W,0)+(row.length-1)*AISLE, rowD=row=>Math.max(...row.map(z=>z.D))
+  const W=Math.max(14,...rows.map(rowW))+2, D=Math.max(10,rows.reduce((n,r)=>n+rowD(r),0)+(rows.length-1)*AISLE)+3
   const floor=new THREE.Mesh(new THREE.PlaneGeometry(W,D),texMat(FLOOR_T(Math.ceil(Math.max(W,D)/2)))); floor.rotation.x=-Math.PI/2; world.add(floor)
   box(world,W+.6,.4,D+.6,0x6b3f1e,0,-.21,0)
   const H=6, back=-D/2, left=-W/2
-  const wallB=box(world,W,H,.3,texMat(WALL_T(W/2,H/2)),0,H/2,back-.15)
-  const wallL=box(world,.3,H,D,texMat(WALL_T(D/2,H/2)),left-.15,H/2,0)
+  box(world,W,H,.3,texMat(WALL_T(W/2,H/2)),0,H/2,back-.15)
+  box(world,.3,H,D,texMat(WALL_T(D/2,H/2)),left-.15,H/2,0)
   box(world,W,.8,.34,0x8e5a2c,0,.4,back-.13); box(world,.34,.8,D,0x8e5a2c,left-.13,.4,0)
-  for(let i=0,n=Math.floor(W/6);i<n;i++){const x=left+(i+.5)*W/n;box(world,3.1,2.3,.12,0xfff6d8,x,3.5,back+.03);box(world,2.8,2,.06,texMat(WINDOW_T),x,3.5,back+.1)}
+  for(let i=0,n=Math.max(1,Math.floor(W/6));i<n;i++){const x=left+(i+.5)*W/n;box(world,3.1,2.3,.12,0xfff6d8,x,3.5,back+.03);box(world,2.8,2,.06,texMat(WINDOW_T),x,3.5,back+.1)}
   for(let i=0,n=Math.max(1,Math.floor(D/5));i<n;i++){const z=back+(i+.5)*D/n;box(world,.08,2,1.6,texMat(POSTER_T[i%3]),left+.05,3.5,z)}
-  plant(world,left+1,back+1); plant(world,-left-1,back+1)
-  box(world,1.4,3,1,0xe8e8f0,left+2.8,1.5,back+.6); box(world,1.1,2,.05,glow(0x9fd6ff),left+2.8,1.8,back+1.12)
-
-  const ox=-W/2+1, oz=back+2.2
-  placed.forEach(({t,x,z,w,d,cols})=>{
-    const px=ox+x+(W-2-Math.max(totalW-.8,0))/2+w/2, pz=oz+z+d/2-.6
-    const rug=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(0x7d8fb5)); rug.rotation.x=-Math.PI/2; rug.position.set(px,.02,pz); world.add(rug)
-    const inner=new THREE.Mesh(new THREE.PlaneGeometry(w-.4,d-.4),mat(0xa3b4d6)); inner.rotation.x=-Math.PI/2; inner.position.set(px,.03,pz); world.add(inner)
+  plant(world,left+.8,back+.8); plant(world,-left-.8,back+.8)
+  let z0=back+2.2
+  rows.forEach(row=>{
+    let x0=left+1
+    row.forEach(zone=>{drawZone(zone,x0,z0,zones.indexOf(zone));x0+=zone.W+AISLE})
+    z0+=rowD(row)+AISLE
+  })
+  view.center.set(0,1,0); view.dist=Math.max(W,D)*1.3+7
+}
+function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);world.add(m)}
+function drawZone(zone,x0,z0,index){
+  const [edge,fill]=ZONE_RUGS[index%ZONE_RUGS.length]
+  addZoneTag(zone.name,x0+zone.W/2,z0-.3)
+  zone.placed.forEach(({t,x,z,w,d})=>{
+    const px=x0+.5+x+w/2,pz=z0+z+d/2+.2
+    flat(w,d,edge,px,.02,pz);flat(w-.4,d-.4,fill,px,.03,pz)
     t.members.forEach((p,i)=>{
-      const col=Math.floor(i/2), row=i%2===0?-1:1
-      const sx=px-w/2+.6+col*2.5+1.25, deskZ=pz+row*.56, seatZ=pz+row*1.72, dir=row
-      desk(world,sx,deskZ,dir,p.isRunning); chair(world,sx,seatZ,dir)
-      const a=character(p,p.id===t.lead.id); a.pose=p.isFinished?'done':p.isRunning?'work':'desk'; a.base={x:sx,z:seatZ}; a.g.position.set(sx,0,seatZ); a.g.rotation.y=row===-1?0:Math.PI
-      if(row===-1)a.g.rotation.y=0
-      a.dir=row; seated(a,a.pose!=='done'); world.add(a.g); actors.push(a); addTag(a,p.id===t.lead.id)
+      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=px-w/2+.6+col*2.5+1.25,deskZ=pz+row*.56,seatZ=pz+row*1.72
+      desk(world,sx,deskZ,row,p.isRunning);chair(world,sx,seatZ,row)
+      const a=character(p,p.id===t.lead.id&&t.members.length>1);a.pose=p.request||p.isFinished?'done':p.isRunning?'work':'desk';a.g.position.set(sx,0,seatZ);a.g.rotation.y=row===-1?0:Math.PI;a.dir=row;seated(a,a.pose!=='done');world.add(a.g);actors.push(a);addTag(a,p.id===t.lead.id&&t.members.length>1)
     })
   })
-  if(lounge.length){
-    const lz=D/2-3.1, lx=(lw-W)/2+1
-    const carpet=new THREE.Mesh(new THREE.PlaneGeometry(lw,4.6),mat(0x7fb389)); carpet.rotation.x=-Math.PI/2; carpet.position.set(lx,.02,lz); world.add(carpet)
-    couch(world,lx,lz-1.2,lw-1.4)
-    box(world,lw*.4,.5,1,0xd8a45f,lx,.3,lz+.75)
-    lounge.forEach((p,i)=>{const sx=lx-(lw-2)/2+(i+.5)*(lw-2)/lounge.length;const a=character(p,false);a.pose='lounge';a.g.position.set(sx,-.02,lz-1.02);a.dir=1;seated(a,true);world.add(a.g);actors.push(a);addTag(a,false)})
-    plant(world,lx+lw/2-.6,lz+1.5)
+  if(zone.lounge.length){
+    const lz=z0+zone.podsD+(zone.placed.length?.8:0)+2.4,lx=x0+.5+zone.lw/2
+    flat(zone.lw,4.2,0x7fb389,lx,.02,lz)
+    couch(world,lx,lz-1,zone.lw-1.2)
+    zone.lounge.forEach((p,i)=>{const sx=lx-(zone.lw-2)/2+(i+.5)*(zone.lw-2)/zone.lounge.length,a=character(p,false);a.pose='lounge';a.g.position.set(sx,-.02,lz-.82);a.dir=1;seated(a,true);world.add(a.g);actors.push(a);addTag(a,false)})
   }
-  view.center.set(0,1,0); view.dist=Math.max(W,D)*1.45+6
 }
+function addZoneTag(name,x,z){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.9,z)},p:{id:null}}})}
 function seated(a,on){a.legL.rotation.x=a.legR.rotation.x=on?-1.45:0;a.g.children[0].position.y=1.08;a.g.position.y=on?-.12:0}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.textContent=a.p.name;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;el.appendChild(name);if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.isFinished?'Finished: '+a.p.title:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a})}
 let tab='chat',chatTimer=null
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,Math.floor(w/PIXEL_SCALE)),Math.max(1,Math.floor(h/PIXEL_SCALE)),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix()}
@@ -138,11 +149,11 @@ function loop(){const t=clock.getElapsedTime()
 const timer=setInterval(loop,33)
 let signature=''
 return {
-  update(nextPeople,nextRoom,nextSelected){
+  update(nextPeople,nextSelected){
     selected=nextSelected
-    const sig=nextRoom+JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.project,p.startedBy,p.isRunning,p.isFinished]))
-    people=nextPeople;room=nextRoom
-    if(sig!==signature&&room){signature=sig;build()}
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.request&&p.request.id]))
+    people=nextPeople
+    if(sig!==signature&&people.length){signature=sig;build()}
   },
   dispose(){clearInterval(timer);observer.disconnect();renderer.dispose()},
 }

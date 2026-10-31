@@ -9,6 +9,9 @@ const LEASE_MS = 30_000
 const ROSTER_MS = 30_000
 const ROSTER_LIMIT = 40
 const SESSION_TOOLS = 'ccd_session_mgmt'
+const ATTENTION_TOOL = 'mcp__agent-office__ask_for_attention'
+const MAX_MESSAGE = 2000
+const MAX_FILES = 10
 
 type Listed = {
   sessionId: string
@@ -59,6 +62,18 @@ function textOf(result: { content?: readonly unknown[]; isError?: boolean }): st
       typeof block === 'object' && block !== null && 'text' in block ? String(block.text) : '',
     )
     .join('\n')
+}
+
+// The app's tools and the office use its local_ id, not the engine's session id.
+async function appSessionId($: EngineInterface): Promise<string> {
+  try {
+    const own = await $.mcp.call(SESSION_TOOLS, 'get_session', { session_id: 'self' })
+    if (!own.isError) return (JSON.parse(textOf(own)) as Listed).sessionId
+  } catch {
+    // Outside the desktop app there's no such tool.
+  }
+
+  return $.session.id()
 }
 
 async function holdsLease($: EngineInterface): Promise<boolean> {
@@ -167,13 +182,47 @@ async function loadRoster($: EngineInterface): Promise<void> {
   }
 }
 
+async function raiseRequest(
+  $: EngineInterface,
+  input: { message?: unknown; show?: unknown },
+): Promise<string> {
+  const message = String(input.message ?? '').trim().slice(0, MAX_MESSAGE)
+  if (!message) throw new Error('A message is required.')
+  const show = (Array.isArray(input.show) ? input.show : []).map(String).slice(0, MAX_FILES)
+  const id = crypto.randomUUID()
+  await $.fs.write(
+    `${dataFolder}/requests/${id}.json`,
+    JSON.stringify({ id, session: selfId, message, show, at: new Date().toISOString() }),
+  )
+
+  return "Your request is in the person's Needs you list. Their reply will arrive as a message. Carry on with anything that doesn't depend on it, or end your turn."
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    selfId = await $.session.id()
+    selfId = await appSessionId($)
     dataFolder = `${await $.env.get('HOME')}/.agent-office`
     await $.command.register({
       name: 'office',
       description: 'Show the address of your Agent Office workspace',
+    })
+    await $.tool.register({
+      name: 'ask_for_attention',
+      description:
+        'Ask the person to look at something in their Agent Office workspace, when you need a decision or have something worth showing them. Not for routine progress.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'What you need from them, in one or two plain sentences.' },
+          show: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional file paths to show them, relative to your working directory.',
+          },
+        },
+        required: ['message'],
+      },
+      isDeferred: false,
     })
     if (await $.fs.exists(`${dataFolder}/bridge`)) {
       void publish($)
@@ -184,6 +233,14 @@ export const register: Register = on => {
     }
 
     return next(e)
+  })
+
+  on('tool.call', { tool: ATTENTION_TOOL }, async ($, e) => {
+    const input = e as unknown as { message?: unknown; show?: unknown }
+
+    const text = await raiseRequest($, input)
+
+    return { result: text, text }
   })
 
   on('command.run', { command: 'office' }, async () => ({

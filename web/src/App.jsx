@@ -5,7 +5,7 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  PanelRight, Search, SendHorizontal, Users,
+  Pencil, Search, SendHorizontal, X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,16 +13,9 @@ import { createScene } from './scene.js'
 import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
-const statusOf = p => (p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
-const STATUS_LABEL = { working: 'Working', finished: 'Finished', idle: 'Idle' }
-const PANELS = [
-  { id: 'team', label: 'Team', icon: Users },
-  { id: 'chat', label: 'Chat', icon: MessageSquare },
-  { id: 'changes', label: 'Changes', icon: FileDiff },
-  { id: 'files', label: 'Files', icon: FolderTree },
-]
-
-function Room({ people, room, selected, onPick }) {
+const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
+const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
+function Room({ people, selected, onPick }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick)
   pick.current = onPick
@@ -32,35 +25,13 @@ function Room({ people, room, selected, onPick }) {
     return () => scene.current.dispose()
   }, [])
   useEffect(() => {
-    scene.current.update(people, room, selected)
-  }, [people, room, selected])
+    scene.current.update(people, selected)
+  }, [people, selected])
 
   return (
     <div className="room" ref={stage}>
-      <canvas ref={canvas} aria-label={`3D office for ${room}`} />
+      <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
-    </div>
-  )
-}
-
-function Roster({ people, everyone, selected, onPick }) {
-  return (
-    <div className="scroll pad">
-      {teamsOf(people, everyone).map(team => (
-        <section key={team.lead.id} className="team">
-          <h3>{team.members.length > 1 ? `${team.lead.name}'s team` : 'Solo'}</h3>
-          {team.members.map(person => (
-            <button key={person.id} className={`row ${person.id === selected ? 'on' : ''}`} onClick={() => onPick(person.id)}>
-              <span className={`dot ${statusOf(person)}`} />
-              <span className="row-main">
-                <b>{person.name}</b>
-                <small>{person.title}</small>
-              </span>
-              <small className="row-age">{age(person.lastActivityAt)}</small>
-            </button>
-          ))}
-        </section>
-      ))}
     </div>
   )
 }
@@ -306,7 +277,7 @@ function useSize() {
   return [ref, size]
 }
 
-function Files({ person }) {
+function Files({ person, initialPath }) {
   const [paths, setPaths] = useState(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(null)
@@ -316,6 +287,9 @@ function Files({ person }) {
     api(withId('/api/files', person.id)).then(data => setPaths(data.files), failure => setError(failure.message))
   }, [person.id])
   const tree = useMemo(() => toTree(paths || []), [paths])
+  useEffect(() => {
+    if (initialPath) view(initialPath)
+  }, [initialPath, person.id])
   async function view(path) {
     setOpen({ path, text: null })
     try {
@@ -385,15 +359,122 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
   )
 }
 
+const ACTIVE_DAYS = 7
+const isActive = person =>
+  person.isRunning || person.isFinished || Boolean(person.request) ||
+  Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
+const SESSION_TABS = [
+  { id: 'chat', label: 'Chat', icon: MessageSquare },
+  { id: 'changes', label: 'Changes', icon: FileDiff },
+  { id: 'files', label: 'Files', icon: FolderTree },
+]
+
+function NameEditor({ person }) {
+  const [draft, setDraft] = useState(null)
+  const [error, setError] = useState('')
+  if (draft === null) {
+    return <button className="name" title="Rename" onClick={() => setDraft(person.name)}>{person.name}<Pencil size={12} /></button>
+  }
+  async function save(event) {
+    event.preventDefault()
+    try {
+      if (draft.trim() !== person.name) await api('/api/rename', { id: person.id, name: draft })
+      setDraft(null)
+      setError('')
+    } catch (failure) {
+      setError(failure.message)
+    }
+  }
+
+  return (
+    <form className="name-form" onSubmit={save}>
+      <input autoFocus aria-label="Agent name" value={draft} onChange={event => setDraft(event.target.value)} onBlur={save} onKeyDown={event => { if (event.key === 'Escape') { setError(''); setDraft(null) } }} />
+      {error && <small className="error">{error}</small>}
+    </form>
+  )
+}
+
+function RequestBanner({ person, onShow }) {
+  const [problem, setProblem] = useState('')
+  const dismiss = () => api('/api/dismiss', { id: person.id }).catch(failure => setProblem(failure.message))
+
+  return (
+    <div className="request" role="status">
+      <div className="request-main">
+        <b>{person.name} is asking for you</b>
+        <p>{person.request.message}</p>
+        {person.request.show.map(path => (
+          <button key={path} className="request-file" onClick={() => onShow(path)}><FileIcon size={12} /> {path}</button>
+        ))}
+        {problem && <small className="error">{problem}</small>}
+      </div>
+      <button className="dismiss" onClick={dismiss}>Dismiss</button>
+    </div>
+  )
+}
+
+function Session({ person, everyone, tab, onTab, onClose, onPick }) {
+  const [showPath, setShowPath] = useState(null)
+  const boss = everyone.find(other => other.id === person.startedBy)
+
+  return (
+    <section className="session">
+      <header className="session-head">
+        <div className="session-who">
+          <span className={`dot ${statusOf(person)}`} />
+          <NameEditor key={person.id} person={person} />
+          <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : `Idle ${age(person.lastActivityAt)}`}</span>
+          <small className="session-title">{person.title}{boss ? ` · for ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
+        </div>
+        {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
+        <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
+      </header>
+      <nav className="session-tabs" role="tablist">
+        {SESSION_TABS.map(({ id, label, icon: Icon }) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
+        ))}
+      </nav>
+      {person.request && <RequestBanner person={person} onShow={path => { setShowPath(path); onTab('files') }} />}
+      {tab === 'chat' && <Chat key={person.id} person={person} onPick={onPick} />}
+      {tab === 'changes' && <Changes person={person} />}
+      {tab === 'files' && <Files person={person} initialPath={showPath} />}
+    </section>
+  )
+}
+
+function Away({ people, onPick, onClose }) {
+  const projects = [...new Set(people.map(person => person.project))]
+
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <section className="away" aria-label="Away" onMouseDown={event => event.stopPropagation()}>
+        <h2>Away <small>No activity for {ACTIVE_DAYS} days</small></h2>
+        <div className="scroll">
+          {projects.map(project => (
+            <div key={project} className="team">
+              <h3>{project}</h3>
+              {people.filter(person => person.project === project).map(person => (
+                <button key={person.id} className="row" onClick={() => onPick(person.id)}>
+                  <span className="row-main"><b>{person.name}</b><small>{person.title}</small></span>
+                  <small className="row-age">{age(person.lastActivityAt)}</small>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export default function App() {
   const [everyone, setEveryone] = useState([])
   const [updatedAt, setUpdatedAt] = useState('')
   const [problem, setProblem] = useState('')
-  const [room, setRoom] = useState(null)
   const [selected, setSelected] = useState(null)
-  const [panel, setPanel] = useState('team')
-  const [isPanelOpen, setIsPanelOpen] = useState(true)
+  const [tab, setTab] = useState('chat')
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
+  const [isAwayOpen, setIsAwayOpen] = useState(false)
 
   useEffect(() => {
     const poll = () =>
@@ -402,7 +483,7 @@ export default function App() {
         failure => setProblem(failure.message),
       )
     poll()
-    const timer = setInterval(poll, 5000)
+    const timer = setInterval(poll, 3000)
 
     return () => clearInterval(timer)
   }, [])
@@ -412,31 +493,28 @@ export default function App() {
         event.preventDefault()
         setIsPaletteOpen(open => !open)
       }
-      if (event.key === 'Escape') setIsPaletteOpen(false)
+      if (event.key === 'Escape') {
+        setIsPaletteOpen(false)
+        setIsAwayOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
 
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const rooms = useMemo(() => {
-    const latest = name => everyone.filter(p => p.project === name).reduce((most, p) => ((p.lastActivityAt || '') > most ? p.lastActivityAt : most), '')
-
-    return [...new Set(everyone.map(p => p.project))].sort((a, b) =>
-      a === 'Older projects' ? 1 : b === 'Older projects' ? -1 : latest(b).localeCompare(latest(a)),
-    )
-  }, [everyone])
-  const activeRoom = rooms.includes(room) ? room : rooms[0]
-  const inRoom = useMemo(() => everyone.filter(p => p.project === activeRoom), [everyone, activeRoom])
-  const person = everyone.find(p => p.id === selected)
-  const working = everyone.filter(p => p.isRunning).length
-  const finished = everyone.filter(p => p.isFinished).length
+  const active = useMemo(() => everyone.filter(isActive), [everyone])
+  const away = useMemo(() => everyone.filter(person => !isActive(person)), [everyone])
+  const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)]
+  const working = active.filter(person => person.isRunning)
+  const person = everyone.find(other => other.id === selected)
 
   function pick(id) {
-    const target = everyone.find(p => p.id === id)
+    const target = everyone.find(other => other.id === id)
     setSelected(id)
-    if (panel === 'team') setPanel('chat')
-    setIsPanelOpen(true)
+    setTab('chat')
+    setIsAwayOpen(false)
+    setIsPaletteOpen(false)
     if (target?.isFinished) api('/api/seen', { id }).catch(() => {})
   }
 
@@ -447,78 +525,50 @@ export default function App() {
         <button className="search" onClick={() => setIsPaletteOpen(true)}>
           <Search size={14} /><span>Search agents and rooms</span><kbd>⌘</kbd><kbd>K</kbd>
         </button>
-        <span className="counts"><span className="dot working" />{working} working<span className="dot finished" />{finished} finished</span>
+        <span className="counts"><span className="dot working" />{working.length} working</span>
       </header>
 
-      <div className="body">
-        <nav className="rail left" aria-label="Sections">
-          <button className="on" title="Office" aria-label="Office"><Building2 size={18} /></button>
-        </nav>
-        <PanelGroup direction="horizontal" autoSaveId="office-layout" className="work">
-          <Panel minSize={30} defaultSize={62}>
-            <div className="center">
-              <div className="tabs" role="tablist">
-                {rooms.map(name => {
-                  const live = everyone.filter(p => p.project === name && p.isRunning).length
-
-                  return (
-                    <button key={name} role="tab" aria-selected={name === activeRoom} className={name === activeRoom ? 'on' : ''} onClick={() => { setRoom(name); setSelected(null); setPanel('team') }}>
-                      {live > 0 && <span className="dot working" />}{name}
-                      <small>{everyone.filter(p => p.project === name).length}</small>
-                    </button>
-                  )
-                })}
-              </div>
-              {problem && <p className="error banner">{problem}</p>}
-              {activeRoom
-                ? <Room people={everyone} room={activeRoom} selected={selected} onPick={pick} />
-                : !problem && <Empty text="Waiting for session data…" />}
-            </div>
-          </Panel>
-          {isPanelOpen && (
-            <>
-              <PanelResizeHandle className="handle" />
-              <Panel minSize={24} defaultSize={38}>
-                <aside className="side">
-                  <div className="crumbs">
-                    <span>{activeRoom || 'Office'}</span>
-                    {person && panel !== 'team' && <><ChevronRight size={12} /><b>{person.name}</b><span className={`pill ${statusOf(person)}`}>{STATUS_LABEL[statusOf(person)]}</span></>}
-                  </div>
-                  {person && panel !== 'team' && (
-                    <div className="who">
-                      <p>{person.title}</p>
-                      {person.link?.startsWith('claude://') && <a href={person.link}>Open in Claude app</a>}
-                    </div>
-                  )}
-                  {panel === 'team' && <Roster people={inRoom} everyone={everyone} selected={selected} onPick={pick} />}
-                  {panel !== 'team' && !person && <Empty text="Pick someone from the room or the Team list." />}
-                  {panel === 'chat' && person && <Chat key={person.id} person={person} onPick={pick} />}
-                  {panel === 'changes' && person && <Changes person={person} />}
-                  {panel === 'files' && person && <Files person={person} />}
-                </aside>
-              </Panel>
-            </>
-          )}
-        </PanelGroup>
-        <nav className="rail right" aria-label="Panels">
-          {PANELS.map(({ id, label, icon: Icon }) => (
-            <button key={id} title={label} aria-label={label} className={isPanelOpen && panel === id ? 'on' : ''} onClick={() => { setPanel(id); setIsPanelOpen(true) }}><Icon size={18} /></button>
-          ))}
-        </nav>
+      <div className="needs" aria-label="Needs you">
+        <b>Needs you</b>
+        {needsYou.length === 0 && <small>Nothing right now</small>}
+        {needsYou.map(target => (
+          <button key={target.id} className="need" onClick={() => pick(target.id)}>
+            <span className={`dot ${target.request ? 'asks' : 'finished'}`} /><b>{target.name}</b>
+            {target.request ? <small className="asks-text">{target.request.message}</small> : <>finished <small>{target.title}</small></>}
+          </button>
+        ))}
       </div>
 
+      {problem && <p className="error banner">{problem}</p>}
+      <PanelGroup direction="horizontal" className="work" autoSaveId={person ? 'office-session' : 'office-floor'}>
+        <Panel id="floor" order={1} minSize={20} defaultSize={person ? 34 : 100}>
+          {active.length > 0
+            ? <Room people={active} selected={selected} onPick={pick} />
+            : !problem && <Empty text="Waiting for session data…" />}
+        </Panel>
+        {person && (
+          <>
+            <PanelResizeHandle className="handle" />
+            <Panel id="session" order={2} minSize={35} defaultSize={66}>
+              <Session person={person} everyone={everyone} tab={tab} onTab={setTab} onPick={pick} onClose={() => setSelected(null)} />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
+
       <footer className="statusbar">
-        <small>{everyone.length} agents · {updatedAt ? `updated ${age(updatedAt)} ago` : 'no data yet'}</small>
-        <button title="Toggle panel" aria-label="Toggle panel" onClick={() => setIsPanelOpen(open => !open)}><PanelRight size={15} /></button>
+        <small>{active.length} active · {updatedAt ? `updated ${age(updatedAt)} ago` : 'no data yet'}</small>
+        <button className="away-button" onClick={() => setIsAwayOpen(true)}>{away.length} away</button>
       </footer>
 
+      {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
       {isPaletteOpen && (
         <Palette
           everyone={everyone}
-          rooms={rooms}
+          rooms={[...new Set(everyone.map(other => other.project))]}
           onClose={() => setIsPaletteOpen(false)}
-          onRoom={name => { setRoom(name); setSelected(null); setPanel('team'); setIsPaletteOpen(false) }}
-          onPerson={target => { setRoom(target.project); pick(target.id); setPanel('chat'); setIsPaletteOpen(false) }}
+          onRoom={() => { setSelected(null); setIsPaletteOpen(false) }}
+          onPerson={target => pick(target.id)}
         />
       )}
     </div>

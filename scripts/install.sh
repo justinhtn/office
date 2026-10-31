@@ -25,8 +25,8 @@ if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! launchctl print "gui/$(
   exit 1
 fi
 
-mkdir -p "$DATA/bridge"
-chmod 700 "$DATA" "$DATA/bridge"
+mkdir -p "$DATA/bridge" "$DATA/requests"
+chmod 700 "$DATA" "$DATA/bridge" "$DATA/requests"
 
 claude plugin marketplace add "$ROOT"
 claude plugin install agent-office@agent-office --scope user

@@ -27,6 +27,7 @@ RAW_SESSIONS = DATA / "sessions.raw.json"
 PEOPLE = DATA / "people.json"
 NAMES = DATA / "names.json"
 FINISHED = DATA / "finished.json"
+REQUESTS = DATA / "requests"
 WATCH_S = 2
 NAME_POOL = [
     "Greg", "Stephanie", "Maya", "Omar", "Priya", "Leo", "Nina", "Theo", "Ana", "Sam",
@@ -47,6 +48,7 @@ MAX_MESSAGE = 20_000
 BRIDGE_TIMEOUT_S = 30
 SESSION_ID = re.compile(r"^local_[0-9a-f-]{36}$")
 CURSOR = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12)|id_(rsa|ed25519)|credentials(\.json)?)$", re.I)
 
 
@@ -78,6 +80,7 @@ class Office:
         self.finished = set(read_json(FINISHED, []))
         self.was_running = {}
         self.seen_raw = None
+        self.requests = {}
         self.snapshot = {"people": [], "updatedAt": ""}
 
     def assign_names(self, rows):
@@ -97,17 +100,54 @@ class Office:
         rows = self.seen_raw.get("people", [])
         self.assign_names(rows)
         people = [
-            {**row, "name": self.names[row["id"]], "isFinished": row["id"] in self.finished}
+            {
+                **row,
+                "name": self.names[row["id"]],
+                "isFinished": row["id"] in self.finished,
+                "request": self.requests.get(row["id"]),
+            }
             for row in rows
         ]
         self.snapshot = {"updatedAt": self.seen_raw.get("updatedAt", ""), "people": people}
         write_json(PEOPLE, self.snapshot)
 
+    def read_requests(self):
+        """The newest request per session. The plugin writes one file per request."""
+        latest = {}
+        for path in sorted(REQUESTS.glob("*.json")):
+            request = read_json(path, None)
+            if not isinstance(request, dict) or not isinstance(request.get("session"), str):
+                continue
+            show = request.get("show")
+            cleaned = {
+                "id": path.stem,
+                "message": str(request.get("message", ""))[:2000],
+                "show": [str(item) for item in show][:10] if isinstance(show, list) else [],
+                "at": str(request.get("at", "")),
+            }
+            current = latest.get(request["session"])
+            if current is None or cleaned["at"] >= current["at"]:
+                latest[request["session"]] = cleaned
+
+        return latest
+
+    def clear_requests(self, session_id):
+        with self.lock:
+            for path in REQUESTS.glob("*.json"):
+                request = read_json(path, None)
+                if isinstance(request, dict) and request.get("session") == session_id:
+                    path.unlink(missing_ok=True)
+            self.requests = self.read_requests()
+            if self.seen_raw:
+                self.rebuild()
+
     def ingest(self):
         raw = read_json(RAW_SESSIONS, None)
+        requests = self.read_requests()
         with self.lock:
-            if raw is None or raw == self.seen_raw:
+            if raw is None or (raw == self.seen_raw and requests == self.requests):
                 return
+            self.requests = requests
             for row in raw.get("people", []):
                 if self.was_running.get(row["id"]) and not row.get("isRunning"):
                     self.finished.add(row["id"])
@@ -117,6 +157,16 @@ class Office:
             write_json(FINISHED, sorted(self.finished))
             self.seen_raw = raw
             self.rebuild()
+
+    def rename(self, session_id, name):
+        with self.lock:
+            taken = {v.lower() for k, v in self.names.items() if k != session_id}
+            if name.lower() in taken:
+                raise Refused(409, f"{name} is already taken.")
+            self.names[session_id] = name
+            write_json(NAMES, self.names)
+            if self.seen_raw:
+                self.rebuild()
 
     def mark_seen(self, session_id):
         with self.lock:
@@ -361,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/send", "/api/seen"):
+            if route not in ("/api/send", "/api/seen", "/api/rename", "/api/dismiss"):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -369,13 +419,27 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             session_id, message = body.get("id", ""), str(body.get("message", "")).strip()
             known_session(session_id)
+            if route == "/api/rename":
+                name = str(body.get("name", "")).strip()
+                if not AGENT_NAME.match(name):
+                    raise Refused(400, "Use letters, numbers and spaces, up to 24 characters.")
+                OFFICE.rename(session_id, name)
+                self.reply(200, {"status": "ok"})
+                return
+            if route == "/api/dismiss":
+                OFFICE.clear_requests(session_id)
+                self.reply(200, {"status": "ok"})
+                return
             if route == "/api/seen":
                 OFFICE.mark_seen(session_id)
                 self.reply(200, {"status": "ok"})
                 return
             if not message or len(message) > MAX_MESSAGE:
                 raise Refused(400, "Enter a message under 20,000 characters.")
-            self.reply(200, bridge_call({"action": "send", "session": session_id, "message": message}))
+            result = bridge_call({"action": "send", "session": session_id, "message": message})
+            if result.get("status") == "ok":
+                OFFICE.clear_requests(session_id)
+            self.reply(200, result)
         except Refused as refused:
             self.reply(refused.status, {"error": str(refused)})
         except ValueError:
@@ -391,6 +455,7 @@ if __name__ == "__main__":
     os.umask(0o077)
     DATA.mkdir(mode=0o700, exist_ok=True)
     BRIDGE.mkdir(mode=0o700, exist_ok=True)
+    REQUESTS.mkdir(mode=0o700, exist_ok=True)
     for stale in BRIDGE.iterdir():
         if stale.is_dir():
             stale.rmdir()
