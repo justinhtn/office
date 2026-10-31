@@ -5,7 +5,7 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
+  Check, Circle, CircleDot, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -114,11 +114,77 @@ function Stage({ files, caption, onClose }) {
   )
 }
 
+// Runs of steps collapse into one line, so the conversation stays readable.
+function groupActivity(messages) {
+  const grouped = []
+  messages.forEach(message => {
+    const last = grouped[grouped.length - 1]
+    if (message.role === 'activity' && last?.role === 'steps') last.steps.push(message)
+    else if (message.role === 'activity') grouped.push({ role: 'steps', steps: [message] })
+    else grouped.push(message)
+  })
+
+  return grouped
+}
+
+function Steps({ steps }) {
+  const failed = steps.filter(step => step.isError).length
+
+  return (
+    <details className="steps">
+      <summary>
+        {steps.length === 1 ? steps[0].body : `${steps.length} steps · ${steps[steps.length - 1].body}`}
+        {failed > 0 && <span className="failed"> · {failed} failed</span>}
+      </summary>
+      {steps.map((step, index) => (
+        <details key={index} className={`step ${step.isError ? 'failed' : ''}`}>
+          <summary>{step.body}</summary>
+          {step.detail && <pre>{step.detail}</pre>}
+          {step.output && <pre>{step.output}</pre>}
+        </details>
+      ))}
+    </details>
+  )
+}
+
+function Plan({ plan }) {
+  const done = plan.filter(item => item.status === 'completed').length
+
+  return (
+    <details className="plan" open={done < plan.length}>
+      <summary>Tasks · {done} of {plan.length} done</summary>
+      <ul>
+        {plan.map((item, index) => (
+          <li key={index} className={item.status}>
+            {item.status === 'completed' ? <Check size={13} /> : item.status === 'in_progress' ? <CircleDot size={13} /> : <Circle size={13} />}
+            <span>{item.content}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+function WorkingLine({ person, plan, turnStartedAt }) {
+  if (!person.isRunning) return null
+  const current = plan.find(item => item.status === 'in_progress')
+
+  return (
+    <div className="working-line">
+      <span className="dot working" />
+      {person.name} is working{current ? ` on: ${current.content}` : ''}
+      {turnStartedAt && <small> · {age(turnStartedAt)}</small>}
+    </div>
+  )
+}
+
 function Chat({ person, onPick, onExpand }) {
   const [latest, setLatest] = useState(null)
   const [older, setOlder] = useState([])
   const [cursor, setCursor] = useState(null)
   const [total, setTotal] = useState(null)
+  const [plan, setPlan] = useState([])
+  const [turnStartedAt, setTurnStartedAt] = useState('')
   const [isLoadingOlder, setIsLoadingOlder] = useState(false)
   const [error, setError] = useState('')
   const [draft, setDraft] = useState('')
@@ -133,7 +199,7 @@ function Chat({ person, onPick, onExpand }) {
       try {
         const data = await api(withId('/api/messages', person.id, before !== undefined ? { before } : {}))
 
-        return { messages: data.messages, total: data.total, cursor: data.cursor }
+        return { messages: data.messages, total: data.total, cursor: data.cursor, plan: data.plan, turnStartedAt: data.turnStartedAt }
       } catch {
         // The transcript file format is internal, so fall back to the app's own tool.
         useBridge.current = true
@@ -158,6 +224,8 @@ function Chat({ person, onPick, onExpand }) {
       const page = await fetchUntilVisible()
       setLatest(page.messages)
       setTotal(page.total)
+      setPlan(page.plan || [])
+      setTurnStartedAt(page.turnStartedAt || '')
       if (!hasPagedBack.current) setCursor(page.cursor)
       setError('')
     } catch (failure) {
@@ -169,6 +237,8 @@ function Chat({ person, onPick, onExpand }) {
     setOlder([])
     setCursor(null)
     setTotal(null)
+    setPlan([])
+    setTurnStartedAt('')
     hasPagedBack.current = false
     setError('')
     setState('')
@@ -195,7 +265,7 @@ function Chat({ person, onPick, onExpand }) {
       setIsLoadingOlder(false)
     }
   }
-  const messages = latest && [...older, ...latest]
+  const messages = latest && groupActivity([...older, ...latest])
   const newestCount = latest?.length
   useEffect(() => {
     end.current?.scrollIntoView()
@@ -226,6 +296,8 @@ function Chat({ person, onPick, onExpand }) {
 
   return (
     <div className="chat">
+      <WorkingLine person={person} plan={plan} turnStartedAt={turnStartedAt} />
+      {plan.length > 0 && <Plan plan={plan} />}
       <div className="scroll pad messages" ref={scroller}>
         {error && <p className="error">{error}</p>}
         {latest && (cursor != null ? (
@@ -237,7 +309,15 @@ function Chat({ person, onPick, onExpand }) {
         {!error && !messages && <Empty text="Loading conversation…" />}
         {messages?.length === 0 && <Empty text="No messages yet." />}
         {messages?.map((message, index) =>
-          message.role === 'media' ? (
+          message.role === 'steps' ? (
+            <Steps key={index} steps={message.steps} />
+          ) : message.role === 'recap' ? (
+            <aside key={index} className="recap">
+              <b>Where it stands</b>
+              <p>{message.body}</p>
+              {message.ask && <p className="recap-ask">{message.ask}</p>}
+            </aside>
+          ) : message.role === 'media' ? (
             <article key={index} className="bubble assistant media">
               <header>{person.name}</header>
               {message.caption && <p>{message.caption}</p>}

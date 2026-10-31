@@ -44,7 +44,9 @@ MEDIA_TYPES = {
     ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
 }
-PAGE_SIZE = 200
+PAGE_SIZE = 300
+MAX_TOOL_OUTPUT = 6000
+HIDDEN_TOOLS = re.compile(r"^(mcp__ccd_turn__|mcp__ccd_session__mark_chapter|ToolSearch$|mcp__visualize__read_me)")
 ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
     ".svg": "image/svg+xml", ".woff2": "font/woff2",
@@ -360,8 +362,53 @@ class Transcripts:
 
         return {"role": "user", "body": text} if text else None
 
+    @staticmethod
+    def describe_tool(tool, tool_input):
+        """A plain label for a tool call, plus the detail behind it."""
+        path = str(tool_input.get("file_path", ""))
+        name = Path(path).name
+        if tool == "Bash":
+            command = str(tool_input.get("command", ""))
+            return str(tool_input.get("description") or command[:80]), command
+        if tool in ("Read", "Edit", "Write"):
+            verb = {"Read": "Read", "Edit": "Edited", "Write": "Wrote"}[tool]
+            return f"{verb} {name}", path
+        if tool == "Agent":
+            return f"Started a helper: {tool_input.get('description', '')}".strip(), str(tool_input.get("prompt", ""))[:MAX_TOOL_OUTPUT]
+        if tool == "WebSearch":
+            return f"Searched: {tool_input.get('query', '')}", ""
+        if tool == "WebFetch":
+            return f"Read a web page: {tool_input.get('url', '')}", ""
+        if "Claude_Browser" in tool or "claude-in-chrome" in tool:
+            return "Used the browser", json.dumps(tool_input)[:MAX_TOOL_OUTPUT]
+        words = tool.split("__")[-1].replace("_", " ")
+        return words[:1].upper() + words[1:], json.dumps(tool_input)[:MAX_TOOL_OUTPUT]
+
+    @staticmethod
+    def apply_plan(plan, tool_input):
+        items = tool_input.get("items")
+        if isinstance(items, list):
+            return [{"content": str(i.get("content", "")), "status": str(i.get("status", "pending"))} for i in items if isinstance(i, dict)]
+        plan = [dict(item) for item in plan]
+        if tool_input.get("advance"):
+            current = next((i for i in plan if i["status"] == "in_progress"), None)
+            if current:
+                current["status"] = "completed"
+            upcoming = next((i for i in plan if i["status"] == "pending"), None)
+            if upcoming:
+                upcoming["status"] = "in_progress"
+        for number in tool_input.get("done") or []:
+            if isinstance(number, int) and 0 < number <= len(plan):
+                plan[number - 1]["status"] = "completed"
+        start = tool_input.get("start")
+        if isinstance(start, int) and 0 < start <= len(plan):
+            plan[start - 1]["status"] = "in_progress"
+
+        return plan
+
     def parse(self, session_id, path):
-        messages, seen_tools = [], set()
+        messages, seen_tools, activity = [], set(), {}
+        plan, turn_started = [], ""
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if '"type":"user"' not in line and '"type":"assistant"' not in line:
@@ -384,22 +431,41 @@ class Transcripts:
                         cleaned = self.clean_user_text(block.get("text", ""))
                         if cleaned:
                             messages.append(cleaned)
+                            turn_started = record.get("timestamp", turn_started)
                     elif kind == "text" and block.get("text", "").strip():
                         messages.append({"role": "assistant", "body": block["text"].strip()})
+                    elif kind == "tool_result":
+                        item = activity.get(block.get("tool_use_id"))
+                        if item is not None:
+                            result = block.get("content")
+                            if isinstance(result, list):
+                                result = "\n".join(str(r.get("text", "")) for r in result if isinstance(r, dict))
+                            item["output"] = str(result or "")[:MAX_TOOL_OUTPUT]
+                            item["isError"] = bool(block.get("is_error"))
                     elif kind == "tool_use":
                         if block.get("id") in seen_tools:
                             continue
                         seen_tools.add(block.get("id"))
                         tool = block.get("name", "tool")
                         tool_input = block.get("input") or {}
-                        files = [f for f in tool_input.get("files", []) if isinstance(f, str)] if tool == "SendUserFile" else []
-                        shown = [media_item(session_id, f) for f in files if media_kind(f)]
-                        if shown:
-                            messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
-                        elif tool != "SendUserFile":
-                            messages.append({"role": "tool", "body": tool})
+                        if tool == "mcp__ccd_turn__update_plan":
+                            plan = self.apply_plan(plan, tool_input)
+                        elif tool == "mcp__ccd_turn__wrap_up":
+                            plan = [{**item, "status": "completed"} for item in plan]
+                            if tool_input.get("recap"):
+                                messages.append({"role": "recap", "body": str(tool_input["recap"]), "ask": str(tool_input.get("ask") or "")})
+                        elif tool == "SendUserFile":
+                            files = [f for f in tool_input.get("files", []) if isinstance(f, str)]
+                            shown = [media_item(session_id, f) for f in files if media_kind(f)]
+                            if shown:
+                                messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
+                        elif not HIDDEN_TOOLS.match(tool):
+                            label, detail = self.describe_tool(tool, tool_input)
+                            item = {"role": "activity", "body": label, "detail": detail, "output": "", "isError": False}
+                            activity[block.get("id")] = item
+                            messages.append(item)
 
-        return messages
+        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started}
 
     def page(self, session_id, before):
         path = self.path_for(session_id)
@@ -412,11 +478,17 @@ class Transcripts:
             if not cached or cached[0] != stamp:
                 cached = (stamp, self.parse(session_id, path))
                 self.parsed[session_id] = cached
-        messages = cached[1]
+        messages = cached[1]["messages"]
         end = len(messages) if before is None else max(0, min(before, len(messages)))
         start = max(0, end - PAGE_SIZE)
 
-        return {"messages": messages[start:end], "total": len(messages), "cursor": start if start > 0 else None}
+        return {
+            "messages": messages[start:end],
+            "total": len(messages),
+            "cursor": start if start > 0 else None,
+            "plan": cached[1]["plan"],
+            "turnStartedAt": cached[1]["turnStartedAt"],
+        }
 
 
 TRANSCRIPTS = Transcripts()
