@@ -8,6 +8,8 @@ export async function api(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   })
   const data = await response.json().catch(() => ({}))
+  // The token changes when the server restarts, so a page left open has to reload.
+  if (response.status === 403 && data.error === 'Bad token.') window.location.reload()
   if (!response.ok) throw new Error(data.error || 'Request failed')
 
   return data

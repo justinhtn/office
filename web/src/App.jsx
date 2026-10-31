@@ -5,7 +5,7 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  Pencil, Search, SendHorizontal, X,
+  Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -42,7 +42,79 @@ function Empty({ text }) {
 
 const EMPTY_PAGE_RETRIES = 8
 
-function Chat({ person, onPick }) {
+function MediaItem({ file, ...props }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return <div className="media-missing">{file.name} is no longer available.</div>
+
+  return file.kind === 'video'
+    ? <video src={file.url} preload="metadata" playsInline onError={() => setFailed(true)} {...props} />
+    : <img src={file.url} alt={file.name} onError={() => setFailed(true)} />
+}
+
+function formatTime(seconds) {
+  const whole = Math.floor(seconds || 0)
+
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
+}
+
+// Plays every video together from one set of controls, so differences are easy to see.
+function Stage({ files, caption, onClose }) {
+  const box = useRef(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [time, setTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const videos = () => [...box.current.querySelectorAll('video')]
+  const hasVideo = files.some(file => file.kind === 'video')
+  function toggle() {
+    const next = !isPlaying
+    videos().forEach(video => (next ? video.play().catch(() => {}) : video.pause()))
+    setIsPlaying(next)
+  }
+  function seek(value) {
+    videos().forEach(video => { video.currentTime = value })
+    setTime(value)
+  }
+  function onTick(event) {
+    const [lead, ...rest] = videos()
+    if (event.target !== lead) return
+    setTime(lead.currentTime)
+    rest.forEach(video => {
+      if (Math.abs(video.currentTime - lead.currentTime) > 0.12) video.currentTime = lead.currentTime
+    })
+  }
+  useEffect(() => {
+    const onKey = event => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <section className="stage" aria-label="Media viewer">
+      <div className={`stage-grid count-${Math.min(files.length, 4)}`} ref={box}>
+        {files.map(file => (
+          <figure key={file.url}>
+            <MediaItem file={file} loop muted onTimeUpdate={onTick} onLoadedMetadata={event => setDuration(current => Math.max(current, event.target.duration || 0))} />
+            <figcaption>{file.name}</figcaption>
+          </figure>
+        ))}
+      </div>
+      <div className="stage-controls">
+        {hasVideo && <>
+          <button className="icon" aria-label={isPlaying ? 'Pause all' : 'Play all'} onClick={toggle}>{isPlaying ? <Pause size={16} /> : <Play size={16} />}</button>
+          <input type="range" min="0" max={duration || 0} step="0.01" value={Math.min(time, duration || 0)} aria-label="Position in the videos" onChange={event => seek(Number(event.target.value))} />
+          <small>{formatTime(time)} / {formatTime(duration)}</small>
+        </>}
+        <small className="stage-caption">{caption}</small>
+        <button className="icon" aria-label="Close viewer" onClick={onClose}><X size={16} /></button>
+      </div>
+    </section>
+  )
+}
+
+function Chat({ person, onPick, onExpand }) {
   const [latest, setLatest] = useState(null)
   const [older, setOlder] = useState([])
   const [cursor, setCursor] = useState(null)
@@ -55,7 +127,18 @@ function Chat({ person, onPick }) {
   const end = useRef(null)
   const scroller = useRef(null)
   const hasPagedBack = useRef(false)
+  const useBridge = useRef(false)
   const fetchPage = useCallback(async before => {
+    if (!useBridge.current) {
+      try {
+        const data = await api(withId('/api/messages', person.id, before !== undefined ? { before } : {}))
+
+        return { messages: data.messages, total: data.total, cursor: data.cursor }
+      } catch {
+        // The transcript file format is internal, so fall back to the app's own tool.
+        useBridge.current = true
+      }
+    }
     const data = await api(withId('/api/transcript', person.id, before ? { before } : {}))
     if (data.status !== 'ok') throw new Error(data.error || "Couldn't read this session.")
 
@@ -64,7 +147,7 @@ function Chat({ person, onPick }) {
   // Long tool runs can fill a whole page with nothing to show, so keep going back.
   const fetchUntilVisible = useCallback(async before => {
     let page = await fetchPage(before)
-    for (let tries = 0; page.messages.length === 0 && page.cursor && tries < EMPTY_PAGE_RETRIES; tries++) {
+    for (let tries = 0; page.messages.length === 0 && page.cursor != null && tries < EMPTY_PAGE_RETRIES; tries++) {
       page = await fetchPage(page.cursor)
     }
 
@@ -145,16 +228,27 @@ function Chat({ person, onPick }) {
     <div className="chat">
       <div className="scroll pad messages" ref={scroller}>
         {error && <p className="error">{error}</p>}
-        {latest && (cursor ? (
+        {latest && (cursor != null ? (
           <button className="load-older" disabled={isLoadingOlder} onClick={loadOlder}>
             {isLoadingOlder ? 'Loading…' : 'Load earlier messages'}
           </button>
         ) : <div className="tool">Start of available history</div>)}
-        {total !== null && cursor && <div className="tool">{total} transcript entries in this session</div>}
+        {total !== null && cursor != null && <div className="tool">{total} items in this conversation</div>}
         {!error && !messages && <Empty text="Loading conversation…" />}
         {messages?.length === 0 && <Empty text="No messages yet." />}
         {messages?.map((message, index) =>
-          message.role === 'tool' ? (
+          message.role === 'media' ? (
+            <article key={index} className="bubble assistant media">
+              <header>{person.name}</header>
+              {message.caption && <p>{message.caption}</p>}
+              <div className="media-row">
+                {message.files.map(file => <div key={file.url} className="media-item"><MediaItem file={file} controls /></div>)}
+              </div>
+              <button className="expand" onClick={() => onExpand(message.files, message.caption)}>
+                <Maximize2 size={12} /> {message.files.filter(file => file.kind === 'video').length > 1 ? 'Compare side by side' : 'Open large'}
+              </button>
+            </article>
+          ) : message.role === 'tool' ? (
             <div key={index} className="tool">{message.isNote ? message.body : `Used ${message.body}`}</div>
           ) : message.role === 'result' ? (
             <div key={index} className="tool">{message.body}</div>
@@ -277,7 +371,7 @@ function useSize() {
   return [ref, size]
 }
 
-function Files({ person, initialPath }) {
+function Files({ person, initialPath, onMedia }) {
   const [paths, setPaths] = useState(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(null)
@@ -291,6 +385,11 @@ function Files({ person, initialPath }) {
     if (initialPath) view(initialPath)
   }, [initialPath, person.id])
   async function view(path) {
+    if (/\.(mp4|m4v|mov|webm|png|jpe?g|gif|webp)$/i.test(path) && path !== initialPath) {
+      onMedia(path)
+
+      return
+    }
     setOpen({ path, text: null })
     try {
       const data = await api(withId('/api/file', person.id, { path }))
@@ -415,6 +514,22 @@ function RequestBanner({ person, onShow }) {
 
 function Session({ person, everyone, tab, onTab, onClose, onPick }) {
   const [showPath, setShowPath] = useState(null)
+  const [stage, setStage] = useState(null)
+  useEffect(() => setStage(null), [person.id])
+  async function show(path) {
+    if (/\.(mp4|m4v|mov|webm|png|jpe?g|gif|webp)$/i.test(path)) {
+      try {
+        const file = await api(withId('/api/media-link', person.id, { path }))
+        setStage({ files: [file], caption: path })
+
+        return
+      } catch {
+        // Falls through to the file viewer, which explains what's wrong.
+      }
+    }
+    setShowPath(path)
+    onTab('files')
+  }
   const boss = everyone.find(other => other.id === person.startedBy)
 
   return (
@@ -434,10 +549,11 @@ function Session({ person, everyone, tab, onTab, onClose, onPick }) {
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
         ))}
       </nav>
-      {person.request && <RequestBanner person={person} onShow={path => { setShowPath(path); onTab('files') }} />}
-      {tab === 'chat' && <Chat key={person.id} person={person} onPick={onPick} />}
+      {person.request && <RequestBanner person={person} onShow={show} />}
+      {stage && <Stage files={stage.files} caption={stage.caption} onClose={() => setStage(null)} />}
+      {tab === 'chat' && <Chat key={person.id} person={person} onPick={onPick} onExpand={(files, caption) => setStage({ files, caption })} />}
       {tab === 'changes' && <Changes person={person} />}
-      {tab === 'files' && <Files person={person} initialPath={showPath} />}
+      {tab === 'files' && <Files person={person} initialPath={showPath} onMedia={show} />}
     </section>
   )
 }

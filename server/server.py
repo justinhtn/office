@@ -5,6 +5,9 @@ Files, git, names and status are answered here. Transcripts and messages go thro
 a folder of request files that the agent-office plugin answers from any running
 Claude Code session.
 """
+import glob
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -17,7 +20,7 @@ import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
@@ -35,6 +38,13 @@ NAME_POOL = [
     "Clara", "Ravi", "Zoe", "Noah", "Elsa", "Kofi", "Mina", "Owen", "Sofia", "Jonah",
     "Asha", "Paul", "Vera", "Ivan", "Dana", "Eli", "Nora", "Tomas", "June", "Amir",
 ]
+CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+APP_SESSIONS = Path.home() / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+MEDIA_TYPES = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+}
+PAGE_SIZE = 200
 ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
     ".svg": "image/svg+xml", ".woff2": "font/woff2",
@@ -293,6 +303,134 @@ def asset(relative):
     return target.read_bytes(), kind
 
 
+def media_kind(path):
+    kind = MEDIA_TYPES.get(Path(path).suffix.lower(), "")
+
+    return kind.split("/")[0] or None
+
+
+def media_signature(session_id, path):
+    return hmac.new(TOKEN.encode(), f"{session_id}\0{path}".encode(), hashlib.sha256).hexdigest()
+
+
+def media_item(session_id, path):
+    """A player can't send the token header, so each file gets its own signed link."""
+    query = urlencode({"id": session_id, "path": path, "sig": media_signature(session_id, path)})
+
+    return {"name": Path(path).name, "kind": media_kind(path), "url": f"/media?{query}"}
+
+
+class Transcripts:
+    """Reads Claude Code's transcript files. The format is internal, so callers fall back."""
+
+    SYSTEM = {
+        "side-sessions-event": "Side sessions reported back",
+        "task-notification": "Background task update",
+        "ci-monitor-event": "CI update",
+    }
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.paths = {}
+        self.parsed = {}
+
+    def path_for(self, session_id):
+        if session_id in self.paths:
+            return self.paths[session_id]
+        pattern = str(APP_SESSIONS / "*" / "*" / f"{glob.escape(session_id)}.json")
+        for match in glob.glob(pattern):
+            cli_id = read_json(Path(match), {}).get("cliSessionId")
+            if cli_id and re.match(r"^[0-9a-f-]{36}$", cli_id):
+                found = glob.glob(str(CLAUDE_PROJECTS / "*" / f"{cli_id}.jsonl"))
+                if found:
+                    self.paths[session_id] = Path(found[0])
+                    return self.paths[session_id]
+
+        return None
+
+    def clean_user_text(self, text):
+        text = re.sub(r"<system-reminder>.*?</system-reminder>", "", text, flags=re.S)
+        text = re.sub(r"^\[Image: [^\]]*\]\s*", "", text, flags=re.M).strip()
+        peer = re.search(r'<cross-session-message[^>]*from-name="([^"]*)"[^>]*>(.*?)</cross-session-message>', text, re.S)
+        if peer:
+            return {"role": "peer", "from": peer.group(1), "body": peer.group(2).strip()}
+        system = re.match(r"<([a-z-]+)\b", text)
+        if system and system.group(1) in self.SYSTEM:
+            return {"role": "tool", "isNote": True, "body": self.SYSTEM[system.group(1)]}
+
+        return {"role": "user", "body": text} if text else None
+
+    def parse(self, session_id, path):
+        messages, seen_tools = [], set()
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if '"type":"user"' not in line and '"type":"assistant"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("type") not in ("user", "assistant") or record.get("isSidechain"):
+                    continue
+                if record.get("isMeta") or record.get("isCompactSummary"):
+                    continue
+                content = (record.get("message") or {}).get("content")
+                blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
+                for block in blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    kind = block.get("type")
+                    if kind == "text" and record["type"] == "user":
+                        cleaned = self.clean_user_text(block.get("text", ""))
+                        if cleaned:
+                            messages.append(cleaned)
+                    elif kind == "text" and block.get("text", "").strip():
+                        messages.append({"role": "assistant", "body": block["text"].strip()})
+                    elif kind == "tool_use":
+                        if block.get("id") in seen_tools:
+                            continue
+                        seen_tools.add(block.get("id"))
+                        tool = block.get("name", "tool")
+                        tool_input = block.get("input") or {}
+                        files = [f for f in tool_input.get("files", []) if isinstance(f, str)] if tool == "SendUserFile" else []
+                        shown = [media_item(session_id, f) for f in files if media_kind(f)]
+                        if shown:
+                            messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
+                        elif tool != "SendUserFile":
+                            messages.append({"role": "tool", "body": tool})
+
+        return messages
+
+    def page(self, session_id, before):
+        path = self.path_for(session_id)
+        if path is None:
+            raise Refused(404, "No transcript file for this session.")
+        stat = path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        with self.lock:
+            cached = self.parsed.get(session_id)
+            if not cached or cached[0] != stamp:
+                cached = (stamp, self.parse(session_id, path))
+                self.parsed[session_id] = cached
+        messages = cached[1]
+        end = len(messages) if before is None else max(0, min(before, len(messages)))
+        start = max(0, end - PAGE_SIZE)
+
+        return {"messages": messages[start:end], "total": len(messages), "cursor": start if start > 0 else None}
+
+
+TRANSCRIPTS = Transcripts()
+
+
+def media_link(session_id, relative):
+    cwd = session_cwd(session_id).resolve()
+    target = (cwd / relative).resolve()
+    if not target.is_relative_to(cwd) or not media_kind(target) or not target.is_file():
+        raise Refused(404, "Media file not found in this session's folder.")
+
+    return media_item(session_id, str(target))
+
+
 def known_session(session_id):
     if not SESSION_ID.match(session_id or ""):
         raise Refused(400, "Bad session id.")
@@ -345,6 +483,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_media(self, query):
+        session_id, path = query.get("id", ""), query.get("path", "")
+        if not hmac.compare_digest(query.get("sig", ""), media_signature(session_id, path)):
+            raise Refused(403, "Bad link.")
+        target = Path(path)
+        kind = MEDIA_TYPES.get(target.suffix.lower())
+        if not kind or not target.is_file():
+            raise Refused(404, "This file no longer exists.")
+        size = target.stat().st_size
+        start, end, status = 0, size - 1, 200
+        match = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range", ""))
+        if match and (match.group(1) or match.group(2)):
+            if match.group(1):
+                start = int(match.group(1))
+                end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
+            else:
+                start = max(0, size - int(match.group(2)))
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with target.open("rb") as handle:
+            handle.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = handle.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
     def guarded(self):
         # The host check stops DNS rebinding; the origin and token checks stop other sites.
         if self.headers.get("Host") not in ALLOWED_HOSTS:
@@ -370,6 +550,9 @@ class Handler(BaseHTTPRequestHandler):
                 data, kind = asset(url.path.lstrip("/"))
                 self.reply(200, data, kind)
                 return
+            if url.path == "/media":
+                self.send_media({key: values[0] for key, values in parse_qs(url.query).items()})
+                return
             self.authorized()
             query = {key: values[0] for key, values in parse_qs(url.query).items()}
             session_id = query.get("id", "")
@@ -384,6 +567,13 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/changes":
                 known_session(session_id)
                 self.reply(200, changes(session_id))
+            elif url.path == "/api/messages":
+                known_session(session_id)
+                before = query.get("before")
+                self.reply(200, TRANSCRIPTS.page(session_id, int(before) if before else None))
+            elif url.path == "/api/media-link":
+                known_session(session_id)
+                self.reply(200, media_link(session_id, query.get("path", "")))
             elif url.path == "/api/changed":
                 known_session(session_id)
                 self.reply(200, changed_files(session_id))
@@ -400,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise Refused(404, "Not found.")
         except Refused as refused:
             self.reply(refused.status, {"error": str(refused)})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         except PermissionError:
             self.reply(403, {"error": "macOS is blocking the office server from this folder. Grant access in System Settings > Privacy & Security > Files and Folders, or move the project out of Documents."})
         except Exception:
@@ -444,6 +636,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(refused.status, {"error": str(refused)})
         except ValueError:
             self.reply(400, {"error": "Bad request."})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         except PermissionError:
             self.reply(403, {"error": "macOS is blocking the office server from this folder. Grant access in System Settings > Privacy & Security > Files and Folders, or move the project out of Documents."})
         except Exception:

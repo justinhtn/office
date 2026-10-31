@@ -34,6 +34,7 @@ Session data needs at least one Claude Code session open. Without one, the offic
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.
 - Session titles, folders and names are stored in `~/.agent-office`.
 - Secret-looking files such as `.env` aren't shown.
+- The server reads Claude Code's transcript files in `~/.claude/projects`, and the app's session records to find them. Videos and images an agent shared are streamed through private signed links.
 - The plugin adds a short list of session names to each session's system prompt, so you can refer to agents by name. This uses a small number of extra tokens per request.
 - The page loads its fonts from Google Fonts. Everything else is local.
 
