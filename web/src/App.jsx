@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { createScene, sceneApi } from './scene.js'
+import { CAST, createScene, portrait } from './scene.js'
 import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -36,13 +36,39 @@ function Room({ people, selected, onPick }) {
   )
 }
 
-function Avatar({ person, everyone, size = 24 }) {
-  const isLead = everyone?.some(other => other.startedBy === person.id)
-  const url = sceneApi.portrait?.({ ...person, isLead })
+function Avatar({ person, size = 24 }) {
+  const [url, setUrl] = useState(null)
+  useEffect(() => {
+    let isCurrent = true
+    portrait(person).then(made => { if (isCurrent) setUrl(made) }, () => {})
+
+    return () => { isCurrent = false }
+  }, [person.cast, person.look, person.project])
 
   return url
     ? <img className="avatar" src={url} alt="" width={size} height={size} />
     : <span className="avatar blank" style={{ width: size, height: size }}>{person.name[0]}</span>
+}
+
+// Active agents never share a face. Away agents can, since they aren't on the floor together.
+function withCast(everyone, isActive) {
+  const taken = new Set()
+  const placed = new Map()
+  const free = look => {
+    for (let step = 0; step < CAST.length; step++) {
+      const index = (look + step) % CAST.length
+      if (!taken.has(index)) return index
+    }
+
+    return look % CAST.length
+  }
+  ;[...everyone].filter(isActive).sort((a, b) => a.look - b.look).forEach(person => {
+    const index = free(person.look || 0)
+    taken.add(index)
+    placed.set(person.id, index)
+  })
+
+  return everyone.map(person => ({ ...person, cast: placed.get(person.id) ?? (person.look || 0) % CAST.length }))
 }
 
 function Empty({ text }) {
@@ -711,11 +737,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const active = useMemo(() => everyone.filter(isActive), [everyone])
-  const away = useMemo(() => everyone.filter(person => !isActive(person)), [everyone])
+  const cast = useMemo(() => withCast(everyone, isActive), [everyone])
+  const active = useMemo(() => cast.filter(isActive), [cast])
+  const away = useMemo(() => cast.filter(person => !isActive(person)), [cast])
   const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)]
   const working = active.filter(person => person.isRunning)
-  const person = everyone.find(other => other.id === selected)
+  const person = cast.find(other => other.id === selected)
 
   function pick(id) {
     const target = everyone.find(other => other.id === id)
@@ -758,7 +785,7 @@ export default function App() {
           <>
             <PanelResizeHandle className="handle" />
             <Panel id="session" order={2} minSize={35} defaultSize={66}>
-              <Session person={person} everyone={everyone} tab={tab} onTab={setTab} onPick={pick} onClose={() => setSelected(null)} />
+              <Session person={person} everyone={cast} tab={tab} onTab={setTab} onPick={pick} onClose={() => setSelected(null)} />
             </Panel>
           </>
         )}
@@ -772,7 +799,7 @@ export default function App() {
       {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
       {isPaletteOpen && (
         <Palette
-          everyone={everyone}
+          everyone={cast}
           rooms={[...new Set(everyone.map(other => other.project))]}
           onClose={() => setIsPaletteOpen(false)}
           onRoom={() => { setSelected(null); setIsPaletteOpen(false) }}

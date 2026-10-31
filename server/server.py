@@ -52,6 +52,7 @@ HIDDEN_TOOLS = re.compile(r"^(mcp__ccd_turn__|mcp__ccd_session__mark_chapter|Too
 ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
     ".svg": "image/svg+xml", ".woff2": "font/woff2",
+    ".fbx": "application/octet-stream", ".jpg": "image/jpeg", ".png": "image/png", ".md": "text/plain",
 }
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8794
 TOKEN = secrets.token_urlsafe(32)

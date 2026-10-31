@@ -55,3 +55,5 @@ Add `--purge` to also delete `~/.agent-office`.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+The people and animations in `web/public/assets/avatars` are from [Microsoft Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox), also MIT, with textures resized. Its license is in that folder.
