@@ -285,3 +285,4 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .usage-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 3px 0; text-align: left; }
 .usage-row b { font-weight: 500; }
 .usage-row small { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.assistant-setup { align-self: flex-start; }

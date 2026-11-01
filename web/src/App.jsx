@@ -8,7 +8,7 @@ import {
   Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Search, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, createScene, helperCast, portrait } from './scene.js'
-import { age, api, speak, teamsOf, withId } from './api.js'
+import { age, announce, api, speak, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
@@ -113,9 +113,14 @@ const VOICE_SETTING = 'office-voices'
 const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
 const USAGE_CHECK_MS = 15000
+const PRESENCE_CHECK_MS = 5000
+const DESK_QUIET_MS = 180000
+const DESK_CHECK_MS = 30000
+const ANNOUNCED_SETTING = 'office-announced'
+const ANNOUNCED_KEPT = 200
 
 // One voice at a time: agents you have open, and anyone asking for you. The rest stay quiet.
-function useVoices(everyone, listening) {
+function useVoices(everyone, listening, isAway) {
   const [isOn, setIsOn] = useState(() => {
     try { return localStorage.getItem(VOICE_SETTING) === 'on' } catch { return false }
   })
@@ -126,13 +131,20 @@ function useVoices(everyone, listening) {
   const [problem, setProblem] = useState('')
   const heard = useRef(new Map())
   const heardLines = useRef(new Map())
+  // Remembered across reloads, so nobody is announced twice.
+  const announced = useRef((() => {
+    try { return new Set(JSON.parse(localStorage.getItem(ANNOUNCED_SETTING) || '[]')) } catch { return new Set() }
+  })())
+  const lastAnnouncement = useRef(0)
+  const wasAway = useRef(false)
+  const checkDesk = useRef(() => {})
   const spokenLines = useRef(new Map())
   const queue = useRef([])
   const player = useRef(null)
   const next = useRef(() => {})
   next.current = async () => {
     if (player.current || !queue.current.length) return
-    const { id, kind } = queue.current.shift()
+    const { id, kind, ids, isWelcome } = queue.current.shift()
     const audio = player.current = new Audio()
     const finish = () => {
       if (audio.src) URL.revokeObjectURL(audio.src)
@@ -145,12 +157,17 @@ function useVoices(everyone, listening) {
     audio.onerror = finish
     setSpeaker(id)
     try {
-      audio.src = await speak(id, kind)
+      audio.src = ids ? await announce(ids, isWelcome) : await speak(id, kind)
       if (player.current !== audio) return
       await audio.play()
       setProblem('')
     } catch (failure) {
-      setProblem(failure.message)
+      // Browsers block sound until a window is clicked, so the Mac plays it instead.
+      if (failure.name === 'NotAllowedError') {
+        await (ids ? announce(ids, isWelcome, true) : speak(id, kind, true)).catch(() => {})
+      } else {
+        setProblem(failure.message)
+      }
       finish()
     }
   }
@@ -161,19 +178,40 @@ function useVoices(everyone, listening) {
       const wasLine = heardLines.current.get(person.id)
       heardLines.current.set(person.id, person.lineKey)
       if (isOn && speaksWhileWorking && isListening && person.isActing && wasLine !== undefined && wasLine !== person.lineKey) {
-        queue.current = [...queue.current.filter(item => item.id !== person.id || item.kind !== 'line'), { id: person.id, kind: 'line' }]
+        queue.current = [...queue.current.filter(item => item.ids || item.id !== person.id || item.kind !== 'line'), { id: person.id, kind: 'line' }]
         spokenLines.current.set(person.id, person.lineKey)
       }
       const wasHeard = heard.current.get(person.id)
       if (person.isActing && !person.request) continue
       heard.current.set(person.id, person.wordsKey)
       const isNew = wasHeard !== undefined && wasHeard !== person.wordsKey
-      if (!isOn || !isNew || !(isListening || person.request)) continue
+      if (!isOn || !isNew || !isListening) continue
       if (person.wordsAreLine && spokenLines.current.get(person.id) === person.lineKey) continue
-      queue.current = [...queue.current.filter(item => item.id !== person.id), { id: person.id, kind: 'words' }]
+      queue.current = [...queue.current.filter(item => item.ids || item.id !== person.id), { id: person.id, kind: 'words' }]
     }
+    checkDesk.current()
     next.current()
-  }, [everyone, listening.join(), isOn, speaksWhileWorking])
+  }, [everyone, listening.join(), isOn, speaksWhileWorking, isAway])
+  // Requests and finished work are announced once by the front desk, and held while you're away.
+  checkDesk.current = () => {
+    const wanting = everyone.filter(person => (person.request || person.isFinished) && !person.isAssistant && !listening.includes(person.id))
+    const keyOf = person => (person.request ? `${person.id}:${person.request.id}` : `${person.id}:${person.wordsKey}`)
+    const isBack = wasAway.current && !isAway
+    wasAway.current = isAway
+    const waiting = wanting.filter(person => !announced.current.has(keyOf(person)))
+    if (!isOn || isAway || !waiting.length) return
+    if (!isBack && Date.now() - lastAnnouncement.current < DESK_QUIET_MS) return
+    waiting.forEach(person => announced.current.add(keyOf(person)))
+    try { localStorage.setItem(ANNOUNCED_SETTING, JSON.stringify([...announced.current].slice(-ANNOUNCED_KEPT))) } catch {}
+    lastAnnouncement.current = Date.now()
+    queue.current.push({ id: everyone.find(person => person.isAssistant)?.id ?? null, ids: waiting.map(person => person.id), isWelcome: isBack })
+    next.current()
+  }
+  useEffect(() => {
+    const timer = setInterval(() => checkDesk.current(), DESK_CHECK_MS)
+
+    return () => clearInterval(timer)
+  }, [])
   function toggle() {
     const on = !isOn
     setIsOn(on)
@@ -187,7 +225,7 @@ function useVoices(everyone, listening) {
   }
   function hear(id) {
     if (!id) return
-    queue.current = [{ id, kind: 'words' }, ...queue.current.filter(item => item.id !== id)]
+    queue.current = [{ id, kind: 'words' }, ...queue.current.filter(item => item.ids || item.id !== id)]
     next.current()
   }
   function toggleWhileWorking() {
@@ -229,6 +267,9 @@ function Usage({ usage, people, onPick, onClose }) {
         <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="scroll pad usage-list">
+        {!people.some(person => person.isAssistant) && (
+          <button className="primary assistant-setup" onClick={() => api('/api/assistant', {}).catch(() => {})}>Set up your assistant</button>
+        )}
         <h3>Claude Code{claude?.plan ? ` · ${claude.plan}` : ''}</h3>
         {claude?.windows?.map(window => <Meter key={window.label} label={window.label} percent={window.percentUsed} detail={`${window.percentUsed}% · resets in ${window.resetsIn}`} />)}
         {claude?.extraUsage?.enabled && <Meter label="Extra usage" percent={100 * Number(claude.extraUsage.spent) / Number(claude.extraUsage.monthlyLimit || 1)} detail={`$${claude.extraUsage.spent} of $${claude.extraUsage.monthlyLimit}`} />}
@@ -599,7 +640,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
+  person.isAssistant || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },
@@ -769,7 +810,21 @@ export default function App() {
 
     return () => clearInterval(timer)
   }, [])
-  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean))
+  const [isAway, setIsAway] = useState(false)
+  // Step away and the view settles on your desk, where anyone who needs you waits.
+  useEffect(() => {
+    const poll = () => api('/api/presence').then(data => setIsAway(Boolean(data.isAway)), () => {})
+    poll()
+    const timer = setInterval(poll, PRESENCE_CHECK_MS)
+
+    return () => clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    if (!isAway) return
+    setSelected(null)
+    setPlace('office')
+  }, [isAway])
+  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway)
   // A window left open picks up new builds by itself.
   useEffect(() => {
     const own = document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src')
@@ -810,10 +865,11 @@ export default function App() {
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
 
-  const teams = useMemo(() => officeTeams(active), [active])
-  const loungers = active.filter(other => !teams.some(team => team.members.some(member => member.id === other.id)))
+  const floor = useMemo(() => active.filter(other => !other.isAssistant), [active])
+  const teams = useMemo(() => officeTeams(floor), [floor])
+  const loungers = floor.filter(other => !teams.some(team => team.members.some(member => member.id === other.id)))
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
-  const focus = place || (person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
+  const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
   function goToPlace(key) {
     setSelected(null)

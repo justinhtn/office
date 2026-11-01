@@ -55,3 +55,7 @@ else
   echo "Plugin installed. Start the server with: python3 \"$ROOT/server/server.py\" $PORT"
 fi
 echo "Open a new Claude Code session so it starts feeding the office."
+
+# Her session starts once you confirm the folder and press Enter in the app.
+LINK="$(python3 -c 'import os,urllib.parse as u;print("claude://code/new?"+u.urlencode({"folder":os.path.expanduser("~/.agent-office/front-desk"),"q":"Say hello in one short sentence and tell me who you are."}))')"
+open "$LINK" 2>/dev/null || echo "To add your assistant, click Your office in Agent Office."

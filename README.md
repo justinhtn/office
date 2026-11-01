@@ -29,6 +29,12 @@ Then open a new Claude Code session in the desktop app, and go to <http://localh
 
 Session data needs at least one Claude Code session open. Without one, the office still opens but shows the last known state.
 
+## Your assistant
+
+Installing opens one more session in the Claude app, in `~/.agent-office/front-desk`. Confirm it, and she sits at the front desk in your office. Ask her who needs what. If you skip it, click **Your office** to set her up later.
+
+She has a read-only tool list, so she can read what sessions are doing but can't edit files, run commands or message agents. The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
+
 ## Privacy and security
 
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.

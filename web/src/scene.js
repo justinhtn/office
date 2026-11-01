@@ -14,6 +14,7 @@ const MODEL_SCALE = .0122
 const JAW_OPEN = .22
 const SPEAKER_ANGLES = [.7, -.7, .35, -.35, 1.05, -1.05, 0]
 const SPEAKER_DISTANCE = 4.6
+const MIA_DESK_TURN = 1.2
 const AWAY_DISTANCE = 6.5
 const SPEAKER_HEIGHT = 1.35
 const SPEAKER_RISE = .1
@@ -362,6 +363,36 @@ async function setPose(a,pose){
   if(a.action&&a.action!==next)a.action.crossFadeTo(next,.25,false)
   a.action=next
 }
+function officeRug(parent,x,z){
+  const rug=(w,d,c,y)=>{const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);parent.add(m)}
+  rug(5,4.2,0x2f3a52,.03);rug(4.7,3.9,0xb9a98d,.034);rug(4.5,3.7,0x46587a,.038)
+}
+function credenza(parent,x,z){
+  box(parent,2.4,.08,.48,0x8a5a33,x,.86,z)
+  box(parent,2.3,.6,.42,0x6d4527,x,.52,z)
+  ;[-.77,0,.77].forEach(dx=>{box(parent,.72,.52,.012,0x7d5230,x+dx,.52,z+.215);box(parent,.14,.02,.02,SILVER,x+dx,.6,z+.23)})
+  ;[-1,1].forEach(side=>box(parent,.06,.22,.34,CHARCOAL,x+side*1.08,.11,z))
+  deskPlant(parent,x-.8,z);book(parent,x+.6,.92,z,.34,.26,.05,0x31506f,.15);book(parent,x+.62,.97,z,.3,.24,.04,0xc2563f,-.1)
+}
+function bookcase(parent,x,z){
+  const WIDE=1.8,TALL=2.05,colors=[0xc2563f,0x31506f,0xe0b04c,0x3f7f6b,0x6b4f8a,0xe8e4da,0x2b2f38]
+  box(parent,.34,TALL,.05,0x5a3a22,x,TALL/2,z-WIDE/2);box(parent,.34,TALL,.05,0x5a3a22,x,TALL/2,z+WIDE/2);box(parent,.03,TALL,WIDE,0x4a2f1b,x-.16,TALL/2,z)
+  for(let shelf=0;shelf<5;shelf++){
+    const y=.06+shelf*.49;box(parent,.34,.04,WIDE,0x6d4527,x,y,z)
+    if(shelf===4)continue
+    let at=z-WIDE/2+.08,n=shelf*7+3
+    while(at<z+WIDE/2-.16){n=(n*31+11)%97;const thick=.05+(n%4)*.018;if(n%9){const high=.27+(n%5)*.028;box(parent,.22,high,thick,colors[n%colors.length],x,y+.02+high/2,at+thick/2)}at+=thick+.006}
+  }
+}
+function floorLamp(parent,x,z){
+  box(parent,.34,.03,.34,CHARCOAL,x,.02,z);box(parent,.03,1.72,.03,CHARCOAL,x,.88,z)
+  const shade=new THREE.Mesh(new THREE.CylinderGeometry(.17,.27,.34,18,1,true),new THREE.MeshBasicMaterial({color:0xfff0cf,side:THREE.DoubleSide}));shade.position.set(x,1.82,z);parent.add(shade)
+}
+function wallArt(parent,x,z){
+  box(parent,1.5,1.02,.04,0x22252b,x,1.7,z)
+  const art=paintTex(384,256,(g,w,h)=>{const sky=g.createLinearGradient(0,0,0,h);sky.addColorStop(0,'#f2c58a');sky.addColorStop(.6,'#e0805f');sky.addColorStop(1,'#3a4a68');g.fillStyle=sky;g.fillRect(0,0,w,h);g.fillStyle='#fbe6b8';g.beginPath();g.arc(w*.68,h*.42,30,0,7);g.fill();g.fillStyle='#2f3d58';g.beginPath();g.moveTo(0,h);g.lineTo(0,h*.62);g.lineTo(w*.3,h*.4);g.lineTo(w*.55,h*.66);g.lineTo(w*.8,h*.5);g.lineTo(w,h*.68);g.lineTo(w,h);g.fill()})
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(1.38,.9),new THREE.MeshBasicMaterial({map:art}));panel.position.set(x,1.7,z+.024);parent.add(panel)
+}
 function plant(parent,x,z,size=1){
   const pot=new THREE.Mesh(new THREE.CylinderGeometry(.42*size,.32*size,.8*size,12),mat(WHITE));pot.position.set(x,.4*size,z);pot.castShadow=true;parent.add(pot)
   for(let i=0;i<9;i++){const a=i*2.4,r=i===0?0:.34*size,l=new THREE.Mesh(new THREE.IcosahedronGeometry((.44-.012*i)*size,0),mat(i%3?LEAF:0x3fa867));l.scale.set(1,1.25,.8);l.position.set(x+Math.cos(a)*r,(1.05+i*.16)*size,z+Math.sin(a)*r);l.rotation.y=a;l.castShadow=true;parent.add(l)}
@@ -467,7 +498,7 @@ function couch(parent,x,z,w){
 }
 let people=[], selected=null, actors=[], tags=[], view={az:.72,el:.38,dist:30,zoom:0,center:new THREE.Vector3()}
 function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&byId[l.startedBy]&&!seen.has(l.startedBy)){seen.add(l.startedBy);l=byId[l.startedBy]}return l}
-function teamsIn(list){const byId=Object.fromEntries(people.map(p=>[p.id,p]));const m=new Map();list.forEach(p=>{const l=leadOf(p,byId);if(!m.has(l.id))m.set(l.id,{lead:l,members:[]});m.get(l.id).members.push(p)});return [...m.values()].map(t=>({...t,members:[t.lead,...t.members.filter(x=>x.id!==t.lead.id)]})).sort((a,b)=>(b.lead.lastActivityAt||'').localeCompare(a.lead.lastActivityAt||''))}
+function teamsIn(list){const byId=Object.fromEntries(people.map(p=>[p.id,p]));const m=new Map();list.filter(p=>!p.isAssistant).forEach(p=>{const l=leadOf(p,byId);if(!m.has(l.id))m.set(l.id,{lead:l,members:[]});m.get(l.id).members.push(p)});return [...m.values()].map(t=>({...t,members:[t.lead,...t.members.filter(x=>x.id!==t.lead.id)]})).sort((a,b)=>(b.lead.lastActivityAt||'').localeCompare(a.lead.lastActivityAt||''))}
 const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
 const WALL_HEIGHT=10
 const AISLE_GAP=3.2
@@ -562,7 +593,7 @@ function walk(a,dt){
   }
   a.g.rotation.y=Math.atan2(gap.x,gap.z);a.g.position.add(gap.setLength(step))
 }
-const wantsToWalk=p=>Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)||Boolean(p.isOnBreak)
+const wantsToWalk=p=>Boolean(p.request&&!p.isOnScreen)||Boolean(p.meetingWith&&p.meetingWith.length)||Boolean(p.isOnBreak)
 function seat(p,x,z,rotation,front,pose,y=0){
   const a=character(p);a.pose=pose;a.front=front;a.g.position.set(x,y,z);a.g.rotation.y=rotation;world.add(a.g);actors.push(a)
   if(wantsToWalk(p))a.walkPending=true
@@ -724,9 +755,24 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,0xcfdde6,cx,.02,cz),{spaceKey:key}));label('Your office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     attachUsageScreen(desk(world,cx,cz-.5,1,true,'you'));chair(world,cx,cz-1.7,-1)
-    ;[-1.2,0,1.2].forEach(dx=>officeSpots.push({x:cx+dx,z:cz+1.6,face:Math.PI}))
+    ;[.3,1.4,2.5].forEach(dx=>officeSpots.push({x:cx+dx,z:cz+2.6,face:Math.PI}))
+    const assistant=people.find(p=>p.isAssistant)
+    if(assistant){
+      // Angled toward the office's usual view, with the monitor off to one side so it doesn't hide her.
+      const hx=x0+1.7,hz=cz+1.05,turn=MIA_DESK_TURN,group=new THREE.Group();group.position.set(hx,0,hz);group.rotation.y=turn;world.add(group)
+      const toWorld=(lx,lz)=>[hx+lx*Math.cos(turn)+lz*Math.sin(turn),hz-lx*Math.sin(turn)+lz*Math.cos(turn)]
+      tableTop(group,0,0,2.1,1.1)
+      const screen=workstation(group,-.68,0,-1,true,'front desk');chair(group,.3,-.95,-1)
+      const [sx,sz]=toWorld(.3,-.95),a=seat(assistant,sx,sz,turn,front,'sit')
+      attachScreen(a,screen);addTag(a,false);dress(a)
+    }
     plant(world,x0+W-.6,z0+.7,1.1)
-    box(world,1.8,.8,.35,WOOD,x0+1.2,.4,z0+.28)
+    plant(world,x0+.65,z0+D-.6,.9)
+    officeRug(world,cx-.3,cz-.45)
+    credenza(world,x0+1.5,z0+.3)
+    bookcase(world,x0+.24,cz-1.3)
+    floorLamp(world,x0+W-.55,z0+1.9)
+    wallArt(world,cx+1.75,z0+.1)
   }
 }
 function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
@@ -785,7 +831,7 @@ return {
     if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
     speaker=nextSpeaker
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage()

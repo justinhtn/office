@@ -15,16 +15,19 @@ export async function api(path, body) {
   return data
 }
 
-export async function speak(id, kind = 'words') {
-  const response = await fetch('/api/speak', {
+async function audioFrom(path, body) {
+  const response = await fetch(path, {
     method: 'POST',
     headers: { 'X-Office-Token': token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, kind }),
+    body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'No voice available')
 
   return URL.createObjectURL(await response.blob())
 }
+
+export const speak = (id, kind = 'words', playOnMac = false) => audioFrom('/api/speak', { id, kind, playOnMac })
+export const announce = (ids, isWelcome, playOnMac = false) => audioFrom('/api/announce', { ids, isWelcome, playOnMac })
 
 export const withId = (path, id, extra = {}) =>
   `${path}?${new URLSearchParams({ id, ...extra })}`
