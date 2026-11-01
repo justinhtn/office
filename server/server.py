@@ -35,6 +35,7 @@ NAMES = DATA / "names.json"
 FINISHED = DATA / "finished.json"
 PR_OUTCOMES = DATA / "pr_outcomes.json"
 PR_ENDED = {"MERGED": "merged", "CLOSED": "closed"}
+PR_SETTLE_S = 60
 AVATARS = DATA / "avatars.json"
 LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
@@ -384,7 +385,8 @@ class Office:
         self.lock = threading.Lock()
         self.names = read_json(NAMES, {})
         self.finished = set(read_json(FINISHED, []))
-        self.pr_outcomes = read_json(PR_OUTCOMES, {})
+        self.pr_outcomes = read_json(PR_OUTCOMES, None)
+        self.finished_at = {}
         self.avatars = read_json(AVATARS, {})
         self.labels = read_json(LABELS, {})
         self.was_running = {}
@@ -499,11 +501,7 @@ class Office:
         if self.finished & on_screen:
             self.finished -= on_screen
             write_json(FINISHED, sorted(self.finished))
-        outcomes = {
-            row["id"]: self.pr_outcomes[row["id"]]["text"]
-            for row in rows
-            if self.pr_outcomes.get(row["id"], {}).get("isCurrent") and not (self.requests.get(row["id"]) or row.get("isRunning") or jobs[row["id"]] or helpers[row["id"]] or row["id"] in self.finished)
-        }
+        outcomes = self.pr_outcomes_to_show(rows, jobs, helpers)
         people = [
             {
                 **row,
@@ -533,7 +531,7 @@ class Office:
                 **memory_of(row["id"]),
                 "isOnScreen": row["id"] in on_screen,
                 "prOutcome": outcomes.get(row["id"]),
-                "lastUpdate": outcomes.get(row["id"]) or speakable(TRANSCRIPTS.last_report(row["id"])),
+                "lastUpdate": speakable(TRANSCRIPTS.last_report(row["id"])),
                 "lineKey": hashlib.sha256(TRANSCRIPTS.last_line(row["id"]).encode()).hexdigest()[:16],
                 "wordsAreLine": not self.requests.get(row["id"]) and TRANSCRIPTS.last_words(row["id"]) == TRANSCRIPTS.last_line(row["id"]),
             }
@@ -615,13 +613,15 @@ class Office:
                 return
             self.stamps = stamps
             self.requests = requests
+            self.seed_pr_outcomes(raw.get("people", []))
             for row in raw.get("people", []):
                 # A merge and a finish seen together keep the hand up, since merging is often the session's last act.
                 self.note_pr_outcome(row)
-                if row.get("isRunning") and row["id"] in self.pr_outcomes:
-                    self.pr_outcomes[row["id"]]["isCurrent"] = False
-                if self.was_running.get(row["id"]) and not row.get("isRunning"):
-                    self.pr_outcomes.get(row["id"], {})["isCurrent"] = False
+                has_stopped = self.was_running.get(row["id"]) and not row.get("isRunning")
+                if (row.get("isRunning") or has_stopped) and row["id"] in (self.pr_outcomes or {}):
+                    self.pr_outcomes[row["id"]]["showing"] = None
+                if has_stopped:
+                    self.finished_at[row["id"]] = time.time()
                     self.finished.add(row["id"])
                     if row.get("startedBy"):
                         self.meetings[(row["id"], row["startedBy"])] = time.time() + MEETING_S
@@ -629,20 +629,48 @@ class Office:
                     self.finished.discard(row["id"])
                 self.was_running[row["id"]] = bool(row.get("isRunning"))
             write_json(FINISHED, sorted(self.finished))
-            write_json(PR_OUTCOMES, self.pr_outcomes)
             self.seen_raw = raw
             self.rebuild()
+            if self.pr_outcomes is not None:
+                write_json(PR_OUTCOMES, self.pr_outcomes)
+
+    def seed_pr_outcomes(self, rows):
+        """The first time PR states arrive, those already ended are history, so they clear and show nothing."""
+        if self.pr_outcomes is None and any(row.get("prState") for row in rows):
+            ended = [row for row in rows if row.get("prNumber") and str(row.get("prState")).upper() in PR_ENDED]
+            self.pr_outcomes = {row["id"]: {"ended": {str(row["prNumber"]): str(row["prState"]).upper()}, "showing": None} for row in ended}
 
     def note_pr_outcome(self, row):
         """A PR that has just ended settles any finish from before it. Each ending counts once, even after a restart."""
-        state = str(row.get("prState") or "").upper()
-        if state in PR_ENDED and row.get("prNumber"):
-            ended = f"PR {row.get('prNumber')} {PR_ENDED[state]}"
-            if self.pr_outcomes.get(row["id"], {}).get("text") != ended:
+        state, number = str(row.get("prState") or "").upper(), str(row.get("prNumber") or "")
+        if self.pr_outcomes is None or not number:
+            return
+        entry = self.pr_outcomes.setdefault(row["id"], {"ended": {}, "showing": None})
+        if entry["showing"] != number:
+            entry["showing"] = None
+        if state in PR_ENDED and entry["ended"].get(number) != state:
+            entry["ended"][number] = state
+            # The app can report a merge after the finish that followed it, so a fresh finish keeps its hand up.
+            if time.time() - self.finished_at.get(row["id"], 0) >= PR_SETTLE_S:
                 self.finished.discard(row["id"])
-                self.pr_outcomes[row["id"]] = {"text": ended, "isCurrent": True}
+                entry["showing"] = number
         elif state and state not in PR_ENDED:
-            self.pr_outcomes.pop(row["id"], None)
+            entry["ended"].pop(number, None)
+            entry["showing"] = None
+
+    def pr_outcomes_to_show(self, rows, jobs, helpers):
+        """What ended and hasn't been followed by anything else. A question, job or helper uses it up."""
+        shown = {}
+        for row in rows:
+            entry = (self.pr_outcomes or {}).get(row["id"])
+            if not entry or not entry["showing"]:
+                continue
+            if self.requests.get(row["id"]) or jobs[row["id"]] or helpers[row["id"]]:
+                entry["showing"] = None
+            elif row["id"] not in self.finished:
+                shown[row["id"]] = f"PR {entry['showing']} {PR_ENDED[entry['ended'][entry['showing']]]}"
+
+        return shown
 
     def rename(self, session_id, name):
         with self.lock:

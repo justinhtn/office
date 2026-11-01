@@ -57,6 +57,7 @@ type Person = {
   helpers?: string[]
   lastActivityAt?: string
   lastUpdate?: string
+  prOutcome?: string | null
   request?: { message?: string } | null
   teamId?: string
   teamName?: string
@@ -348,6 +349,7 @@ async function teamStatus($: EngineInterface, isWholeOffice = false): Promise<st
     helpers: person.helpers?.length ? person.helpers : undefined,
     lastActiveMinutesAgo: person.lastActivityAt ? minutesSince(Date.parse(person.lastActivityAt)) : undefined,
     lastUpdate: person.lastUpdate || undefined,
+    prOutcome: person.prOutcome || undefined,
   }))
 
   return JSON.stringify({
