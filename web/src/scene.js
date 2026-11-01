@@ -765,13 +765,15 @@ function loungeLayout(cx,cz){
   }
   const couches=[couch({...at(LOUNGE_SIDE_ACROSS,LOUNGE_SIDE_FORWARD),turn:main.turn+Math.PI/2}),couch(main)]
 
-  return {couches,seats:couches.flatMap(one=>one.seats),table:{...at(-.65,2.45),turn:main.turn}}
+  return {couches,seats:couches.flatMap(one=>one.seats),table:{...at(-.55,1.95),turn:main.turn}}
 }
-function loungeSeat(cx,cz,W,i,places){
-  const {seats}=loungeLayout(cx,cz)
-  if(places>seats.length)return {x:cx-(W-2.4)/2+(i+.5)*(W-2.4)/Math.max(1,places),z:cz+.08,face:0}
+// Couches first, and the coffee bar once they're full.
+function loungeSeat(x0,z0,cx,cz,W,i,places){
+  const couches=loungeLayout(cx,cz).seats
+  if(places<=couches.length)return couches[Math.round((i+.5)*couches.length/places-.5)]
+  const seats=[...couches,...barSeats(x0+W-1.5,z0).map(stool=>({...stool,y:BAR_SEAT_Y}))]
 
-  return seats[Math.round((i+.5)*seats.length/places-.5)]
+  return seats[i]||{x:cx-(W-2.4)/2+((i-seats.length)+.5)*(W-2.4)/Math.max(1,places-seats.length),z:cz+3.2,face:0,y:0,isStanding:true}
 }
 function loungeTable(parent,x,z){
   box(parent,2.6,.07,1.25,0x4a2c18,x,.56,z)
@@ -779,7 +781,8 @@ function loungeTable(parent,x,z){
   box(parent,2.3,.03,1,0x3a2213,x,.2,z)
   book(parent,x-.72,.6,z-.14,.42,.3,.05,0x7c2f25,.12);book(parent,x-.7,.65,z-.13,.38,.28,.04,0x263f58,-.1);book(parent,x-.72,.69,z-.15,.34,.25,.04,0xd8c9a8,.2)
   book(parent,x+.72,.6,z+.18,.4,.3,.05,0x2f5a4a,-.2);book(parent,x+.71,.65,z+.17,.34,.26,.04,0xc08a3c,.1)
-  deskPlant(parent,x+.1,z-.2,1)
+  // deskPlant sits at desk height, so lower it onto this table.
+  const plantOnTable=new THREE.Group();plantOnTable.position.y=.595-TABLE_TOP;parent.add(plantOnTable);deskPlant(plantOnTable,x+.05,z-.1,1)
 }
 function realLounge(world,x0,cx,cz,W,D){
   loadLighting()
@@ -787,18 +790,47 @@ function realLounge(world,x0,cx,cz,W,D){
   layout.couches.forEach(one=>placeModel('B07PC15YLQ',one.x,one.z,one.turn))
   const table=new THREE.Group();table.position.set(layout.table.x,0,layout.table.z);table.rotation.y=layout.table.turn;world.add(table)
   loungeTable(table,0,0)
-  placeModel('B07B7LL5LN',x0+W-1.2,cz+2.15,-1.15)
   placeModel('B072ZLCB3M',x0+.6,cz-.1,0)
   placeModel('potted_plant_02',x0+W-.65,z0Of(cz,D)+D-.75,0)
   placeModel('B073755HVS',x0+.5,cz-1.25,.6)
 }
+function coffeeMachine(parent,x,y,z){
+  const steel=mat(0xb9bcc0),dark=mat(0x1b1c1f)
+  const part=(w,h,d,material,px,py,pz)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);m.position.set(x+px,y+py,z+pz);m.castShadow=true;parent.add(m);return m}
+  part(.62,.05,.42,steel,0,.025,0)
+  part(.58,.03,.2,dark,0,.06,.1)
+  part(.62,.5,.14,steel,0,.3,-.12)
+  part(.62,.13,.42,steel,0,.6,0)
+  part(.56,.04,.38,dark,0,.685,0)
+  ;[-.14,.14].forEach(dx=>{const head=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.07,12),dark);head.position.set(x+dx,y+.5,z+.1);parent.add(head);part(.03,.02,.15,dark,dx,.46,.2)})
+  const wand=new THREE.Mesh(new THREE.CylinderGeometry(.008,.008,.22,8),steel);wand.position.set(x+.27,y+.42,z+.15);wand.rotation.z=.18;parent.add(wand)
+  const gauge=new THREE.Mesh(new THREE.CircleGeometry(.04,16),new THREE.MeshBasicMaterial({color:0xf2f0ea}));gauge.position.set(x,y+.6,z+.212);parent.add(gauge)
+  ;[-.14,.14].forEach(dx=>{const cup=new THREE.Mesh(new THREE.CylinderGeometry(.038,.03,.07,12),mat(WHITE));cup.position.set(x+dx,y+.11,z+.1);parent.add(cup)})
+  ;[-.14,.14].forEach(dx=>{const cup=new THREE.Mesh(new THREE.CylinderGeometry(.038,.03,.07,12),mat(WHITE));cup.position.set(x+dx,y+.74,z);parent.add(cup)})
+}
+function kitchenSink(parent,x,y,z){
+  const steel=mat(0xc7cacd),basin=new THREE.MeshLambertMaterial({color:0x6b6e72})
+  const rim=(w,d,px,pz)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,.012,d),steel);m.position.set(x+px,y+.006,z+pz);parent.add(m)}
+  const well=new THREE.Mesh(new THREE.PlaneGeometry(.5,.34),basin);well.rotation.x=-Math.PI/2;well.position.set(x,y+.004,z);parent.add(well)
+  rim(.58,.04,0,-.19);rim(.58,.04,0,.19);rim(.04,.42,-.27,0);rim(.04,.42,.27,0)
+  const drain=new THREE.Mesh(new THREE.CircleGeometry(.03,12),new THREE.MeshLambertMaterial({color:0x2a2b2e}));drain.rotation.x=-Math.PI/2;drain.position.set(x,y+.006,z);parent.add(drain)
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.014,.016,.32,10),steel);stem.position.set(x,y+.16,z-.25);parent.add(stem)
+  const arc=new THREE.Mesh(new THREE.TorusGeometry(.1,.012,8,16,Math.PI),steel);arc.rotation.y=-Math.PI/2;arc.position.set(x,y+.32,z-.15);parent.add(arc)
+  const tap=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,.05,8),steel);tap.position.set(x,y+.3,z-.05);parent.add(tap)
+  ;[-.08,.08].forEach(dx=>{const handle=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,.07,8),steel);handle.position.set(x+dx,y+.035,z-.25);parent.add(handle)})
+}
 function kitchen(world,x,z0){
   placeModel('B07RP1SS3S',x,z0+.35,0)
-  box(world,.42,.5,.38,CHARCOAL,x-.55,1.31,z0+.35);box(world,.26,.05,.2,SILVER,x-.55,1.085,z0+.48);coffee(world,x+.5,z0+.4,0)
-  rbox(world,1.6,.97,.46,.03,WOOD,x,.485,z0+1.25);rbox(world,1.85,.09,.72,.03,0xe9e6df,x,1.015,z0+1.25)
-  coffee(world,x-.5,z0+1.2,1);deskPlant(world,x+.55,z0+1.2)
-  ;[-.45,.45].forEach(dx=>placeModel('B08568HG2X',x+dx,z0+1.85,Math.PI))
+  coffee(world,x+.5,z0+.4,0);coffee(world,x-.5,z0+.3,1);deskPlant(world,x,z0+.35)
+  const counter=z0+1.25,middle=x+BAR_MIDDLE
+  rbox(world,BAR_LENGTH-.25,.97,.46,.03,WOOD,middle,.485,counter);rbox(world,BAR_LENGTH,.09,.72,.03,0xe9e6df,middle,1.015,counter)
+  coffeeMachine(world,middle-BAR_LENGTH/2+.5,COUNTER_TOP,counter-.02)
+  kitchenSink(world,middle+BAR_LENGTH/2-.45,COUNTER_TOP,counter+.03)
+  // Where people stand to make a coffee, at the machine's end of the counter.
+  coffeeSpot={x:middle-BAR_LENGTH/2-.45,z:counter,face:Math.PI/2}
+  barSeats(x,z0).forEach(stool=>placeModel('B08568HG2X',stool.x,stool.z-.0,Math.PI))
 }
+function barSeats(x,z0){return BAR_STOOLS.map(dx=>({x:x+dx,z:z0+1.85,face:Math.PI}))}
 const z0Of=(cz,D)=>cz-D/2
 function rug(parent,x,z,w,d,edge,fill){
   const under=new THREE.Mesh(new THREE.PlaneGeometry(w,d),soft(edge));under.rotation.x=-Math.PI/2;under.position.set(x,.03,z);under.receiveShadow=true;parent.add(under)
@@ -812,9 +844,18 @@ const WALL_HEIGHT=10
 const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
-// Places the couches and table in the middle of the rug.
-const LOUNGE_MAIN_X=1.21
-const LOUNGE_MAIN_Z=-1.2
+const TABLE_TOP=1.055
+const COUNTER_TOP=1.06
+const BAR_LENGTH=3.7
+const BAR_MIDDLE=-.9
+const BAR_STOOLS=[-2.1,-1.3,-.5,.3]
+const BAR_SEAT_Y=.2
+const BREW_SECONDS=7
+const MIN_HOME_DIST=6
+const HOME_PULL_BACK=2
+// Places the couches and table on the rug, a little clear of the coffee counter.
+const LOUNGE_MAIN_X=.41
+const LOUNGE_MAIN_Z=.1
 const LOUNGE_SIDE_ACROSS=-3
 const LOUNGE_SIDE_FORWARD=1.15
 // Every team gets its own space, so teams read apart without closing up the floor.
@@ -961,15 +1002,15 @@ function applyTimeOfDay(){
   const now=new Date(),hour=Number.isNaN(previewHour)?now.getHours()+now.getMinutes()/60:previewHour
   const day=smooth(5.5,8,hour)*(1-smooth(17,19.5,hour)),night=1-day,dusk=Math.max(0,1-Math.abs(hour-6.6)/1.3,1-Math.abs(hour-18.3)/1.3)
   lit.sky.forEach(({m,type})=>{m.opacity=type==='night'?night:dusk*.8})
-  hemi.intensity=.3+.34*day;hemi.color.setHex(0xffd9b0).lerp(HEMI_DAY,day)
+  hemi.intensity=.28+.36*day;hemi.color.setHex(0xffd9b0).lerp(HEMI_DAY,day)
   sun.intensity=.68*day;sun.color.setHex(0xff9d5c).lerp(SUN_DAY,1-dusk)
   // Morning from the left-hand windows, high at midday, and low through the back ones by evening.
   const arc=Math.PI*Math.min(1,Math.max(0,(hour-6)/13)),R=Math.max(floorSize.W||30,floorSize.D||30)
   sun.position.set(-Math.cos(arc)*R,Math.max(.25,Math.sin(arc))*R*.95,-R*.55)
   sun.shadow.needsUpdate=true
-  lit.lights.forEach(light=>{light.intensity=.12+1.35*night})
+  lit.lights.forEach(light=>{light.intensity=.12+1.18*night})
   lit.bulb.color.setHex(0x8d7f6a).lerp(BULB_ON,Math.max(.3,night))
-  lit.pool.opacity=.04+.5*night
+  lit.pool.opacity=.04+.44*night
   if(lit.sunPatch)lit.sunPatch.opacity=.11*day
   if(lit.ceiling)lit.ceiling.color.setScalar(.42+.58*day)
   lit.strip.color.setScalar(.5+.5*Math.max(day,night*.75))
@@ -977,6 +1018,7 @@ function applyTimeOfDay(){
 }
 function build(){
   const buildStart=performance.now()
+  walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
   scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[]
   const spaces=planSpaces(),perRow=Math.max(2,Math.ceil(Math.sqrt(spaces.length)))
@@ -1050,6 +1092,9 @@ function fitCamera(){
   const {W,D}=floorSize,ceilingRoom=(WALL_HEIGHT-1.2-home.center.y)/Math.sin(home.el)
   home.dist=Math.min(Math.max(12,Math.max(W,D)*.43),ceilingRoom)
   home.center.set(W*.1,home.center.y,D*.14)
+  // Just behind the near edge of the lounge rug, so Mia's desk comes into view on the right.
+  const lounge=spots.lounge
+  if(lounge)home.dist=Math.max(MIN_HOME_DIST,(lounge.z+lounge.D/2-home.center.z)/(Math.cos(home.az)*Math.cos(home.el))+HOME_PULL_BACK)
   if(first){view.dist=home.dist;view.center.copy(home.center)}
 }
 // Ribbed black rubber under the desks and chairs.
@@ -1065,7 +1110,7 @@ function rubberMat(parent,x,z,w,d){
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;world.add(m);return m}
 const WALK_SPEED=2.4, arrived=new Map()
-let meetingSeats=[],officeSpots=[],breakSeats=[],visitors=0,breakers=0
+let walksInProgress=new Map(),coffeeSpot=null,meetingSeats=[],officeSpots=[],breakSeats=[],visitors=0,breakers=0
 const faceToward=(a,x,z)=>{a.g.rotation.y=Math.atan2(x-a.g.position.x,z-a.g.position.z)}
 function startWalk(a){
   a.walkPending=false
@@ -1075,8 +1120,21 @@ function startWalk(a){
   const key=toOffice?`office:${p.request.id}`:toMeeting?`meeting:${[p.id,...p.meetingWith].sort().join()}`:`break:${p.jobs?.[0]}`
   const arrive=toOffice?'wave':'sit'
   a.visit={target,key,arrive,mug:!toOffice&&!toMeeting}
+  // The room can rebuild mid-walk, and someone should carry on rather than start again from their desk.
+  const walking=walksInProgress.get(p.id)
+  if(walking?.key===key){
+    a.g.position.copy(walking.position);a.g.rotation.y=walking.turn;a.route=walking.route;a.visit.brewAt=walking.brewAt;a.brewUntil=walking.brewUntil;a.holdsMug=walking.hasMug
+    a.pose=walking.route?'walk':'stand'
+    return
+  }
   if(arrived.get(p.id)===key){a.g.position.set(target.x,target.y||0,target.z);a.g.rotation.y=target.face;a.pose=arrive;a.holdsMug=a.visit.mug;return}
   a.pose='walk'
+  // Anyone on a break makes themselves a coffee before sitting down.
+  if(a.visit.mug&&coffeeSpot){
+    a.visit.brewAt=coffeeSpot
+    a.route=[new THREE.Vector3(a.g.position.x,0,a.front),new THREE.Vector3(coffeeSpot.x,0,a.front),new THREE.Vector3(coffeeSpot.x,0,coffeeSpot.z)]
+    return
+  }
   a.route=[new THREE.Vector3(a.g.position.x,0,a.front),new THREE.Vector3(target.x,0,a.front),new THREE.Vector3(target.x,target.y||0,target.z)]
 }
 function giveMug(a){
@@ -1090,6 +1148,7 @@ function walk(a,dt){
   const step=WALK_SPEED*dt
   if(gap.length()<=step){
     a.g.position.copy(target);a.route.shift()
+    if(!a.route.length&&a.visit.brewAt){a.route=null;a.g.rotation.y=a.visit.brewAt.face;a.visit.brewAt=null;setPose(a,'stand');a.brewUntil=clock.getElapsedTime()+BREW_SECONDS;return}
     if(!a.route.length){a.route=null;arrived.set(a.p.id,a.visit.key);a.g.rotation.y=a.visit.target.face;setPose(a,a.visit.arrive);if(a.visit.mug)giveMug(a)}
     return
   }
@@ -1245,10 +1304,10 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key,rug:'crimson'}));label('Lounge')
     if(REAL_FURNITURE)realLounge(world,x0,cx,cz,W,D)
     else{rug(world,cx,cz+1.15,W-1.6,3.5,0x2d7f8c,0xe9dcc4);couch(world,cx,cz-.1,W-1.2);coffeeTable(world,cx,cz+1.9,Math.min(2.8,W*.36));armchair(world,x0+1.15,cz+2.15,1.15);if(W>9)armchair(world,x0+W-1.15,cz+2.15,-1.15);floorLamp(world,x0+.55,cz-.9)}
-    const places=space.people.length+space.breaks,spotAt=i=>loungeSeat(cx,cz,W,i,places)
-    space.people.forEach((p,i)=>{const spot=spotAt(i),a=seat(p,spot.x,spot.z,spot.face,front,'sit',-.1);addTag(a,false);dress(a)})
-    breakSeats=Array.from({length:space.breaks},(_,i)=>({...spotAt(space.people.length+i),y:-.1}))
-    pendant(cx+.55,cz+1.25);pendant(cx-1.8,cz+.2,false)
+    const places=space.people.length+space.breaks,spotAt=i=>loungeSeat(x0,z0,cx,cz,W,i,places)
+    space.people.forEach((p,i)=>{const spot=spotAt(i),a=seat(p,spot.x,spot.z,spot.face,front,spot.isStanding?'stand':'sit',spot.y??-.1);addTag(a,false);dress(a)})
+    breakSeats=Array.from({length:space.breaks},(_,i)=>({y:-.1,...spotAt(space.people.length+i)}))
+    pendant(cx-.14,cz+2.05);pendant(cx-2.6,cz+1.5,false)
     if(REAL_FURNITURE)kitchen(world,x0+W-1.5,z0)
     else{box(world,2.4,1.02,.75,WOOD,x0+W-1.5,.51,z0+.45);box(world,.42,.5,.38,CHARCOAL,x0+W-2.1,1.27,z0+.45);box(world,.26,.05,.2,SILVER,x0+W-2.1,1.08,z0+.58);coffee(world,x0+W-1.1,z0+.5,0);coffee(world,x0+W-.75,z0+.32,1)}
     if(!REAL_FURNITURE)plant(world,x0+W-.6,z0+D-.7,.9)
@@ -1331,6 +1390,11 @@ function loop(){const t=clock.getElapsedTime()
     if(a.mixer)a.mixer.update(dt)
     if(a.mixer)liven(a,t,dt)
     if(a.screen)drawScreen(a,t)
+    if(a.brewUntil&&t>a.brewUntil){
+      a.brewUntil=0;giveMug(a);setPose(a,'walk')
+      const seatAt=a.visit.target,near=new THREE.Vector3(seatAt.x+Math.sin(seatAt.face)*1.3,0,seatAt.z+Math.cos(seatAt.face)*1.3)
+      a.route=[near,new THREE.Vector3(seatAt.x,seatAt.y||0,seatAt.z)]
+    }
     if(a.route)walk(a,dt)
     if(a.p.id===selected&&!focusKey){marker.visible=true;marker.position.set(a.g.position.x,a.g.position.y+(a.pose==='wave'||a.pose==='walk'?2.95:2.4)+Math.sin(t*4)*.05,a.g.position.z);marker.rotation.y=t*2}
   })
