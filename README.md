@@ -23,9 +23,9 @@ Then open a new Claude Code session in the desktop app, and go to <http://localh
 
 ## How it works
 
-- **Plugin (`plugin/`)** runs in every Claude Code session. One session at a time publishes the session list, and any session can answer a request for a transcript.
+- **Plugin (`plugin/`)** runs in every Claude Code session. One session at a time publishes the session list.
 - **Server (`server/`)** runs in the background. It assigns names, tracks status, and serves files and git information from each session's folder.
-- **Interface (`web/`)** is a React app with the 3D room, chat, changes and files.
+- **Interface (`web/`)** is a React app with the 3D room, changes and files.
 
 Session data needs at least one Claude Code session open. Without one, the office still opens but shows the last known state.
 

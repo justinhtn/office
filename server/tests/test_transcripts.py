@@ -70,24 +70,16 @@ class ConversationTests(TranscriptCase):
 
 
 class ToolTests(TranscriptCase):
-    def test_attaches_a_result_to_its_call(self):
-        parsed = self.load(
-            assistant(tool("t1", "Bash", command="ls -la", description="List files")),
-            result("t1", [{"type": "text", "text": "a.txt"}], is_error=True),
-        )
-        item = parsed["messages"][0]
-        self.assertEqual((item["body"], item["detail"], item["output"], item["isError"]), ("List files", "ls -la", "a.txt", True))
-
-    def test_truncates_long_output(self):
-        parsed = self.load(assistant(tool("t1", "Bash", command="x")), result("t1", "y" * (server.MAX_TOOL_OUTPUT + 1)))
-        self.assertEqual(len(parsed["messages"][0]["output"]), server.MAX_TOOL_OUTPUT)
-
     def test_a_repeated_call_counts_once(self):
         call = assistant(tool("t1", "Read", file_path="/x/a.py"))
-        self.assertEqual(self.bodies(call, call), [("activity", "Read a.py")])
+        self.assertEqual(self.load(call, call)["recent"], ["Read a.py"])
+
+    def test_a_tool_call_adds_no_message(self):
+        parsed = self.load(assistant(tool("t1", "Bash", command="x")), result("t1", "output"))
+        self.assertEqual(parsed["messages"], [])
 
     def test_hides_housekeeping_tools(self):
-        self.assertEqual(self.bodies(assistant(tool("t1", "ToolSearch", query="x"), tool("t2", "mcp__ccd_session__mark_chapter", title="x"))), [])
+        self.assertEqual(self.load(assistant(tool("t1", "ToolSearch", query="x"), tool("t2", "mcp__ccd_session__mark_chapter", title="x")))["recent"], [])
 
     def test_a_job_runs_until_its_notification(self):
         call = assistant(tool("j1", "Bash", command="x", run_in_background=True, description="Build"))
@@ -158,16 +150,8 @@ class ReadingTests(TranscriptCase):
     def test_a_session_without_a_transcript_is_quiet_or_refused(self):
         self.assertEqual(self.transcripts.last_words(SESSION), "")
         with self.assertRaises(server.Refused) as caught:
-            self.transcripts.page(SESSION, None)
+            self.transcripts.outputs(SESSION)
         self.assertEqual(caught.exception.status, 404)
-
-    def test_pages_walk_back_through_the_messages(self):
-        total = server.PAGE_SIZE + 5
-        self.load(*[user(f"m{i}") for i in range(total)])
-        newest = self.transcripts.page(SESSION, None)
-        self.assertEqual((newest["total"], newest["cursor"], newest["messages"][-1]["body"]), (total, 5, f"m{total - 1}"))
-        oldest = self.transcripts.page(SESSION, newest["cursor"])
-        self.assertEqual((oldest["cursor"], [m["body"] for m in oldest["messages"]]), (None, ["m0", "m1", "m2", "m3", "m4"]))
 
     def test_outputs_are_newest_first_without_repeats(self):
         first = assistant(tool("a1", "Artifact", title="Old"))
