@@ -2,10 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Command } from 'cmdk'
 import { DiffEditor, Editor } from '@monaco-editor/react'
 import { Tree } from 'react-arborist'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Search, Volume2, VolumeX, SkipForward, X,
+  Armchair, Check, ChevronUp, Circle, Gauge, Users, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Search, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, speak, teamsOf, withId } from './api.js'
@@ -24,7 +23,7 @@ async function loadBoardFont(family) {
   await Promise.all(['400', '500', '600'].map(weight => document.fonts.load(`${weight} 20px "${family}"`))).catch(() => {})
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSpace, children }) {
+function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSpace }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -49,7 +48,6 @@ function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSp
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
-      {children}
     </div>
   )
 }
@@ -70,7 +68,8 @@ function teamStatus(team) {
   return `${team.members.length} ${team.members.length === 1 ? 'person' : 'people'}, idle`
 }
 
-function TeamBar({ teams, hasLounge, focus, onTeam, onPlace }) {
+function TeamMenu({ teams, hasLounge, focus, isOpen, onToggle, onTeam, onPlace }) {
+  const asking = teams.reduce((count, team) => count + team.members.filter(member => member.request).length, 0)
   const place = (key, label, Icon) => (
     <button key={key} className={`team-button ${focus === key ? 'on' : ''}`} onClick={() => onPlace(key)}>
       <span className="place-icon"><Icon size={17} /></span><b>{label}</b>
@@ -78,23 +77,42 @@ function TeamBar({ teams, hasLounge, focus, onTeam, onPlace }) {
   )
 
   return (
-    <nav className="team-bar" aria-label="Go to a team">
-      <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
-        <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
+    <div className="team-menu">
+      {isOpen && (
+        <nav className="team-list" aria-label="Go to a team">
+          <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
+            <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
+          </button>
+          <span className="team-divider" />
+          {teams.map((team, index) => (
+            <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
+              <Avatar person={team.lead} size={28} />
+              {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
+              <span className="team-text"><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
+            </button>
+          ))}
+          <span className="team-divider" />
+          {place('meeting', 'Meeting room', Presentation)}
+          {hasLounge && place('lounge', 'Lounge', Armchair)}
+          {place('office', 'Your office', DoorOpen)}
+        </nav>
+      )}
+      <button className="team-toggle" aria-expanded={isOpen} onClick={onToggle}>
+        <Users size={15} /><b>Teams</b>
+        {asking > 0 && <span className="team-count" aria-label={`${asking} asking for you`}>{asking}</span>}
+        <ChevronUp size={14} className={isOpen ? 'flipped' : ''} />
       </button>
-      <span className="team-divider" />
-      {teams.map((team, index) => (
-        <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
-          <Avatar person={team.lead} size={28} />
-          {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
-          <span><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
-        </button>
-      ))}
-      <span className="team-divider" />
-      {place('meeting', 'Meeting room', Presentation)}
-      {hasLounge && place('lounge', 'Lounge', Armchair)}
-      {place('office', 'Your office', DoorOpen)}
-    </nav>
+    </div>
+  )
+}
+
+// Slides over the room when asked for, so the office keeps the whole window the rest of the time.
+function Drawer({ onClose, children }) {
+  return (
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer">{children}</aside>
+    </>
   )
 }
 
@@ -768,11 +786,12 @@ function RequestBanner({ person, onShow }) {
   )
 }
 
-function Session({ person, everyone, teams, tab, onTab, onClose, onPick, onHear }) {
+function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails, onClose, onPick, onHear }) {
   const [showPath, setShowPath] = useState(null)
   const [stage, setStage] = useState(null)
   useEffect(() => setStage(null), [person.id])
   async function show(path) {
+    onOpen('files')
     if (/\.(mp4|m4v|mov|webm|png|jpe?g|gif|webp)$/i.test(path)) {
       try {
         const file = await api(withId('/api/media-link', person.id, { path }))
@@ -784,39 +803,62 @@ function Session({ person, everyone, teams, tab, onTab, onClose, onPick, onHear 
       }
     }
     setShowPath(path)
-    onTab('files')
   }
   const boss = everyone.find(other => other.id === person.startedBy)
 
   return (
-    <section className="session">
-      <header className="session-head">
-        <div className="session-who">
+    <>
+      <section className="person-card" aria-label={person.name}>
+        <header className="card-head">
           <Avatar person={person} everyone={everyone} size={36} />
-          <EditableText key={`name-${person.id}`} value={person.name} label="name" className="name" onSave={name => api('/api/rename', { id: person.id, name })} />
-          <EditableText key={`label-${person.id}`} value={person.label} label="job label" className="job" onSave={label => api('/api/label', { id: person.id, label })} />
-          <button className="icon" title="Hear their latest update" aria-label="Hear their latest update" onClick={() => onHear(person.id)}><Volume2 size={14} /></button>
-          <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
+          <div className="card-who">
+            <EditableText key={`name-${person.id}`} value={person.name} label="name" className="name" onSave={name => api('/api/rename', { id: person.id, name })} />
+            <EditableText key={`label-${person.id}`} value={person.label} label="job label" className="job" onSave={label => api('/api/label', { id: person.id, label })} />
+          </div>
+          <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
+        </header>
+        <div className="card-state">
           <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : `Idle ${age(person.lastActivityAt)}`}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
-        {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
-        <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
-      </header>
-      <Teammates person={person} teams={teams} onPick={onPick} />
-      <TeamChoice person={person} teams={teams} />
-      <nav className="session-tabs" role="tablist">
-        {SESSION_TABS.map(({ id, label, icon: Icon }) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
-        ))}
-      </nav>
-      <Memory person={person} />
-      {person.request && <RequestBanner person={person} onShow={show} />}
-      {stage && <Stage files={stage.files} caption={stage.caption} onClose={() => setStage(null)} />}
-      {tab === 'outputs' && <Outputs person={person} onExpand={(files, caption) => setStage({ files, caption })} />}
-      {tab === 'changes' && <Changes person={person} />}
-      {tab === 'files' && <Files person={person} initialPath={showPath} onMedia={show} />}
-    </section>
+        {person.title && !person.title.startsWith(person.label) && <p className="card-doing">{person.title}</p>}
+        <Memory person={person} />
+        {person.request && <RequestBanner person={person} onShow={show} />}
+        <details className="card-team">
+          <summary>{person.isIndependent ? 'Independent' : `Team: ${person.teamName}`}</summary>
+          <Teammates person={person} teams={teams} onPick={onPick} />
+          <TeamChoice person={person} teams={teams} />
+        </details>
+        <div className="card-actions">
+          {SESSION_TABS.map(({ id, label, icon: Icon }) => (
+            <button key={id} onClick={() => onOpen(id)}><Icon size={14} /> {label}</button>
+          ))}
+        </div>
+        <footer className="card-foot">
+          {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
+          <span className="card-tools">
+            <button className="icon" title="Hear their latest update" aria-label="Hear their latest update" onClick={() => onHear(person.id)}><Volume2 size={14} /></button>
+            <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
+          </span>
+        </footer>
+      </section>
+      {isOpen && (
+        <Drawer onClose={onCloseDetails}>
+          <section className="session">
+            <nav className="session-tabs" role="tablist">
+              {SESSION_TABS.map(({ id, label, icon: Icon }) => (
+                <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onOpen(id)}><Icon size={14} /> {label}</button>
+              ))}
+              <button className="icon drawer-close" aria-label="Close" title="Close" onClick={onCloseDetails}><X size={16} /></button>
+            </nav>
+            {stage && <Stage files={stage.files} caption={stage.caption} onClose={() => setStage(null)} />}
+            {tab === 'outputs' && <Outputs person={person} onExpand={(files, caption) => setStage({ files, caption })} />}
+            {tab === 'changes' && <Changes person={person} />}
+            {tab === 'files' && <Files person={person} initialPath={showPath} onMedia={show} />}
+          </section>
+        </Drawer>
+      )}
+    </>
   )
 }
 
@@ -852,6 +894,8 @@ export default function App() {
   const [problem, setProblem] = useState('')
   const [selected, setSelected] = useState(null)
   const [tab, setTab] = useState('outputs')
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
+  const [isTeamsOpen, setIsTeamsOpen] = useState(false)
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
@@ -922,7 +966,7 @@ export default function App() {
 
     return () => clearInterval(timer)
   }, [])
-  const keyActions = useRef({ overview() {}, team() {} })
+  const keyActions = useRef({ escape() {}, team() {} })
   useEffect(() => {
     const onKey = event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -935,7 +979,7 @@ export default function App() {
       }
       const isTyping = /^(INPUT|TEXTAREA)$/.test(event.target.tagName) || event.target.isContentEditable
       if (isTyping || event.metaKey || event.ctrlKey) return
-      if (event.key === 'Escape' && !document.querySelector('.stage')) keyActions.current.overview()
+      if (event.key === 'Escape' && !document.querySelector('.stage')) keyActions.current.escape()
       if (/^[1-9]$/.test(event.key)) keyActions.current.team(Number(event.key) - 1)
     }
     window.addEventListener('keydown', onKey)
@@ -959,6 +1003,8 @@ export default function App() {
   function goToPlace(key) {
     setSelected(null)
     setPlace(key)
+    setIsDetailOpen(false)
+    setIsTeamsOpen(false)
   }
   function goToSpace(key) {
     const team = teams.find(one => one.lead.id === key)
@@ -970,6 +1016,8 @@ export default function App() {
     setSelected(id)
     setPlace(null)
     setTab('outputs')
+    setIsDetailOpen(false)
+    setIsTeamsOpen(false)
     // The left side of the Claude app follows whoever is clicked here.
     api('/api/open', { id }).catch(failure => setProblem(failure.message))
     setIsAwayOpen(false)
@@ -978,7 +1026,12 @@ export default function App() {
   }
 
   keyActions.current = {
-    overview: () => goToPlace(null),
+    // Closes the nearest thing first, so Escape only leaves a team once nothing is open over it.
+    escape: () => {
+      if (isDetailOpen) setIsDetailOpen(false)
+      else if (isTeamsOpen) setIsTeamsOpen(false)
+      else goToPlace(null)
+    },
     team: index => { if (teams[index]) pick(teams[index].lead.id) },
   }
 
@@ -1011,33 +1064,34 @@ export default function App() {
       </div>
 
       {problem && <p className="error banner">{problem}</p>}
-      <PanelGroup direction="horizontal" className="work" autoSaveId={person || place === 'office' ? 'office-chat-open' : 'office-floor'}>
-        <Panel id="floor" order={1} minSize={25} defaultSize={person || place === 'office' ? 60 : 100}>
-          {active.length > 0
-            ? (
-              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} onPick={pick} onSpace={goToSpace}>
-                <TeamBar teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
-              </Room>
-            )
-            : !problem && <Empty text="Waiting for session data…" />}
-        </Panel>
-        {!person && place === 'office' && (
-          <>
-            <PanelResizeHandle className="handle" />
-            <Panel id="session" order={2} minSize={28} defaultSize={40}>
-              <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => goToPlace(null)} />
-            </Panel>
-          </>
-        )}
-        {person && (
-          <>
-            <PanelResizeHandle className="handle" />
-            <Panel id="session" order={2} minSize={28} defaultSize={40}>
-              <Session person={person} everyone={cast} teams={teams} tab={tab} onTab={setTab} onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)} />
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
+      <div className="work floor">
+        {active.length > 0
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} onPick={pick} onSpace={goToSpace} />
+          : !problem && <Empty text="Waiting for session data…" />}
+        <div className={`corner ${isTeamsOpen ? 'menu-open' : ''}`}>
+          {!person && place === 'office' && (
+            <>
+              <section className="person-card" aria-label="Your office">
+                <header className="card-head"><b className="name">Your office</b></header>
+                <div className="card-actions"><button onClick={() => setIsDetailOpen(true)}><Gauge size={14} /> Usage</button></div>
+              </section>
+              {isDetailOpen && (
+                <Drawer onClose={() => setIsDetailOpen(false)}>
+                  <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => setIsDetailOpen(false)} />
+                </Drawer>
+              )}
+            </>
+          )}
+          {person && (
+            <Session
+              person={person} everyone={cast} teams={teams} tab={tab} isOpen={isDetailOpen}
+              onOpen={id => { setTab(id); setIsDetailOpen(true) }} onCloseDetails={() => setIsDetailOpen(false)}
+              onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)}
+            />
+          )}
+          <TeamMenu teams={teams} hasLounge={loungers.length > 0} focus={focus} isOpen={isTeamsOpen} onToggle={() => setIsTeamsOpen(open => !open)} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
+        </div>
+      </div>
 
       <footer className="statusbar">
         <small>{active.length} active · {updatedAt ? `updated ${age(updatedAt)} ago` : 'no data yet'}</small>
