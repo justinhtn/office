@@ -104,16 +104,17 @@ export function portrait(p) {
 
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
-const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.55,el:.22}
-let boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.55,el:.08}
+let lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
+const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
 const camera = new THREE.PerspectiveCamera(46, 1, .1, 300)
-scene.add(new THREE.HemisphereLight(0xfffaf0, 0xc9b8a2, .62))
+const hemi = new THREE.HemisphereLight(0xfffaf0, 0xc9b8a2, .62); scene.add(hemi)
 const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
 let world = new THREE.Group(); scene.add(world)
 
@@ -140,34 +141,35 @@ const FLOOR_T=repeat=>paintTex(1024,1024,(g,w,h)=>{
     g.fillStyle='rgba(70,48,28,.3)';g.fillRect(0,y,w,1.5)
   }
 },repeat,repeat)
-function skyline(seed,rx=1){return paintTex(2048,768,(g,w,h)=>{
+function skyline(seed,rx=1,isNight=false){return paintTex(2048,768,(g,w,h)=>{
   let r=seed;const rand=()=>(r=(r*9301+49297)%233280)/233280
-  const sky=g.createLinearGradient(0,0,0,h);sky.addColorStop(0,'#5d9fd6');sky.addColorStop(.5,'#a9d0ea');sky.addColorStop(.78,'#e4eef1');sky.addColorStop(1,'#f3efe6');g.fillStyle=sky;g.fillRect(0,0,w,h)
+  const sky=g.createLinearGradient(0,0,0,h);if(isNight){sky.addColorStop(0,'#060b18');sky.addColorStop(.6,'#101a30');sky.addColorStop(1,'#2a2a3c')}else{sky.addColorStop(0,'#5d9fd6');sky.addColorStop(.5,'#a9d0ea');sky.addColorStop(.78,'#e4eef1');sky.addColorStop(1,'#f3efe6')};g.fillStyle=sky;g.fillRect(0,0,w,h)
+  if(isNight)for(let i=0;i<220;i++){const x=(i*733+seed)%w,y=(i*419)%(h*.55);g.fillStyle=`rgba(255,255,255,${.15+(i%5)*.12})`;g.fillRect(x,y,1.6,1.6)}
   // High, thin cloud rather than cartoon puffs.
   g.save();g.filter='blur(14px)'
-  for(let i=0;i<16;i++){const x=rand()*w,y=30+rand()*h*.42,long=160+rand()*420;g.fillStyle=`rgba(255,255,255,${.12+rand()*.28})`;g.beginPath();g.ellipse(x,y,long,8+rand()*22,(rand()-.5)*.08,0,7);g.fill()}
+  for(let i=0;i<16;i++){const x=rand()*w,y=30+rand()*h*.42,long=160+rand()*420;const soft=.12+rand()*.28;g.fillStyle=isNight?`rgba(90,105,135,${soft*.3})`:`rgba(255,255,255,${soft})`;g.beginPath();g.ellipse(x,y,long,8+rand()*22,(rand()-.5)*.08,0,7);g.fill()}
   g.restore()
   // Each layer is further away and paler, with windows only where they could be seen.
   const row=(horizon,minH,maxH,minW,maxW,tones,windows,haze)=>{
     let x=-20
     while(x<w){
-      const wide=minW+rand()*(maxW-minW),high=minH+rand()*(maxH-minH),top=horizon-high,tone=tones[Math.floor(rand()*tones.length)]
+      const wide=minW+rand()*(maxW-minW),high=minH+rand()*(maxH-minH),top=horizon-high,dayTone=tones[Math.floor(rand()*tones.length)],tone=isNight?'#0c1220':dayTone
       g.fillStyle=tone;g.fillRect(x,top,wide,h-top)
-      g.fillStyle='rgba(255,255,255,.08)';g.fillRect(x,top,wide*.28,h-top)
-      g.fillStyle='rgba(10,25,45,.12)';g.fillRect(x+wide*.72,top,wide*.28,h-top)
+      if(!isNight){g.fillStyle='rgba(255,255,255,.08)';g.fillRect(x,top,wide*.28,h-top);g.fillStyle='rgba(10,25,45,.12)';g.fillRect(x+wide*.72,top,wide*.28,h-top)}
       if(rand()<.4){g.fillStyle=tone;g.fillRect(x+wide*.3,top-10-rand()*22,wide*.4,32);if(rand()<.4)g.fillRect(x+wide*.5,top-55,2,50)}
       if(windows){
         const across=windows.w+windows.gap,up=windows.h+windows.gap,lit=.2+rand()*.25
-        for(let wy=top+8;wy<h-4;wy+=up)for(let wx=x+6;wx<x+wide-6;wx+=across){g.fillStyle=rand()<.1?`rgba(255,226,170,${lit+.25})`:`rgba(220,236,246,${lit})`;g.fillRect(wx,wy,windows.w,windows.h)}
+        for(let wy=top+8;wy<h-4;wy+=up)for(let wx=x+6;wx<x+wide-6;wx+=across){const on=rand();g.fillStyle=isNight?(on<.42?`rgba(255,214,140,${.6+on})`:on<.5?'rgba(190,220,255,.7)':'rgba(40,50,70,.5)'):on<.1?`rgba(255,226,170,${lit+.25})`:`rgba(220,236,246,${lit})`;g.fillRect(wx,wy,windows.w,windows.h)}
       }
       x+=wide+rand()*6
     }
-    if(haze){const fade=g.createLinearGradient(0,horizon-maxH,0,h);fade.addColorStop(0,'rgba(226,238,243,0)');fade.addColorStop(1,`rgba(236,240,238,${haze})`);g.fillStyle=fade;g.fillRect(0,horizon-maxH,w,h)}
+    if(haze&&!isNight){const fade=g.createLinearGradient(0,horizon-maxH,0,h);fade.addColorStop(0,'rgba(226,238,243,0)');fade.addColorStop(1,`rgba(236,240,238,${haze})`);g.fillStyle=fade;g.fillRect(0,horizon-maxH,w,h)}
   }
   row(h*.92,110,300,50,120,['#a9bfd0','#b4c7d6','#9fb7ca'],null,.55)
   row(h*.98,90,300,70,170,['#7f9bb3','#8ba5ba','#a3b2bd','#6f8ea9'],{w:4,h:6,gap:6},.4)
   row(h*1.02,70,260,110,240,['#526f8b','#60798f','#7c8c98','#465f78','#8d8f8c'],{w:7,h:10,gap:8},.2)
 },rx,1)}
+const duskSky=rx=>paintTex(64,512,(g,w,h)=>{g.clearRect(0,0,w,h);const c=g.createLinearGradient(0,0,0,h);c.addColorStop(0,'rgba(70,60,120,.15)');c.addColorStop(.5,'rgba(235,120,90,.55)');c.addColorStop(.8,'rgba(255,175,95,.75)');c.addColorStop(1,'rgba(255,205,140,.6)');g.fillStyle=c;g.fillRect(0,0,w,h)},rx,1)
 const WHITE=0xf6f4ef,ORANGE=0xe0682f,WOOD=0x5c402c,CHARCOAL=0x2f3540,LEAF=0x2f8f54
 const SCREEN_W=256,SCREEN_H=144,faces=new Map()
 function faceImage(person){
@@ -515,6 +517,15 @@ function planter(parent,x,z,r,h,seed,y=0){
   const pot=new THREE.Mesh(new THREE.CylinderGeometry(r,r*.76,h,20),soft([WHITE,0xb9673f,CHARCOAL][seed%3]));pot.position.set(x,y+h/2,z);pot.castShadow=pot.receiveShadow=true;parent.add(pot)
   const soil=new THREE.Mesh(new THREE.CylinderGeometry(r*.92,r*.92,.012,20),soft(0x3a2a1e));soil.position.set(x,y+h-.012,z);parent.add(soil)
 }
+// Black pendants: one real light per area, because many would be slow, and a soft pool on the floor under each.
+function pendant(x,z,hasLight=true){
+  const y=PENDANT_Y
+  box(world,.02,WALL_HEIGHT-y-.3,.02,0x151515,x,(WALL_HEIGHT+y+.3)/2,z)
+  const shade=new THREE.Mesh(new THREE.ConeGeometry(.42,.42,24,1,true),new THREE.MeshLambertMaterial({color:0x151515,side:THREE.DoubleSide}));shade.position.set(x,y+.1,z);lighting.add(shade)
+  const bulb=new THREE.Mesh(new THREE.SphereGeometry(.13,14,10),lit.bulb);bulb.position.set(x,y-.03,z);lighting.add(bulb)
+  const pool=new THREE.Mesh(new THREE.PlaneGeometry(9,9),lit.pool);pool.rotation.x=-Math.PI/2;pool.position.set(x,.05,z);lighting.add(pool)
+  if(hasLight){const light=new THREE.PointLight(0xffd8a8,0,20,1.5);light.position.set(x,y-.2,z);lighting.add(light);lit.lights.push(light)}
+}
 function plant(parent,x,z,size=1){
   const seed=Math.abs(Math.round(x*17+z*31))
   planter(parent,x,z,.4*size,.72*size,seed)
@@ -743,17 +754,39 @@ const SOFA_WIDTH=2.45
 const sofaCount=W=>Math.max(1,Math.floor((W-1.2)/(SOFA_WIDTH+.05)))
 const sofaX=(cx,W,i)=>cx+(i-(sofaCount(W)-1)/2)*(SOFA_WIDTH+.05)
 // Two people to a sofa, so nobody ends up on an armrest unless the lounge is full.
-function loungeSpot(cx,W,i,places){
-  const seats=sofaCount(W)*2
-  if(!REAL_FURNITURE||places>seats)return cx-(W-2.4)/2+(i+.5)*(W-2.4)/Math.max(1,places)
-  const n=Math.round((i+.5)*seats/places-.5)
-  return sofaX(cx,W,Math.floor(n/2))+(n%2?.56:-.56)
+// Two couches at a right angle and square to the rug: one facing the front of the room, the other your office.
+function loungeLayout(cx,cz){
+  const main={x:cx+LOUNGE_MAIN_X,z:cz+LOUNGE_MAIN_Z,turn:0},along={x:1,z:0},forward={x:0,z:1}
+  const at=(a,f)=>({x:main.x+along.x*a+forward.x*f,z:main.z+along.z*a+forward.z*f})
+  const couch=one=>{
+    const seatAt=offset=>({x:one.x+Math.cos(one.turn)*offset+Math.sin(one.turn)*.18,z:one.z-Math.sin(one.turn)*offset+Math.cos(one.turn)*.18,face:one.turn})
+
+    return {...one,seats:[seatAt(-.56),seatAt(.56)]}
+  }
+  const couches=[couch({...at(LOUNGE_SIDE_ACROSS,LOUNGE_SIDE_FORWARD),turn:main.turn+Math.PI/2}),couch(main)]
+
+  return {couches,seats:couches.flatMap(one=>one.seats),table:{...at(-.65,2.45),turn:main.turn}}
+}
+function loungeSeat(cx,cz,W,i,places){
+  const {seats}=loungeLayout(cx,cz)
+  if(places>seats.length)return {x:cx-(W-2.4)/2+(i+.5)*(W-2.4)/Math.max(1,places),z:cz+.08,face:0}
+
+  return seats[Math.round((i+.5)*seats.length/places-.5)]
+}
+function loungeTable(parent,x,z){
+  box(parent,2.6,.07,1.25,0x4a2c18,x,.56,z)
+  ;[[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz])=>box(parent,.07,.53,.07,0x20130b,x+sx*1.2,.265,z+sz*.52))
+  box(parent,2.3,.03,1,0x3a2213,x,.2,z)
+  book(parent,x-.72,.6,z-.14,.42,.3,.05,0x7c2f25,.12);book(parent,x-.7,.65,z-.13,.38,.28,.04,0x263f58,-.1);book(parent,x-.72,.69,z-.15,.34,.25,.04,0xd8c9a8,.2)
+  book(parent,x+.72,.6,z+.18,.4,.3,.05,0x2f5a4a,-.2);book(parent,x+.71,.65,z+.17,.34,.26,.04,0xc08a3c,.1)
+  deskPlant(parent,x+.1,z-.2,1)
 }
 function realLounge(world,x0,cx,cz,W,D){
   loadLighting()
-  for(let i=0;i<sofaCount(W);i++)placeModel('B07PC15YLQ',sofaX(cx,W,i),cz-.1,0)
-  placeModel('coffee_table_round_01',cx,cz+1.95,0,1.2)
-  placeModel('B07B7LL5LN',x0+1.2,cz+2.15,1.15)
+  const layout=loungeLayout(cx,cz)
+  layout.couches.forEach(one=>placeModel('B07PC15YLQ',one.x,one.z,one.turn))
+  const table=new THREE.Group();table.position.set(layout.table.x,0,layout.table.z);table.rotation.y=layout.table.turn;world.add(table)
+  loungeTable(table,0,0)
   placeModel('B07B7LL5LN',x0+W-1.2,cz+2.15,-1.15)
   placeModel('B072ZLCB3M',x0+.6,cz-.1,0)
   placeModel('potted_plant_02',x0+W-.65,z0Of(cz,D)+D-.75,0)
@@ -776,7 +809,14 @@ function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&by
 function teamsIn(list){return teamsOf(list.filter(p=>!p.isAssistant))}
 const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
 const WALL_HEIGHT=10
+const PENDANT_Y=5.2
 const AISLE_GAP=3.2
+const OFFICE_GAP=.9
+// Places the couches and table in the middle of the rug.
+const LOUNGE_MAIN_X=1.21
+const LOUNGE_MAIN_Z=-1.2
+const LOUNGE_SIDE_ACROSS=-3
+const LOUNGE_SIDE_FORWARD=1.15
 // Every team gets its own space, so teams read apart without closing up the floor.
 function planSpaces(){
   const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
@@ -913,21 +953,49 @@ function rugTexture(W,D,name){
   rugTextures.set(key,t)
   return t
 }
+// The real clock drives everything. Add ?hour=21 to the address to preview another time.
+const lit={lights:[],sky:[],ceiling:null,sunPatch:null,strip:new THREE.MeshBasicMaterial({color:0xfffbee}),bulb:new THREE.MeshBasicMaterial({color:0xffe6bd}),pool:new THREE.MeshBasicMaterial({map:paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,1,w/2,w/2,w/2);r.addColorStop(0,'rgba(255,214,160,.8)');r.addColorStop(1,'rgba(255,214,160,0)');g.fillStyle=r;g.fillRect(0,0,w,w)}),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,opacity:0})}
+const previewHour=parseFloat(new URLSearchParams(location.search).get('hour'))
+const smooth=(from,to,x)=>{const t=Math.min(1,Math.max(0,(x-from)/(to-from)));return t*t*(3-2*t)}
+function applyTimeOfDay(){
+  const now=new Date(),hour=Number.isNaN(previewHour)?now.getHours()+now.getMinutes()/60:previewHour
+  const day=smooth(5.5,8,hour)*(1-smooth(17,19.5,hour)),night=1-day,dusk=Math.max(0,1-Math.abs(hour-6.6)/1.3,1-Math.abs(hour-18.3)/1.3)
+  lit.sky.forEach(({m,type})=>{m.opacity=type==='night'?night:dusk*.8})
+  hemi.intensity=.3+.34*day;hemi.color.setHex(0xffd9b0).lerp(HEMI_DAY,day)
+  sun.intensity=.68*day;sun.color.setHex(0xff9d5c).lerp(SUN_DAY,1-dusk)
+  // Morning from the left-hand windows, high at midday, and low through the back ones by evening.
+  const arc=Math.PI*Math.min(1,Math.max(0,(hour-6)/13)),R=Math.max(floorSize.W||30,floorSize.D||30)
+  sun.position.set(-Math.cos(arc)*R,Math.max(.25,Math.sin(arc))*R*.95,-R*.55)
+  sun.shadow.needsUpdate=true
+  lit.lights.forEach(light=>{light.intensity=.12+1.35*night})
+  lit.bulb.color.setHex(0x8d7f6a).lerp(BULB_ON,Math.max(.3,night))
+  lit.pool.opacity=.04+.5*night
+  if(lit.sunPatch)lit.sunPatch.opacity=.11*day
+  if(lit.ceiling)lit.ceiling.color.setScalar(.42+.58*day)
+  lit.strip.color.setScalar(.5+.5*Math.max(day,night*.75))
+  scene.background.setHex(0x0d1420).lerp(SKY_DAY,day)
+}
 function build(){
   const buildStart=performance.now()
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
+  scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[]
   const spaces=planSpaces(),perRow=Math.max(2,Math.ceil(Math.sqrt(spaces.length)))
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
-  const rowW=row=>row.reduce((n,z)=>n+z.W,0)+(row.length-1)*AISLE_GAP, rowD=row=>Math.max(...row.map(z=>z.D))
+  const rowW=row=>row.reduce((n,z,i)=>n+z.W+(i?(z.kind==='office'?OFFICE_GAP:AISLE_GAP):0),0), rowD=row=>Math.max(...row.map(z=>z.D))
   const W=Math.max(16,...rows.map(rowW))+3, D=Math.max(12,rows.reduce((n,r)=>n+rowD(r),0)+(rows.length-1)*AISLE_GAP)+3.2
   visitors=0
   // The room runs on past the camera, so there's no edge to see from inside it.
   const REACH=70,H=WALL_HEIGHT,back=-D/2,left=-W/2,longX=W+REACH,longZ=D+REACH,midX=REACH/2,midZ=REACH/2
   const floor=new THREE.Mesh(new THREE.PlaneGeometry(longX,longZ),new THREE.MeshLambertMaterial({map:FLOOR_T(Math.ceil(Math.max(longX,longZ)/3))})); floor.rotation.x=-Math.PI/2; floor.position.set(midX,0,midZ); floor.receiveShadow=true; world.add(floor)
   floorSize={W,D}
-  const glass=(width,skyTex,place)=>{const pane=new THREE.Mesh(new THREE.PlaneGeometry(width,H),new THREE.MeshBasicMaterial({map:skyTex}));place(pane);world.add(pane)}
-  glass(longX,skyline(137,longX/27),m=>m.position.set(midX,H/2,back-.08))
-  glass(longZ,skyline(911,longZ/27),m=>{m.rotation.y=Math.PI/2;m.position.set(left-.08,H/2,midZ)})
+  const glass=(width,seed,rx,place)=>{
+    const layer=(map,type)=>{const m=new THREE.MeshBasicMaterial({map,transparent:Boolean(type),depthWrite:!type});const pane=new THREE.Mesh(new THREE.PlaneGeometry(width,H),m);place(pane);if(type)lit.sky.push({m,type});return pane}
+    world.add(layer(skyline(seed,rx)))
+    const night=layer(skyline(seed,rx,true),'night'),dusk=layer(duskSky(rx),'dusk')
+    night.renderOrder=1;dusk.renderOrder=2;world.add(night,dusk)
+  }
+  glass(longX,137,longX/27,m=>m.position.set(midX,H/2,back-.08))
+  glass(longZ,911,longZ/27,m=>{m.rotation.y=Math.PI/2;m.position.set(left-.08,H/2,midZ)})
   // A low dark sill and slim bronze frames, with concrete columns at every third bay.
   const FRAME=0x2b2a2a,COLUMN=0xcfccc4
   box(world,longX,.46,.2,0x3a3836,midX,.23,back);box(world,.2,.46,longZ,0x3a3836,left,.23,midZ)
@@ -942,25 +1010,24 @@ function build(){
     for(let x=0;x<w;x+=32){g.fillStyle='#c9c4b8';g.fillRect(x,0,4,w);g.fillStyle='#f6f4ee';g.fillRect(x+4,0,3,w)}
     g.fillStyle='#b4afa3';g.fillRect(0,0,w,5)
   },longX/3.6,longZ/3.6)}))
-  ceiling.rotation.x=Math.PI/2;ceiling.position.set(midX,H,midZ);world.add(ceiling)
+  ceiling.rotation.x=Math.PI/2;ceiling.position.set(midX,H,midZ);world.add(ceiling);lit.ceiling=ceiling.material
   // Long, slim lights in rows, each in a dark channel.
-  const lamp=new THREE.MeshBasicMaterial({color:0xfffbee}),channel=new THREE.MeshBasicMaterial({color:0x8f8c86})
+  const lamp=lit.strip,channel=new THREE.MeshBasicMaterial({color:0x8f8c86})
   for(let z=back+3.6;z<back+longZ;z+=7.2)for(let x=left+2.5;x<left+longX;x+=9){
     const trim=new THREE.Mesh(new THREE.PlaneGeometry(6.2,.3),channel);trim.rotation.x=Math.PI/2;trim.position.set(x,H-.015,z);world.add(trim)
     const light=new THREE.Mesh(new THREE.PlaneGeometry(6,.16),lamp);light.rotation.x=Math.PI/2;light.position.set(x,H-.025,z);world.add(light)
   }
   // Sun falling through the back windows.
-  const sunMat=new THREE.MeshBasicMaterial({color:0xfff0d0,transparent:true,opacity:.1,depthWrite:false})
+  const sunMat=new THREE.MeshBasicMaterial({color:0xfff0d0,transparent:true,opacity:.1,depthWrite:false});lit.sunPatch=sunMat
   for(let i=0,n=Math.max(3,Math.round(W/5));i<n;i++){const patch=new THREE.Mesh(new THREE.PlaneGeometry(W/n*.62,D*.82),sunMat);patch.rotation.x=-Math.PI/2;patch.position.set(left+(i+.5)*W/n+1,.012,back+D*.43);world.add(patch)}
   plant(world,left+.8,back+.8,1.25);plant(world,-left-.9,back+.8,1.05);plant(world,left+.8,-back-.9,1)
-  sun.position.set(-W*.25,H*3.2,-D*.1+D*.6)
   const reach=Math.max(W,D)*.85
   Object.assign(sun.shadow.camera,{left:-reach,right:reach,top:reach,bottom:-reach,near:.5,far:Math.max(W,D)*3});sun.shadow.camera.updateProjectionMatrix()
   let z0=back+2
   meetingSeats=[];officeSpots=[];breakSeats=[];breakers=0
   rows.forEach(row=>{
     let x0=left+1.5
-    row.forEach(space=>{drawSpace(space,x0,z0);x0+=space.W+AISLE_GAP})
+    row.forEach((space,i)=>{drawSpace(space,x0,z0);x0+=space.W+(row[i+1]?.kind==='office'?OFFICE_GAP:AISLE_GAP)})
     z0+=rowD(row)+AISLE_GAP
   })
   // Each area's floor is woven carpet in a quieter shade of its colour.
@@ -971,6 +1038,7 @@ function build(){
   })
   actors.filter(a=>a.walkPending).forEach(startWalk)
   mergeFurniture()
+  applyTimeOfDay()
   fitDirty=true
   perf.buildMs=performance.now()-buildStart
 }
@@ -980,7 +1048,8 @@ function fitCamera(){
   const first=!view.fitted
   fitDirty=false;view.fitted=true
   const {W,D}=floorSize,ceilingRoom=(WALL_HEIGHT-1.2-home.center.y)/Math.sin(home.el)
-  home.dist=Math.min(Math.max(14,Math.max(W,D)*.62),ceilingRoom)
+  home.dist=Math.min(Math.max(12,Math.max(W,D)*.43),ceilingRoom)
+  home.center.set(W*.1,home.center.y,D*.14)
   if(first){view.dist=home.dist;view.center.copy(home.center)}
 }
 // Ribbed black rubber under the desks and chairs.
@@ -1152,6 +1221,7 @@ function drawSpace(space,x0,z0){
   drawingKey=key
   const label=(name)=>addZoneTag(name,cx,z0-.2,key)
   if(kind==='team'){
+    pendant(cx-W*.22,cz);pendant(cx+W*.22,cz,false)
     const {team}=space,uniform=new THREE.Color(uniformOf(team.lead.project)),isTeam=team.members.length>1
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
@@ -1175,14 +1245,16 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key,rug:'crimson'}));label('Lounge')
     if(REAL_FURNITURE)realLounge(world,x0,cx,cz,W,D)
     else{rug(world,cx,cz+1.15,W-1.6,3.5,0x2d7f8c,0xe9dcc4);couch(world,cx,cz-.1,W-1.2);coffeeTable(world,cx,cz+1.9,Math.min(2.8,W*.36));armchair(world,x0+1.15,cz+2.15,1.15);if(W>9)armchair(world,x0+W-1.15,cz+2.15,-1.15);floorLamp(world,x0+.55,cz-.9)}
-    const places=space.people.length+space.breaks,spotAt=i=>loungeSpot(cx,W,i,places)
-    space.people.forEach((p,i)=>{const a=seat(p,spotAt(i),cz+.08,0,front,'sit',-.1);addTag(a,false);dress(a)})
-    breakSeats=Array.from({length:space.breaks},(_,i)=>({x:spotAt(space.people.length+i),z:cz+.08,face:0,y:-.1}))
+    const places=space.people.length+space.breaks,spotAt=i=>loungeSeat(cx,cz,W,i,places)
+    space.people.forEach((p,i)=>{const spot=spotAt(i),a=seat(p,spot.x,spot.z,spot.face,front,'sit',-.1);addTag(a,false);dress(a)})
+    breakSeats=Array.from({length:space.breaks},(_,i)=>({...spotAt(space.people.length+i),y:-.1}))
+    pendant(cx+.55,cz+1.25);pendant(cx-1.8,cz+.2,false)
     if(REAL_FURNITURE)kitchen(world,x0+W-1.5,z0)
     else{box(world,2.4,1.02,.75,WOOD,x0+W-1.5,.51,z0+.45);box(world,.42,.5,.38,CHARCOAL,x0+W-2.1,1.27,z0+.45);box(world,.26,.05,.2,SILVER,x0+W-2.1,1.08,z0+.58);coffee(world,x0+W-1.1,z0+.5,0);coffee(world,x0+W-.75,z0+.32,1)}
     if(!REAL_FURNITURE)plant(world,x0+W-.6,z0+D-.7,.9)
   }
   if(kind==='meeting'){
+    pendant(cx,cz)
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Meeting room')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     const top=new THREE.Mesh(new THREE.CylinderGeometry(1,1,.1,40),mat(WOOD));top.scale.set(2.5,1,1.1);top.position.set(cx,1,cz);top.castShadow=top.receiveShadow=true;world.add(top)
@@ -1191,6 +1263,7 @@ function drawSpace(space,x0,z0){
     box(world,2.4,1.25,.05,WHITE,cx+1.2,1.75,z0+.08)
   }
   if(kind==='office'){
+    pendant(cx-.2,cz+.3)
     deskTopic='general'
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Your office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
@@ -1211,7 +1284,6 @@ function drawSpace(space,x0,z0){
       attachScreen(a,screen);addTag(a,false);dress(a)
     }
     plant(world,x0+W-.6,z0+.7,1.1)
-    plant(world,x0+.65,z0+D-.6,.9)
     credenza(world,x0+1.5,z0+.3)
     bookcase(world,x0+.24,cz-1.3)
     directoryBoard(x0,cz-.9)
@@ -1227,7 +1299,7 @@ function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSiz
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 let drag=null,moved=false
 canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
-canvas.addEventListener('pointermove',e=>{if(!drag&&directory){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;if(over!==directory.hover){directory.hover=over;canvas.style.cursor=over?'pointer':'';drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.14,drag.el+dy*.004))})
+canvas.addEventListener('pointermove',e=>{if(!drag&&directory){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;if(over!==directory.hover){directory.hover=over;canvas.style.cursor=over?'pointer':'';drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
 canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=ray.intersectObjects(actors.map(a=>a.g),true)[0];const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
@@ -1235,6 +1307,7 @@ let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
 function loop(){const t=clock.getElapsedTime()
   if(fitDirty)fitCamera()
+  if(t-lastDaylight>60){lastDaylight=t;applyTimeOfDay()}
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
