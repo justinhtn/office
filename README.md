@@ -1,6 +1,6 @@
 # Agent Office
 
-A local workspace for your Claude Code sessions. Each session is a character in an N64-style 3D office, grouped into project rooms and teams. Click one to read its conversation, see its changes, browse its files and send it a message.
+A local workspace for your Claude Code sessions. Each session is a character in an N64-style 3D office, grouped into project rooms and teams. Click one to open that session in the Claude app, and see what it has made, its changes and its files beside the room.
 
 It runs entirely on your computer and uses your existing Claude Code login.
 
@@ -19,11 +19,11 @@ cd office
 ./scripts/install.sh
 ```
 
-Then open a new Claude Code session in the desktop app, and go to <http://localhost:8794>.
+Then open a new Claude Code session in the desktop app, and go to <http://localhost:8794>. Clicks in the office switch the Claude app's session, and you chat and approve there. The app's browser pane belongs to one session, so it hides when you switch; run the office in Chrome or Safari to keep it on screen.
 
 ## How it works
 
-- **Plugin (`plugin/`)** runs in every Claude Code session. One session at a time publishes the session list, and any session can answer a request for a transcript or a message.
+- **Plugin (`plugin/`)** runs in every Claude Code session. One session at a time publishes the session list, and any session can answer a request for a transcript.
 - **Server (`server/`)** runs in the background. It assigns names, tracks status, and serves files and git information from each session's folder.
 - **Interface (`web/`)** is a React app with the 3D room, chat, changes and files.
 
@@ -40,7 +40,7 @@ Session data needs at least one Claude Code session open. Without one, the offic
 
 ## Limits
 
-- Agents' approval requests must still be answered in the Claude app.
+- Messages and approvals happen in the Claude app, not the office.
 - macOS may block the server from folders such as `Documents`. Grant access in System Settings, or keep projects elsewhere.
 - This depends on an early-access plugin API and the desktop app's session tools, so an update could break it.
 

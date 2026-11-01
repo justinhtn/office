@@ -40,6 +40,8 @@ MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
 JOB_MAX_AGE_S = 6 * 3600
 COFFEE_BREAK_S = 180
+# Marks a relayed message as typed in the office. A label for the page, not proof of who wrote it.
+OFFICE_MARK = "[Typed by the person in Agent Office]"
 CAST = {
     "f": ["Female_Adult_01", "Female_Adult_03", "Female_Adult_04", "Female_Adult_07", "Female_Adult_08",
           "Female_Adult_12", "Female_Adult_13", "Female_Adult_17", "Female_Party_02", "Business_Female_01"],
@@ -60,6 +62,7 @@ MEDIA_TYPES = {
 }
 PAGE_SIZE = 300
 MAX_TOOL_OUTPUT = 6000
+ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 HIDDEN_TOOLS = re.compile(r"^(mcp__ccd_turn__|mcp__ccd_session__mark_chapter|ToolSearch$|mcp__visualize__read_me)")
 ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
@@ -480,6 +483,8 @@ class Transcripts:
         text = re.sub(r"<system-reminder>.*?</system-reminder>", "", text, flags=re.S)
         text = re.sub(r"^\[Image: [^\]]*\]\s*", "", text, flags=re.M).strip()
         peer = re.search(r'<cross-session-message[^>]*from-name="([^"]*)"[^>]*>(.*?)</cross-session-message>', text, re.S)
+        if peer and peer.group(2).strip().startswith(OFFICE_MARK):
+            return {"role": "user", "body": peer.group(2).strip()[len(OFFICE_MARK):].strip()}
         if peer:
             source = re.search(r'<cross-session-message[^>]*\bfrom="(local_[0-9a-f-]+)"', text)
             return {"role": "peer", "from": peer.group(1), "fromId": source.group(1) if source else "", "body": peer.group(2).strip()}
@@ -534,10 +539,11 @@ class Transcripts:
         return plan
 
     def parse(self, session_id, path):
-        messages, seen_tools, activity = [], set(), {}
+        messages, seen_tools, activity, artifacts = [], set(), {}, {}
         plan, turn_started, last_peer = [], "", None
         helpers, jobs = {}, {}
         recent = []
+        queued = set()
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 # A background helper's finish is queued as its own kind of record.
@@ -545,6 +551,17 @@ class Transcripts:
                     for done_id in re.findall(r"<tool-use-id>([^<\\]+)</tool-use-id>", line):
                         helpers.pop(done_id, None)
                         jobs.pop(done_id, None)
+                    # A message sent while the agent is busy is stored as a queued command.
+                    if '"type":"attachment"' in line and "queued_command" in line:
+                        try:
+                            attachment = json.loads(line).get("attachment") or {}
+                        except ValueError:
+                            attachment = {}
+                        prompt = attachment.get("prompt") if attachment.get("type") == "queued_command" else None
+                        cleaned = self.clean_user_text(prompt) if isinstance(prompt, str) else None
+                        if cleaned and cleaned.get("role") in ("user", "peer") and (cleaned["role"], cleaned["body"]) not in queued:
+                            queued.add((cleaned["role"], cleaned["body"]))
+                            messages.append(cleaned)
                     continue
                 if '"type":"user"' not in line and '"type":"assistant"' not in line:
                     continue
@@ -567,7 +584,9 @@ class Transcripts:
                             helpers.pop(done_id, None)
                             jobs.pop(done_id, None)
                         cleaned = self.clean_user_text(block.get("text", ""))
-                        if cleaned:
+                        if cleaned and (cleaned["role"], cleaned.get("body")) in queued:
+                            queued.discard((cleaned["role"], cleaned.get("body")))
+                        elif cleaned:
                             messages.append(cleaned)
                             turn_started = record.get("timestamp", turn_started)
                             if cleaned.get("fromId"):
@@ -583,6 +602,10 @@ class Transcripts:
                             text = json.dumps(block.get("content"))[:400]
                             if block.get("is_error") or not re.search(r"background|launched|async", text, re.I):
                                 helpers.pop(block.get("tool_use_id"), None)
+                        published = artifacts.get(block.get("tool_use_id"))
+                        address = published and not block.get("is_error") and ARTIFACT_URL.search(json.dumps(block.get("content")))
+                        if address:
+                            messages.append({"role": "artifact", "title": published, "url": address.group(0)})
                         item = activity.get(block.get("tool_use_id"))
                         if item is not None:
                             result = block.get("content")
@@ -610,6 +633,8 @@ class Transcripts:
                             if shown:
                                 messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
                         elif not HIDDEN_TOOLS.match(tool):
+                            if tool == "Artifact" and tool_input.get("action", "publish") == "publish":
+                                artifacts[block.get("id")] = str(tool_input.get("title") or Path(str(tool_input.get("file_path") or "Artifact")).stem)[:80]
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label, detail = self.describe_tool(tool, tool_input)
@@ -672,6 +697,18 @@ class Transcripts:
             "plan": cached[1]["plan"],
             "turnStartedAt": cached[1]["turnStartedAt"],
         }
+
+    def outputs(self, session_id):
+        parsed = self.load(session_id)[1]
+        newest_first = [m for m in reversed(parsed["messages"]) if m["role"] in ("media", "artifact")]
+        seen, outputs = set(), []
+        for output in newest_first:
+            key = output.get("url") or output["files"][0]["url"]
+            if key not in seen:
+                seen.add(key)
+                outputs.append(output)
+
+        return {"outputs": outputs, "plan": parsed["plan"], "turnStartedAt": parsed["turnStartedAt"]}
 
 
 TRANSCRIPTS = Transcripts()
@@ -826,6 +863,9 @@ class Handler(BaseHTTPRequestHandler):
                 known_session(session_id)
                 before = query.get("before")
                 self.reply(200, TRANSCRIPTS.page(session_id, int(before) if before else None))
+            elif url.path == "/api/outputs":
+                known_session(session_id)
+                self.reply(200, TRANSCRIPTS.outputs(session_id))
             elif url.path == "/api/media-link":
                 known_session(session_id)
                 self.reply(200, media_link(session_id, query.get("path", "")))
@@ -858,14 +898,19 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/send", "/api/seen", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
+            if route not in ("/api/seen", "/api/open", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
                 raise Refused(413, "That message is too long.")
             body = json.loads(self.rfile.read(length))
-            session_id, message = body.get("id", ""), str(body.get("message", "")).strip()
+            session_id = body.get("id", "")
             known_session(session_id)
+            if route == "/api/open":
+                # The app's browser pane won't follow claude:// links, so the Mac opens it.
+                subprocess.run(["open", f"claude://claude.ai/epitaxy/{session_id}"], check=True, timeout=10)
+                self.reply(200, {"status": "ok"})
+                return
             if route == "/api/rename":
                 name = str(body.get("name", "")).strip()
                 if not AGENT_NAME.match(name):
@@ -888,16 +933,8 @@ class Handler(BaseHTTPRequestHandler):
                 OFFICE.clear_requests(session_id)
                 self.reply(200, {"status": "ok"})
                 return
-            if route == "/api/seen":
-                OFFICE.mark_seen(session_id)
-                self.reply(200, {"status": "ok"})
-                return
-            if not message or len(message) > MAX_MESSAGE:
-                raise Refused(400, "Enter a message under 20,000 characters.")
-            result = bridge_call({"action": "send", "session": session_id, "message": message})
-            if result.get("status") == "ok":
-                OFFICE.clear_requests(session_id)
-            self.reply(200, result)
+            OFFICE.mark_seen(session_id)
+            self.reply(200, {"status": "ok"})
         except Refused as refused:
             self.reply(refused.status, {"error": str(refused)})
         except ValueError:

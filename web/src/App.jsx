@@ -1,16 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Command } from 'cmdk'
 import { DiffEditor, Editor } from '@monaco-editor/react'
 import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
-  Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, MessageSquare,
-  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, SendHorizontal, X,
+  Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
+  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, X,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { CAST, createScene, helperCast, portrait } from './scene.js'
-import { age, api, parseTranscript, parseTranscriptHeader, teamsOf, withId } from './api.js'
+import { age, api, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
@@ -189,39 +187,6 @@ function Stage({ files, caption, onClose }) {
   )
 }
 
-// Runs of steps collapse into one line, so the conversation stays readable.
-function groupActivity(messages) {
-  const grouped = []
-  messages.forEach(message => {
-    const last = grouped[grouped.length - 1]
-    if (message.role === 'activity' && last?.role === 'steps') last.steps.push(message)
-    else if (message.role === 'activity') grouped.push({ role: 'steps', steps: [message] })
-    else grouped.push(message)
-  })
-
-  return grouped
-}
-
-function Steps({ steps }) {
-  const failed = steps.filter(step => step.isError).length
-
-  return (
-    <details className="steps">
-      <summary>
-        {steps.length === 1 ? steps[0].body : `${steps.length} steps · ${steps[steps.length - 1].body}`}
-        {failed > 0 && <span className="failed"> · {failed} failed</span>}
-      </summary>
-      {steps.map((step, index) => (
-        <details key={index} className={`step ${step.isError ? 'failed' : ''}`}>
-          <summary>{step.body}</summary>
-          {step.detail && <pre>{step.detail}</pre>}
-          {step.output && <pre>{step.output}</pre>}
-        </details>
-      ))}
-    </details>
-  )
-}
-
 function Plan({ plan }) {
   const done = plan.filter(item => item.status === 'completed').length
 
@@ -271,193 +236,48 @@ function Helpers({ person }) {
   )
 }
 
-function Chat({ person, onPick, onExpand }) {
-  const [latest, setLatest] = useState(null)
-  const [older, setOlder] = useState([])
-  const [cursor, setCursor] = useState(null)
-  const [total, setTotal] = useState(null)
-  const [plan, setPlan] = useState([])
-  const [turnStartedAt, setTurnStartedAt] = useState('')
-  const [isLoadingOlder, setIsLoadingOlder] = useState(false)
+// Chat and approvals happen in the Claude app, so this shows what an agent has made.
+function Outputs({ person, onExpand }) {
+  const [data, setData] = useState(null)
   const [error, setError] = useState('')
-  const [draft, setDraft] = useState('')
-  const [state, setState] = useState('')
-  const [isSending, setIsSending] = useState(false)
-  const end = useRef(null)
-  const scroller = useRef(null)
-  const hasPagedBack = useRef(false)
-  const useBridge = useRef(false)
-  const fetchPage = useCallback(async before => {
-    if (!useBridge.current) {
-      try {
-        const data = await api(withId('/api/messages', person.id, before !== undefined ? { before } : {}))
-
-        return { messages: data.messages, total: data.total, cursor: data.cursor, plan: data.plan, turnStartedAt: data.turnStartedAt }
-      } catch {
-        // The transcript file format is internal, so fall back to the app's own tool.
-        useBridge.current = true
-      }
-    }
-    const data = await api(withId('/api/transcript', person.id, before ? { before } : {}))
-    if (data.status !== 'ok') throw new Error(data.error || "Couldn't read this session.")
-
-    return { messages: parseTranscript(data.text || ''), ...parseTranscriptHeader(data.text || '') }
-  }, [person.id])
-  // Long tool runs can fill a whole page with nothing to show, so keep going back.
-  const fetchUntilVisible = useCallback(async before => {
-    let page = await fetchPage(before)
-    for (let tries = 0; page.messages.length === 0 && page.cursor != null && tries < EMPTY_PAGE_RETRIES; tries++) {
-      page = await fetchPage(page.cursor)
-    }
-
-    return page
-  }, [fetchPage])
-  const load = useCallback(async () => {
-    try {
-      const page = await fetchUntilVisible()
-      setLatest(page.messages)
-      setTotal(page.total)
-      setPlan(page.plan || [])
-      setTurnStartedAt(page.turnStartedAt || '')
-      if (!hasPagedBack.current) setCursor(page.cursor)
-      setError('')
-    } catch (failure) {
-      setError(failure.message)
-    }
-  }, [fetchUntilVisible])
   useEffect(() => {
-    setLatest(null)
-    setOlder([])
-    setCursor(null)
-    setTotal(null)
-    setPlan([])
-    setTurnStartedAt('')
-    hasPagedBack.current = false
+    setData(null)
     setError('')
-    setState('')
+    const load = () => api(withId('/api/outputs', person.id)).then(
+      next => { setData(next); setError('') },
+      failure => setError(failure.message),
+    )
     load()
     const timer = setInterval(load, 8000)
 
     return () => clearInterval(timer)
-  }, [load])
-  async function loadOlder() {
-    const box = scroller.current
-    const fromBottom = box.scrollHeight - box.scrollTop
-    setIsLoadingOlder(true)
-    try {
-      const page = await fetchUntilVisible(cursor)
-      hasPagedBack.current = true
-      setOlder(current => [...page.messages, ...current])
-      setCursor(page.cursor)
-      requestAnimationFrame(() => {
-        box.scrollTop = box.scrollHeight - fromBottom
-      })
-    } catch (failure) {
-      setError(failure.message)
-    } finally {
-      setIsLoadingOlder(false)
-    }
-  }
-  const messages = latest && groupActivity([...older, ...latest])
-  const newestCount = latest?.length
-  useEffect(() => {
-    end.current?.scrollIntoView()
-  }, [newestCount])
-
-  async function send(event) {
-    event.preventDefault()
-    const message = draft.trim()
-    if (!message) {
-      setState('Enter a message first.')
-
-      return
-    }
-    setIsSending(true)
-    setState('Sending…')
-    try {
-      const data = await api('/api/send', { id: person.id, message })
-      if (data.status !== 'ok') throw new Error(data.error || 'Not delivered.')
-      setDraft('')
-      setState(/queued/i.test(data.text || '') ? `Queued for ${person.name}` : `Delivered to ${person.name}`)
-      load()
-    } catch (failure) {
-      setState(failure.message)
-    } finally {
-      setIsSending(false)
-    }
-  }
+  }, [person.id])
 
   return (
     <div className="chat">
-      <WorkingLine person={person} plan={plan} turnStartedAt={turnStartedAt} />
+      {data && <WorkingLine person={person} plan={data.plan} turnStartedAt={data.turnStartedAt} />}
       <Helpers person={person} />
-      {plan.length > 0 && <Plan plan={plan} />}
-      <div className="scroll pad messages" ref={scroller}>
+      {data?.plan.length > 0 && <Plan plan={data.plan} />}
+      <div className="scroll pad messages">
         {error && <p className="error">{error}</p>}
-        {latest && (cursor != null ? (
-          <button className="load-older" disabled={isLoadingOlder} onClick={loadOlder}>
-            {isLoadingOlder ? 'Loading…' : 'Load earlier messages'}
-          </button>
-        ) : <div className="tool">Start of available history</div>)}
-        {total !== null && cursor != null && <div className="tool">{total} items in this conversation</div>}
-        {!error && !messages && <Empty text="Loading conversation…" />}
-        {messages?.length === 0 && <Empty text="No messages yet." />}
-        {messages?.map((message, index) =>
-          message.role === 'steps' ? (
-            <Steps key={index} steps={message.steps} />
-          ) : message.role === 'recap' ? (
-            <aside key={index} className="recap">
-              <b>Where it stands</b>
-              <p>{message.body}</p>
-              {message.ask && <p className="recap-ask">{message.ask}</p>}
-            </aside>
-          ) : message.role === 'media' ? (
-            <article key={index} className="bubble assistant media">
-              <header><Avatar person={person} size={18} />{person.name}</header>
-              {message.caption && <p>{message.caption}</p>}
-              <div className="media-row">
-                {message.files.map(file => <div key={file.url} className="media-item"><MediaItem file={file} controls /></div>)}
-              </div>
-              <button className="expand" onClick={() => onExpand(message.files, message.caption)}>
-                <Maximize2 size={12} /> {message.files.filter(file => file.kind === 'video').length > 1 ? 'Compare side by side' : 'Open large'}
-              </button>
-            </article>
-          ) : message.role === 'tool' ? (
-            <div key={index} className="tool">{message.isNote ? message.body : `Used ${message.body}`}</div>
-          ) : message.role === 'result' ? (
-            <div key={index} className="tool">{message.body}</div>
-          ) : (
-            <article key={index} className={`bubble ${message.role}`}>
-              <header>{message.role === 'assistant' && <Avatar person={person} size={18} />}{message.role === 'user' ? 'You' : message.role === 'peer' ? message.from : person.name}</header>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  a: ({ href = '', children }) =>
-                    href.startsWith('#local_')
-                      ? <button className="link" onClick={() => onPick(href.slice(1))}>{children}</button>
-                      : <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-                }}
-              >{message.body}</ReactMarkdown>
-            </article>
-          ),
-        )}
-        <div ref={end} />
+        {!error && !data && <Empty text="Loading…" />}
+        {data?.outputs.length === 0 && <Empty text="Videos, images and artifacts this agent shares will appear here." />}
+        {data?.outputs.map(output => output.role === 'artifact' ? (
+          <a key={output.url} className="artifact" href={output.url} target="_blank" rel="noreferrer">
+            <FileIcon size={14} /><span><b>{output.title}</b><small>Artifact</small></span><ExternalLink size={13} />
+          </a>
+        ) : (
+          <article key={output.files[0].url} className="bubble assistant media">
+            {output.caption && <p>{output.caption}</p>}
+            <div className="media-row">
+              {output.files.map(file => <div key={file.url} className="media-item"><MediaItem file={file} controls /></div>)}
+            </div>
+            <button className="expand" onClick={() => onExpand(output.files, output.caption)}>
+              <Maximize2 size={12} /> {output.files.filter(file => file.kind === 'video').length > 1 ? 'Compare side by side' : 'Open large'}
+            </button>
+          </article>
+        ))}
       </div>
-      <form className="composer" onSubmit={send}>
-        <textarea
-          value={draft}
-          onChange={event => setDraft(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send(event)
-          }}
-          placeholder={`Message ${person.name}. Press fn twice to dictate.`}
-          aria-label={`Message ${person.name}`}
-        />
-        <div className="composer-row">
-          <small>{state || 'Sends as this session · ⌘↵'}</small>
-          <button className="primary" disabled={isSending}><SendHorizontal size={14} /> Send</button>
-        </div>
-      </form>
     </div>
   )
 }
@@ -637,7 +457,7 @@ const isActive = person =>
   person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
-  { id: 'chat', label: 'Chat', icon: MessageSquare },
+  { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'changes', label: 'Changes', icon: FileDiff },
   { id: 'files', label: 'Files', icon: FolderTree },
 ]
@@ -728,7 +548,7 @@ function Session({ person, everyone, teams, tab, onTab, onClose, onPick }) {
       </nav>
       {person.request && <RequestBanner person={person} onShow={show} />}
       {stage && <Stage files={stage.files} caption={stage.caption} onClose={() => setStage(null)} />}
-      {tab === 'chat' && <Chat key={person.id} person={person} onPick={onPick} onExpand={(files, caption) => setStage({ files, caption })} />}
+      {tab === 'outputs' && <Outputs person={person} onExpand={(files, caption) => setStage({ files, caption })} />}
       {tab === 'changes' && <Changes person={person} />}
       {tab === 'files' && <Files person={person} initialPath={showPath} onMedia={show} />}
     </section>
@@ -766,7 +586,7 @@ export default function App() {
   const [updatedAt, setUpdatedAt] = useState('')
   const [problem, setProblem] = useState('')
   const [selected, setSelected] = useState(null)
-  const [tab, setTab] = useState('chat')
+  const [tab, setTab] = useState('outputs')
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
@@ -828,7 +648,9 @@ export default function App() {
     const target = everyone.find(other => other.id === id)
     setSelected(id)
     setPlace(null)
-    setTab('chat')
+    setTab('outputs')
+    // The left side of the Claude app follows whoever is clicked here.
+    api('/api/open', { id }).catch(failure => setProblem(failure.message))
     setIsAwayOpen(false)
     setIsPaletteOpen(false)
     if (target?.isFinished) api('/api/seen', { id }).catch(() => {})

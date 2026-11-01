@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 // Runs in every Claude Code session. One session at a time publishes the session
 // list. Any session can answer a request, and an atomic mkdir decides which one does,
-// so a message is never sent twice.
+// so a request is never answered twice.
 const PUBLISH_MS = 10_000
 const BRIDGE_MS = 1_000
 const LEASE_MS = 30_000
@@ -25,7 +25,7 @@ type Listed = {
   parentSessionId?: string
   group?: { name?: string } | null
 }
-type BridgeRequest = { action?: string; session?: string; message?: string; before?: string }
+type BridgeRequest = { action?: string; session?: string; before?: string }
 type Person = { id: string; name: string; title: string; project: string; startedBy?: string }
 
 let selfId = ''
@@ -127,12 +127,7 @@ async function answer(
             limit: 300,
             ...(request.before ? { before_uuid: request.before } : {}),
           })
-        : request.action === 'send' && request.message
-          ? await $.mcp.call(SESSION_TOOLS, 'send_message', {
-              session_id: request.session,
-              message: request.message,
-            })
-          : undefined
+        : undefined
     if (!result) return { status: 'error', error: 'Unknown request.' }
     const text = textOf(result)
 

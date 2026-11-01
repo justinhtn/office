@@ -93,9 +93,6 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .bubble a { color: var(--accent-text); }
 .load-older { flex: none; align-self: center; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; }
 .load-older:hover { background: var(--bg-hover); color: var(--text); }
-.composer { flex: none; padding: 10px; border-top: 1px solid var(--line); }
-.composer textarea { display: block; width: 100%; min-height: 64px; resize: vertical; padding: 8px; font: inherit; color: var(--text); background: var(--bg-soft); border: 1px solid var(--line); border-radius: 5px; }
-.composer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
 .primary { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; background: var(--accent); color: var(--on-accent); border-radius: 4px; font-weight: 500; }
 .primary:disabled { opacity: .6; cursor: default; }
 
@@ -164,8 +161,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .session-tabs button:hover { color: var(--text); }
 .session-tabs button.on { color: var(--text); font-weight: 500; box-shadow: inset 0 -2px var(--accent); }
 .session .messages { max-width: 860px; width: 100%; margin: 0 auto; }
-.session .composer { width: 100%; max-width: 860px; margin: 0 auto; border-top: 1px solid var(--line); }
-.away-button { font-size: 11px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; }
+.session .away-button { font-size: 11px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; }
 .away-button:hover { color: var(--text); background: var(--bg-hover); }
 .away { width: min(520px, calc(100vw - 32px)); max-height: 70vh; display: flex; flex-direction: column; padding: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .away h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
@@ -272,3 +268,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 @media (prefers-reduced-motion: reduce) { .thought-dots, .thought-task i { animation: none !important; } }
 .tag.lead { background: none; }
 .tag { transform-origin: 50% 100%; }
+.artifact { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; color: inherit; text-decoration: none; }
+.artifact:hover { background: var(--bg-hover); }
+.artifact span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.artifact small { color: var(--muted); }
