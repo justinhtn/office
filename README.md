@@ -45,6 +45,8 @@ She keeps a notebook in `~/.agent-office/notebook` of every team and independent
 
 She has a read-only tool list, so she can read what sessions are doing and add to her notebook, but can't otherwise edit files, run commands or message agents. The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
 
+The TV in your office lists your [Modal](https://modal.com) apps: what's running, what stopped today, and how many deployed apps have no tasks. It needs the `modal` command on your Mac and logged in, and only reads the list, checking once a minute.
+
 ## Privacy and security
 
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.
