@@ -13,8 +13,17 @@ update() {
   fi
   command -v npm >/dev/null 2>&1 || { echo "Agent Office needs npm. Install Node.js to build the interface." >&2; exit 1; }
 
+  # Restarting only helps if the server runs from this checkout.
+  if [ "$(uname)" = Darwin ] && ! launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -qF "$ROOT/server/server.py"; then
+    echo "The office server doesn't run from $ROOT. Run this from the checkout it uses, or run scripts/install.sh here." >&2
+    exit 1
+  fi
+
   git -C "$ROOT" pull --ff-only origin main
-  "$ROOT/scripts/build.sh"
+  "$ROOT/scripts/build.sh" || {
+    echo "The build failed, so the server wasn't restarted. This checkout now has the new code with the old interface, so fix the build and run this again." >&2
+    exit 1
+  }
   if [ "$(uname)" = Darwin ]; then
     launchctl kickstart -k "gui/$(id -u)/$LABEL"
     echo "Agent Office is updated and restarted."

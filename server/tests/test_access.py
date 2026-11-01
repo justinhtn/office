@@ -88,6 +88,7 @@ class SessionFileTests(unittest.TestCase):
             status, page = server.office_page()
         self.assertEqual(status, 503)
         self.assertIn("update.sh", page)
+        self.assertIn("build.sh", page)
         self.assertNotIn(server.TOKEN, page)
 
     def test_a_built_interface_gets_the_token(self):
@@ -123,6 +124,13 @@ class RequestTests(unittest.TestCase):
         response = connection.getresponse()
 
         return response.status, response.read()
+
+    def test_with_no_built_interface_the_page_explains_and_assets_are_missing(self):
+        with mock.patch.object(server, "DIST", WORK / "no-dist"):
+            status, page = self.send("GET", "/")
+            self.assertEqual(status, 503)
+            self.assertIn(b"update.sh", page)
+            self.assertEqual(self.send("GET", "/assets/app.js")[0], 404)
 
     def test_the_right_token_is_let_in(self):
         status, body = self.send("GET", "/api/sessions", token=server.TOKEN)

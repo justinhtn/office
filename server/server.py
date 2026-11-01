@@ -35,6 +35,8 @@ NO_INTERFACE_PAGE = """<!doctype html><meta charset="utf-8"><meta http-equiv="re
 <p>The server is running, but it can't find the built interface. If an update is running, wait for it to finish.</p>
 <p>Otherwise, run this in Terminal:</p>
 <pre style="white-space:pre-wrap">__UPDATE__</pre>
+<p>If this checkout isn't on main, or isn't the one the office normally runs from, run this instead:</p>
+<pre style="white-space:pre-wrap">__BUILD__</pre>
 <p>This page reloads by itself.</p>
 </body>"""
 DATA = Path(os.environ.get("AGENT_OFFICE_HOME", Path.home() / ".agent-office"))
@@ -842,7 +844,7 @@ def office_page():
     try:
         return 200, (DIST / "index.html").read_text().replace("__OFFICE_TOKEN__", TOKEN)
     except FileNotFoundError:
-        return 503, NO_INTERFACE_PAGE.replace("__UPDATE__", html.escape(str(ROOT / "scripts" / "update.sh")))
+        return 503, NO_INTERFACE_PAGE.replace("__UPDATE__", html.escape(str(ROOT / "scripts" / "update.sh"))).replace("__BUILD__", html.escape(str(ROOT / "scripts" / "build.sh")))
 
 
 def asset(relative):
@@ -1725,7 +1727,7 @@ if __name__ == "__main__":
     COMPACTION.mkdir(mode=0o700, exist_ok=True)
     ensure_front_desk()
     if not (DIST / "index.html").exists():
-        print(f"The interface isn't built. Run {ROOT / 'scripts' / 'update.sh'}", file=sys.stderr, flush=True)
+        print(f"The interface isn't built. Run {ROOT / 'scripts' / 'update.sh'}, or {ROOT / 'scripts' / 'build.sh'} outside the checkout the office runs from.", file=sys.stderr, flush=True)
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

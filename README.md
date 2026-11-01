@@ -27,9 +27,9 @@ Then open a new Claude Code session in the desktop app, and go to <http://localh
 ./scripts/update.sh
 ```
 
-This pulls `main`, builds the interface and restarts the server. Run it from the checkout on `main`.
+This pulls `main`, builds the interface and restarts the server. Run it from the checkout on `main` that the server runs from. It doesn't update the plugin, which Claude Code keeps its own copy of.
 
-The built interface in `web/dist` isn't in git. If it's missing, the office shows a page saying how to build it, and reloads by itself once it's there.
+The built interface in `web/dist` isn't in git. If it's missing, the office shows a page saying how to build it, and reloads by itself once it's there. In any other checkout, such as a worktree, build it with `./scripts/build.sh`.
 
 ## How it works
 
