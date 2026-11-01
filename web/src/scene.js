@@ -68,6 +68,11 @@ function clip(sex, pose) {
     clips.set(name, fbx(`${AVATARS}/anim/${name}.fbx`).then(object => {
       const source = object.animations[0]
       const tracks = source.tracks.filter(t => /^Bip01(?!_Footsteps)/.test(t.name) && !/\.scale$/.test(t.name))
+      // The walk carries the body forward and snaps it back each loop, so walking on the spot here lets walk() do the moving.
+      if (pose === 'walk') {
+        const root = tracks.find(t => t.name === 'Bip01.position')
+        if (root) for (let i = 2; i < root.values.length; i += 3) root.values[i] = root.values[2]
+      }
       return new THREE.AnimationClip(pose, source.duration, tracks)
     }))
   }
@@ -1109,7 +1114,7 @@ function rubberMat(parent,x,z,w,d){
   return m
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;world.add(m);return m}
-const WALK_SPEED=2.4, arrived=new Map()
+const WALK_SPEED=1.7, arrived=new Map()
 let walksInProgress=new Map(),coffeeSpot=null,meetingSeats=[],officeSpots=[],breakSeats=[],visitors=0,breakers=0
 const faceToward=(a,x,z)=>{a.g.rotation.y=Math.atan2(x-a.g.position.x,z-a.g.position.z)}
 function startWalk(a){
