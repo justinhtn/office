@@ -920,7 +920,7 @@ function rug(parent,x,z,w,d,edge,fill){
 let people=[], selected=null, actors=[], tags=[], view={az:home.az,el:home.el,dist:30,zoom:0,center:new THREE.Vector3()}
 function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&byId[l.startedBy]&&!seen.has(l.startedBy)){seen.add(l.startedBy);l=byId[l.startedBy]}return l}
 function teamsIn(list){return teamsOf(list.filter(p=>!p.isAssistant))}
-const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
+const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)
 const WALL_HEIGHT=10
 const TEAM_VOLUME_HEIGHT=3
 const PENDANT_Y=5.2
@@ -1204,7 +1204,7 @@ function build(){
   const reach=Math.max(W,D)*.85
   Object.assign(sun.shadow.camera,{left:-reach,right:reach,top:reach,bottom:-reach,near:.5,far:Math.max(W,D)*3});sun.shadow.camera.updateProjectionMatrix()
   let z0=back+2
-  meetingSeats=[];officeSpots=[];breakSeats=[];breakers=0
+  officeSpots=[];breakSeats=[];breakers=0
   rows.forEach(row=>{
     let x0=left+1.5
     row.forEach((space,i)=>{drawSpace(space,x0,z0);x0+=space.W+(row[i+1]?.kind==='office'?OFFICE_GAP:AISLE_GAP)})
@@ -1248,16 +1248,16 @@ function rubberMat(parent,x,z,w,d){
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;world.add(m);return m}
 const WALK_SPEED=1.7, arrived=new Map()
-let walksInProgress=new Map(),coffeeSpot=null,meetingSeats=[],officeSpots=[],breakSeats=[],visitors=0,breakers=0
+let walksInProgress=new Map(),coffeeSpot=null,officeSpots=[],breakSeats=[],visitors=0,breakers=0
 const faceToward=(a,x,z)=>{a.g.rotation.y=Math.atan2(x-a.g.position.x,z-a.g.position.z)}
 function startWalk(a){
   a.walkPending=false
-  const p=a.p,toOffice=Boolean(p.request),toMeeting=!toOffice&&Boolean(p.meetingWith&&p.meetingWith.length)
-  const target=toOffice?officeSpots[visitors++%Math.max(1,officeSpots.length)]:toMeeting?meetingSeats[visitors++%Math.max(1,meetingSeats.length)]:breakSeats[breakers++]
+  const p=a.p,toOffice=Boolean(p.request)
+  const target=toOffice?officeSpots[visitors++%Math.max(1,officeSpots.length)]:breakSeats[breakers++]
   if(!target)return
-  const key=toOffice?`office:${p.request.id}`:toMeeting?`meeting:${[p.id,...p.meetingWith].sort().join()}`:`break:${p.jobs?.[0]}`
+  const key=toOffice?`office:${p.request.id}`:`break:${p.jobs?.[0]}`
   const arrive=toOffice?'wave':'sit'
-  a.visit={target,key,arrive,mug:!toOffice&&!toMeeting}
+  a.visit={target,key,arrive,mug:!toOffice}
   // The room can rebuild mid-walk, and someone should carry on rather than start again from their desk.
   const walking=walksInProgress.get(p.id)
   if(walking?.key===key){
@@ -1292,7 +1292,7 @@ function walk(a,dt){
   }
   a.g.rotation.y=Math.atan2(gap.x,gap.z);a.g.position.add(gap.setLength(step))
 }
-const wantsToWalk=p=>Boolean(p.request&&!p.isOnScreen)||Boolean(p.meetingWith&&p.meetingWith.length)||Boolean(p.isOnBreak)
+const wantsToWalk=p=>Boolean(p.request&&!p.isOnScreen)||Boolean(p.isOnBreak)
 function seat(p,x,z,rotation,front,pose,y=0){
   const a=character(p);a.pose=pose;a.front=front;a.g.position.set(x,y,z);a.g.rotation.y=rotation;world.add(a.g);actors.push(a)
   if(wantsToWalk(p))a.walkPending=true
@@ -1307,12 +1307,11 @@ function glassWall(x,z,length,alongX,height=2.5){
 }
 // The Agent Office app itself, running on a display at the end of the team's table.
 let boards=[]
-const UI={page:'#0b0e13',soft:'#141922',hover:'#2a303a',line:'#222833',text:'#ffffff',muted:'#a6afbb',faint:'#6f7884',accent:'#818cf8',working:'#7cb8ff',workingWash:'#1c3350',waiting:'#f2bb62',waitingWash:'#40301a',asks:'#ff8a80',asksWash:'#4a2124',meeting:'#c4a6f5',meetingWash:'#352a52',idleWash:'#262c35'}
+const UI={page:'#0b0e13',soft:'#141922',hover:'#2a303a',line:'#222833',text:'#ffffff',muted:'#a6afbb',faint:'#6f7884',accent:'#818cf8',working:'#7cb8ff',workingWash:'#1c3350',waiting:'#f2bb62',waitingWash:'#40301a',asks:'#ff8a80',asksWash:'#4a2124',idleWash:'#262c35'}
 function shortAge(iso){const then=Date.parse(iso||'');if(Number.isNaN(then))return'';const m=Math.max(0,Math.round((Date.now()-then)/6e4));return m<60?`${m}m`:m<1440?`${Math.round(m/60)}h`:`${Math.round(m/1440)}d`}
 function statusOfRow(p){
   if(p.request)return{label:'Asking for you',fg:UI.asks,bg:UI.asksWash,rank:0}
   if(p.isCompacting)return{label:'Compacting',fg:UI.waiting,bg:UI.waitingWash,rank:1}
-  if(p.meetingWith?.length)return{label:'In a meeting',fg:UI.meeting,bg:UI.meetingWash,rank:1}
   if(p.isWaiting)return{label:'Waiting on job',fg:UI.waiting,bg:UI.waitingWash,rank:2}
   if(p.isFinished)return{label:'Finished',fg:UI.waiting,bg:UI.waitingWash,rank:3}
   if(p.isRunning)return{label:'Working',fg:UI.working,bg:UI.workingWash,rank:1}
@@ -1461,7 +1460,7 @@ function drawSpace(space,x0,z0){
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     const top=new THREE.Mesh(new THREE.CylinderGeometry(1,1,.1,40),mat(WOOD));top.scale.set(2.5,1,1.1);top.position.set(cx,1,cz);top.castShadow=top.receiveShadow=true;world.add(top)
     const stem=new THREE.Mesh(new THREE.CylinderGeometry(.16,.3,1,10),mat(CHARCOAL));stem.position.set(cx,.5,cz);world.add(stem)
-    for(let i=0;i<8;i++){const side=i<4?-1:1,sx=cx-1.8+(i%4)*1.2,sz=cz+side*1.95;if(REAL_FURNITURE)placeModel(OFFICE_CHAIR,sx,sz,side===-1?0:Math.PI);else chair(world,sx,sz,side);meetingSeats.push({x:sx,z:sz,face:side===-1?0:Math.PI})}
+    for(let i=0;i<8;i++){const side=i<4?-1:1,sx=cx-1.8+(i%4)*1.2,sz=cz+side*1.95;if(REAL_FURNITURE)placeModel(OFFICE_CHAIR,sx,sz,side===-1?0:Math.PI);else chair(world,sx,sz,side)}
     box(world,2.4,1.25,.05,WHITE,cx+1.2,1.75,z0+.08)
   }
   if(kind==='office'){
@@ -1495,7 +1494,7 @@ function drawSpace(space,x0,z0){
   }
 }
 function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();fitDirty=true}
@@ -1721,7 +1720,7 @@ function loop(){const t=clock.getElapsedTime()
     const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
-    // Someone can be away from their team's table, on a break or in a meeting, so go to them.
+    // Someone on a break is away from their team's table, so go to them.
     const chosen=!talker&&spot&&selected&&selected!==focusKey&&actors.find(a=>a.p.id===selected)
     if(chosen&&Math.hypot(chosen.g.position.x-spot.x,chosen.g.position.z-spot.z)>Math.max(spot.W,spot.D)*.6){if(awayView?.id!==selected)awayView={id:selected,az:clearViewOf(chosen)};const offset=awayView.az-view.az;goal.x=chosen.g.position.x;goal.y=chosen.g.position.y+SPEAKER_HEIGHT;goal.z=chosen.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=AWAY_DISTANCE}
     if(talker){if(speakerView===null)speakerView=clearViewOf(talker);const offset=speakerView-view.az;goal.x=talker.g.position.x;goal.y=talker.g.position.y+SPEAKER_HEIGHT;goal.z=talker.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=SPEAKER_DISTANCE}
@@ -1766,7 +1765,7 @@ return {
     if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
     speaker=nextSpeaker
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()

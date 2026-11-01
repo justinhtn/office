@@ -97,7 +97,6 @@ VOICE_MODEL = "eleven_flash_v2_5"
 MAX_SPOKEN = 240
 WATCH_S = 1
 CALL_S = 60
-MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
 JOB_MAX_AGE_S = 6 * 3600
 COFFEE_BREAK_S = 180
@@ -395,7 +394,6 @@ class Office:
         self.was_running = {}
         self.seen_raw = None
         self.requests = {}
-        self.meetings = {}
         self.stamps = {}
         self.snapshot = {"people": [], "updatedAt": ""}
 
@@ -485,12 +483,6 @@ class Office:
         self.assign_avatars(rows)
         ids = {row["id"] for row in rows}
         now = time.time()
-        self.meetings = {pair: until for pair, until in self.meetings.items() if until > now}
-        meetings = {row["id"]: set() for row in rows}
-        for (one, other) in self.meetings:
-            if one in ids and other in ids:
-                meetings[one].add(other)
-                meetings[other].add(one)
         talking, helpers, jobs, job_age, steps, progress, plans, recents = {row["id"]: None for row in rows}, {}, {}, {}, {}, {}, {}, {}
         for row in rows:
             peer, helpers[row["id"]], jobs[row["id"]], job_age[row["id"]], steps[row["id"]], progress[row["id"]], plans[row["id"]], recents[row["id"]] = TRANSCRIPTS.live_state(row["id"])
@@ -508,7 +500,6 @@ class Office:
         people = [
             {
                 **row,
-                "meetingWith": sorted(meetings[row["id"]]),
                 "talkingTo": talking[row["id"]],
                 "helpers": helpers[row["id"]],
                 "jobs": jobs[row["id"]],
@@ -626,8 +617,6 @@ class Office:
                 if has_stopped:
                     self.finished_at[row["id"]] = time.time()
                     self.finished.add(row["id"])
-                    if row.get("startedBy"):
-                        self.meetings[(row["id"], row["startedBy"])] = time.time() + MEETING_S
                 if row.get("isRunning"):
                     self.finished.discard(row["id"])
                 self.was_running[row["id"]] = bool(row.get("isRunning"))

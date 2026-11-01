@@ -120,11 +120,11 @@ class StatusTests(OfficeCase):
         people = self.ingest(row("a"), row("local_b"))
         self.assertEqual((people["a"]["talkingTo"], people["local_b"]["talkingTo"]), ("local_b", "a"))
 
-    def test_finishing_marks_the_session_and_starts_a_meeting_with_its_starter(self):
+    def test_finishing_raises_a_hand_at_the_desk_without_a_meeting(self):
         self.ingest(row("boss"), row("a", isRunning=True, startedBy="boss"))
         people = self.ingest(row("boss"), row("a", isRunning=False, startedBy="boss"))
         self.assertTrue(people["a"]["isFinished"])
-        self.assertEqual((people["a"]["meetingWith"], people["boss"]["meetingWith"]), (["boss"], ["a"]))
+        self.assertNotIn("meetingWith", people["a"])
         self.assertFalse(self.ingest(row("boss"), row("a", isRunning=True, startedBy="boss"))["a"]["isFinished"])
 
     def test_plan_progress_reaches_the_snapshot(self):

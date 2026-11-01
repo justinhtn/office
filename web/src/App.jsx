@@ -57,7 +57,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, m
   )
 }
 
-const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0
+const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request)
 
 // Teams as the office lays them out: anyone idle and alone is in the lounge.
 function officeTeams(active) {
@@ -742,7 +742,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isAssistant || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
+  person.isAssistant || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },
