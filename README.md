@@ -1,6 +1,6 @@
 # Agent Office
 
-A local workspace for your Claude Code sessions. Each session is a character in an N64-style 3D office, grouped into project rooms and teams. Click one to open that session in the Claude app, and see what it has made, its changes and its files beside the room.
+A local workspace for your Claude Code sessions. Each session is a character in an N64-style 3D office, grouped into teams named after their projects. Click one to open that session in the Claude app, and see what it has made, its changes and its files beside the room.
 
 It runs entirely on your computer and uses your existing Claude Code login.
 
@@ -28,6 +28,10 @@ Then open a new Claude Code session in the desktop app, and go to <http://localh
 - **Interface (`web/`)** is a React app with the 3D room, chat, changes and files.
 
 Session data needs at least one Claude Code session open. Without one, the office still opens but shows the last known state.
+
+## Teams
+
+A project is a team, named after its sidebar group or folder. The session that started the others leads it. Sessions with no project stay together if one started another, and anyone left is an independent developer. Open someone in the office to move them to another team or rename theirs. The plugin files each team's sessions under a sidebar group of the same name, trying each move once.
 
 ## Your assistant
 

@@ -288,3 +288,9 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .assistant-setup { align-self: flex-start; }
 .memory { display: flex; flex-direction: column; gap: 3px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .memory small { color: var(--muted); }
+.team-choice { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.team-choice label { display: flex; align-items: center; gap: 6px; }
+.team-choice select { max-width: 170px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+.team-rename { display: inline-flex; align-items: center; gap: 4px; }
+.font-choice { display: flex; align-items: center; gap: 8px; }
+.font-choice select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }

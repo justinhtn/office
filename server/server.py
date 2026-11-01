@@ -49,6 +49,9 @@ COMPACTING_MAX_AGE_S = 900
 NOTEBOOK = DATA / "notebook"
 NOTEBOOK_INDEX = NOTEBOOK / "index.json"
 NOTEBOOK_EVERY_S = 60
+TEAMS = DATA / "teams.json"
+NO_PROJECT = {"No folder", "Other", "", "front-desk"}
+TEAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$")
 FRONT_DESK = DATA / "front-desk"
 ASSISTANT = DATA / "assistant.json"
 ASSISTANT_NAME = "Mia"
@@ -198,6 +201,57 @@ def memory_of(session_id):
     }
 
 
+def organize_teams(rows, names):
+    """A project is a team, and who started whom only decides who leads it.
+
+    Sessions with no project stay together if one started the other. Anyone left is independent.
+    """
+    choices = read_json(TEAMS, {})
+    moved, renamed = choices.get("moved", {}), choices.get("names", {})
+    by_id = {row["id"]: row for row in rows}
+
+    def root_of(row):
+        seen = {row["id"]}
+        while row.get("startedBy") in by_id and row["startedBy"] not in seen:
+            row = by_id[row["startedBy"]]
+            seen.add(row["id"])
+
+        return row
+
+    started = {}
+    for row in rows:
+        if row.get("startedBy") in by_id:
+            started[row["startedBy"]] = started.get(row["startedBy"], 0) + 1
+    teams = {}
+    for row in rows:
+        if is_front_desk(row):
+            continue
+        root = root_of(row)
+        chosen = moved.get(row["id"]) or moved.get(root["id"])
+        if chosen == "independent":
+            key = f"solo:{row['id']}"
+        elif chosen:
+            key = f"project:{chosen}"
+        elif row.get("project") not in NO_PROJECT:
+            key = f"project:{row['project']}"
+        elif root["id"] != row["id"] or started.get(row["id"]):
+            key = f"tree:{root['id']}"
+        else:
+            key = f"solo:{row['id']}"
+        teams.setdefault(key, []).append(row)
+    placed = {}
+    for key, members in teams.items():
+        ids = {member["id"] for member in members}
+        # The top of the biggest family leads, and failing that whoever was active last.
+        lead = max(members, key=lambda m: (m.get("startedBy") not in ids, started.get(m["id"], 0), m.get("lastActivityAt", "")))
+        kind, _, value = key.partition(":")
+        name = renamed.get(key) or (value if kind == "project" else lead.get("title", "") if kind == "tree" else names.get(lead["id"], ""))
+        for member in members:
+            placed[member["id"]] = {"teamId": key, "teamName": name, "teamLeadId": lead["id"], "isIndependent": kind == "solo"}
+
+    return placed
+
+
 class Office:
     """Owns names and status, so they don't depend on which session is publishing."""
 
@@ -300,6 +354,7 @@ class Office:
                 talking[row["id"]] = peer
                 talking[peer] = talking[peer] or row["id"]
         assistant_id = self.choose_assistant(rows)
+        placed = organize_teams(rows, self.names)
         on_screen = set(sessions_on_screen())
         # Someone whose chat you already have open has nothing to wave about.
         if self.finished & on_screen:
@@ -330,6 +385,7 @@ class Office:
                 "request": self.requests.get(row["id"]),
                 "wordsKey": hashlib.sha256(json.dumps([self.requests.get(row["id"]), TRANSCRIPTS.last_words(row["id"])]).encode()).hexdigest()[:16],
                 "isAssistant": row["id"] == assistant_id,
+                **placed.get(row["id"], {"teamId": f"solo:{row['id']}", "teamName": self.names[row["id"]], "teamLeadId": row["id"], "isIndependent": True}),
                 **memory_of(row["id"]),
                 "isOnScreen": row["id"] in on_screen,
                 "lastUpdate": speakable(TRANSCRIPTS.last_report(row["id"])),
@@ -436,6 +492,11 @@ class Office:
             if self.seen_raw:
                 self.rebuild()
 
+    def refresh(self):
+        with self.lock:
+            if self.seen_raw:
+                self.rebuild()
+
     def mark_seen(self, session_id):
         with self.lock:
             self.finished.discard(session_id)
@@ -448,23 +509,25 @@ class Office:
         with self.lock:
             people = [p for p in self.snapshot.get("people", []) if not p.get("isAssistant")]
         by_id = {p["id"]: p for p in people}
-        book = read_json(NOTEBOOK_INDEX, {})
+        # Entries from before teams followed projects were kept under a person's id.
+        book = {key: entry for key, entry in read_json(NOTEBOOK_INDEX, {}).items() if ":" in key}
         for person in people:
-            lead, seen = person, {person["id"]}
-            while lead.get("startedBy") in by_id and lead["startedBy"] not in seen:
-                lead = by_id[lead["startedBy"]]
-                seen.add(lead["id"])
-            entry = book.setdefault(lead["id"], {"lead": lead["name"], "members": {}})
-            entry["lead"] = lead["name"]
-            entry["project"] = lead.get("project", "")
+            entry = book.setdefault(person["teamId"], {"members": {}})
+            entry["name"] = person["teamName"]
+            entry["leadId"] = person["teamLeadId"]
+            entry["lead"] = by_id[person["teamLeadId"]]["name"] if person["teamLeadId"] in by_id else entry.get("lead", "")
+            entry["project"] = person.get("project", "")
+            entry["kind"] = "independent" if person["isIndependent"] else "team"
             entry["members"][person["id"]] = {
                 "name": person["name"], "title": person.get("title", ""),
                 "lastActive": person.get("lastActivityAt", ""), "lastUpdate": person.get("lastUpdate", ""),
             }
-        here = set(by_id)
-        for entry_id, entry in book.items():
-            entry["kind"] = "team" if len(entry["members"]) > 1 else "independent"
-            entry["stillInOffice"] = bool(here & set(entry["members"]))
+        # A member who has moved to another team only belongs to the new one.
+        for key, entry in book.items():
+            entry["members"] = {one: m for one, m in entry["members"].items() if one not in by_id or by_id[one]["teamId"] == key}
+        book = {key: entry for key, entry in book.items() if entry["members"]}
+        for entry in book.values():
+            entry["stillInOffice"] = bool(set(by_id) & set(entry["members"]))
             entry["lastActive"] = max((m["lastActive"] for m in entry["members"].values()), default="")
         write_json(NOTEBOOK_INDEX, book)
 
@@ -1015,7 +1078,7 @@ def directory():
     book = read_json(NOTEBOOK_INDEX, {})
     rows = [
         {
-            "id": entry_id, "lead": entry.get("lead", ""), "kind": entry.get("kind", "independent"),
+            "id": entry.get("leadId", entry_id), "name": entry.get("name", ""), "lead": entry.get("lead", ""), "kind": entry.get("kind", "independent"),
             "project": entry.get("project", ""), "lastActive": entry.get("lastActive", ""),
             "stillInOffice": entry.get("stillInOffice", False), "memberIds": list(entry.get("members", {})),
         }
@@ -1314,7 +1377,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/assistant", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
+            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/assistant", "/api/team", "/api/team-name", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -1323,6 +1386,15 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/announce":
                 ids = [str(one) for one in body.get("ids", [])][:20]
                 self.reply_audio(announcement(ids, bool(body.get("isWelcome"))), body)
+                return
+            if route == "/api/team-name":
+                name = str(body.get("name", "")).strip()
+                if not TEAM_NAME.match(name):
+                    raise Refused(400, "Use letters and numbers, up to 40 characters.")
+                choices = read_json(TEAMS, {})
+                write_json(TEAMS, {**choices, "names": {**choices.get("names", {}), str(body.get("teamId", "")): name}})
+                OFFICE.refresh()
+                self.reply(200, {"status": "ok"})
                 return
             if route == "/api/assistant":
                 ensure_front_desk()
@@ -1337,6 +1409,15 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/open":
                 # The app's browser pane won't follow claude:// links, so the Mac opens it.
                 subprocess.run(["open", f"claude://claude.ai/epitaxy/{session_id}"], check=True, timeout=10)
+                self.reply(200, {"status": "ok"})
+                return
+            if route == "/api/team":
+                team = str(body.get("team", "")).strip()
+                if team and team != "independent" and not TEAM_NAME.match(team):
+                    raise Refused(400, "Use letters and numbers, up to 40 characters.")
+                choices = read_json(TEAMS, {})
+                write_json(TEAMS, {**choices, "moved": {**choices.get("moved", {}), session_id: team}})
+                OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
                 return
             if route == "/api/rename":

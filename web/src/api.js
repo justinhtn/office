@@ -90,29 +90,21 @@ export function age(iso) {
   return `${Math.round(minutes / 1440)}d`
 }
 
-export function teamsOf(list, everyone) {
-  const byId = Object.fromEntries(everyone.map(p => [p.id, p]))
-  const leadOf = person => {
-    let lead = person
-    const seen = new Set([person.id])
-    while (lead.startedBy && byId[lead.startedBy] && !seen.has(lead.startedBy)) {
-      seen.add(lead.startedBy)
-      lead = byId[lead.startedBy]
-    }
-
-    return lead
-  }
+export function teamsOf(list) {
   const teams = new Map()
   list.forEach(person => {
-    const lead = leadOf(person)
-    if (!teams.has(lead.id)) teams.set(lead.id, { lead, members: [] })
-    teams.get(lead.id).members.push(person)
+    const key = person.teamId || person.id
+    if (!teams.has(key)) teams.set(key, [])
+    teams.get(key).push(person)
   })
 
   return [...teams.values()]
-    .map(team => ({
-      lead: team.lead,
-      members: [team.lead, ...team.members.filter(person => person.id !== team.lead.id)],
-    }))
+    .map(members => {
+      // The lead may be on the Away list, so someone recent stands in.
+      const recent = [...members].sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''))
+      const lead = members.find(person => person.id === person.teamLeadId) || recent[0]
+
+      return { lead, name: lead.teamName || lead.name, isIndependent: Boolean(lead.isIndependent), members: [lead, ...members.filter(person => person.id !== lead.id)] }
+    })
     .sort((a, b) => (b.lead.lastActivityAt || '').localeCompare(a.lead.lastActivityAt || ''))
 }

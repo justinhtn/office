@@ -13,7 +13,18 @@ import { age, announce, api, speak, teamsOf, withId } from './api.js'
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
 const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
-function Room({ people, selected, focus, speaker, usage, onPick, onSpace, children }) {
+// Each font is only downloaded once someone picks it.
+async function loadBoardFont(family) {
+  const id = `board-font-${family.replace(/ /g, '-')}`
+  if (family !== 'Inter' && !document.getElementById(id)) {
+    const link = Object.assign(document.createElement('link'), { id, rel: 'stylesheet', href: `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}:wght@400;500;600&display=swap` })
+    document.head.appendChild(link)
+    await new Promise(resolve => { link.onload = resolve; link.onerror = resolve })
+  }
+  await Promise.all(['400', '500', '600'].map(weight => document.fonts.load(`${weight} 20px "${family}"`))).catch(() => {})
+}
+
+function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSpace, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -26,6 +37,13 @@ function Room({ people, selected, focus, speaker, usage, onPick, onSpace, childr
   useEffect(() => {
     scene.current.update(people, selected, focus, speaker, usage)
   }, [people, selected, focus, speaker, usage])
+
+  useEffect(() => {
+    let isCurrent = true
+    loadBoardFont(boardFont).then(() => { if (isCurrent) scene.current.setBoardFont(boardFont) })
+
+    return () => { isCurrent = false }
+  }, [boardFont])
 
   return (
     <div className="room" ref={stage}>
@@ -40,7 +58,7 @@ const isBusy = person => person.isRunning || person.isFinished || Boolean(person
 
 // Teams as the office lays them out: anyone idle and alone is in the lounge.
 function officeTeams(active) {
-  return teamsOf(active, active).filter(team => team.members.length > 1 || isBusy(team.lead))
+  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead))
 }
 
 function teamStatus(team) {
@@ -69,7 +87,7 @@ function TeamBar({ teams, hasLounge, focus, onTeam, onPlace }) {
         <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
           <Avatar person={team.lead} size={28} />
           {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
-          <span><b>{team.members.length > 1 ? `${team.lead.name}'s team` : team.lead.name}</b><small>{team.lead.project} · {teamStatus(team)}</small></span>
+          <span><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
         </button>
       ))}
       <span className="team-divider" />
@@ -77,6 +95,39 @@ function TeamBar({ teams, hasLounge, focus, onTeam, onPlace }) {
       {hasLounge && place('lounge', 'Lounge', Armchair)}
       {place('office', 'Your office', DoorOpen)}
     </nav>
+  )
+}
+
+// Which team someone is on, chosen here if the office guessed wrong.
+function TeamChoice({ person, teams }) {
+  const [problem, setProblem] = useState('')
+  const names = [...new Set(teams.filter(team => !team.isIndependent).map(team => team.name))]
+  if (!person.isIndependent && !names.includes(person.teamName)) names.push(person.teamName)
+  const current = person.isIndependent ? 'independent' : person.teamName
+  const choose = async event => {
+    let team = event.target.value
+    if (team === 'new') team = window.prompt('Name the new team') || ''
+    if (!team) return
+    try {
+      await api('/api/team', { id: person.id, team })
+      setProblem('')
+    } catch (failure) {
+      setProblem(failure.message)
+    }
+  }
+
+  return (
+    <div className="team-choice">
+      <label>Team
+        <select value={current} onChange={choose}>
+          {names.map(name => <option key={name} value={name}>{name}</option>)}
+          <option value="independent">Independent developer</option>
+          <option value="new">New team…</option>
+        </select>
+      </label>
+      {!person.isIndependent && <EditableText key={person.teamId} value={person.teamName} label="team name" className="team-rename" onSave={name => api('/api/team-name', { id: person.id, teamId: person.teamId, name })} />}
+      {problem && <small className="error">{problem}</small>}
+    </div>
   )
 }
 
@@ -110,6 +161,8 @@ function Avatar({ person, size = 24 }) {
 }
 
 const VOICE_SETTING = 'office-voices'
+const FONT_SETTING = 'office-board-font'
+const BOARD_FONTS = ['Inter', 'Geist', 'IBM Plex Sans', 'DM Sans', 'Manrope', 'Space Grotesk']
 const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
 const USAGE_CHECK_MS = 15000
@@ -255,7 +308,7 @@ function Meter({ label, percent, detail }) {
 }
 
 // What's running and what it's costing, on the person's own desk.
-function Usage({ usage, people, onPick, onClose }) {
+function Usage({ usage, people, boardFont, onBoardFont, onPick, onClose }) {
   const working = people.filter(person => person.isActing)
   const jobs = people.flatMap(person => (person.jobs || []).map(job => ({ person, job })))
   const speech = usage?.speech
@@ -291,6 +344,13 @@ function Usage({ usage, people, onPick, onClose }) {
         {working.map(person => <button key={person.id} className="usage-row" onClick={() => onPick(person.id)}><span className="dot working" /><b>{person.name}</b><small>{person.step || 'Working'}</small></button>)}
         {jobs.map(({ person, job }) => <button key={`${person.id}${job}`} className="usage-row" onClick={() => onPick(person.id)}><span className="dot finished" /><b>{person.name}</b><small>{job}{person.jobStartedAt ? ` · ${Math.max(1, Math.round((Date.now() / 1000 - person.jobStartedAt) / 60))}m` : ''}</small></button>)}
         {!working.length && !jobs.length && <small>Nothing is running.</small>}
+
+        <h3>Screens</h3>
+        <label className="font-choice">Font
+          <select value={boardFont} onChange={event => onBoardFont(event.target.value)}>
+            {BOARD_FONTS.map(font => <option key={font} value={font}>{font}</option>)}
+          </select>
+        </label>
       </div>
     </section>
   )
@@ -744,6 +804,7 @@ function Session({ person, everyone, teams, tab, onTab, onClose, onPick, onHear 
         <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
       </header>
       <Teammates person={person} teams={teams} onPick={onPick} />
+      <TeamChoice person={person} teams={teams} />
       <nav className="session-tabs" role="tablist">
         {SESSION_TABS.map(({ id, label, icon: Icon }) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
@@ -820,6 +881,13 @@ export default function App() {
   const [onScreen, setOnScreen] = useState('')
   // Whoever is open in the Claude app speaks, and whoever you clicked here.
   const [usage, setUsage] = useState(null)
+  const [boardFont, setBoardFont] = useState(() => {
+    try { return BOARD_FONTS.find(font => font === localStorage.getItem(FONT_SETTING)) || 'Inter' } catch { return 'Inter' }
+  })
+  function chooseBoardFont(font) {
+    setBoardFont(font)
+    try { localStorage.setItem(FONT_SETTING, font) } catch {}
+  }
   useEffect(() => {
     const poll = () => api('/api/usage').then(setUsage, () => {})
     poll()
@@ -947,7 +1015,7 @@ export default function App() {
         <Panel id="floor" order={1} minSize={25} defaultSize={person || place === 'office' ? 60 : 100}>
           {active.length > 0
             ? (
-              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} onPick={pick} onSpace={goToSpace}>
+              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} onPick={pick} onSpace={goToSpace}>
                 <TeamBar teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
               </Room>
             )
@@ -957,7 +1025,7 @@ export default function App() {
           <>
             <PanelResizeHandle className="handle" />
             <Panel id="session" order={2} minSize={28} defaultSize={40}>
-              <Usage usage={usage} people={cast} onPick={pick} onClose={() => goToPlace(null)} />
+              <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => goToPlace(null)} />
             </Panel>
           </>
         )}
