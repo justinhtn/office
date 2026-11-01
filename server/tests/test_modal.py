@@ -53,6 +53,33 @@ class ModalSummaryTest(unittest.TestCase):
             self.assertNotIn("ap-secret", json.dumps(summary))
         self.assertNotIn("isUnknownFormat", server.modal_summary([], NOW))
 
+    def test_a_blank_name_stays_listed(self):
+        for blank in ("", None):
+            summary = server.modal_summary([{"description": blank, "state": "ephemeral", "tasks": "1", "app_id": "ap-secret"}], NOW)
+            self.assertEqual(summary["apps"][0]["name"], "Unnamed app")
+            self.assertNotIn("ap-secret", json.dumps(summary))
+
+    def test_anything_with_tasks_is_running_whatever_its_state(self):
+        apps = [{"description": name, "state": state, "tasks": "2", "stopped_at": None} for name, state in (("a", "stopping"), ("b", "stopped"), ("c", "deployed"), ("d", ""))]
+        summary = server.modal_summary(apps, NOW)
+        self.assertEqual(sorted(app["name"] for app in summary["apps"]), ["a", "b", "c", "d"])
+        self.assertEqual((summary["stopped"], summary["idle"]), ([], 0))
+
+    def test_stopping_with_no_tasks_isnt_running(self):
+        summary = server.modal_summary([{"description": "a", "state": "stopping", "tasks": "0", "stopped_at": "2026-11-01 12:29:00-08:00"}], NOW)
+        self.assertEqual(summary["apps"], [])
+        self.assertEqual(summary["stoppedCount"], 1)
+
+    def test_stopping_with_no_stop_time_stays_listed(self):
+        apps = [{"description": "s", "state": "stopping", "tasks": "0", "stopped_at": None}, {"description": "done", "state": "stopped", "tasks": "0", "stopped_at": "2026-11-01 12:29:00-08:00"}, {"description": "unknown", "state": "stopped", "tasks": "0", "stopped_at": None}]
+        summary = server.modal_summary(apps, NOW)
+        self.assertEqual(summary["stopped"], [{"name": "s", "stoppedAt": None}, {"name": "done", "stoppedAt": datetime.fromisoformat("2026-11-01 12:29:00-08:00").timestamp()}])
+
+    def test_only_spaces_counts_as_blank(self):
+        summary = server.modal_summary([{"description": "   ", "state": "ephemeral", "tasks": "1"}, {"description": "a", "state": "   ", "tasks": "0"}], NOW)
+        self.assertEqual([app["name"] for app in summary["apps"]], ["Unnamed app"])
+        self.assertEqual(summary["idle"], 1)
+
     def test_odd_values_dont_break_it(self):
         summary = server.modal_summary(["nope", {"description": "a", "state": "ephemeral", "tasks": "many", "created_at": "soon"}, {"description": "b", "state": "stopped", "stopped_at": None}], NOW)
         self.assertEqual(summary["apps"], [{"name": "a", "tasks": 0, "startedAt": None}])
@@ -109,6 +136,10 @@ class ModalCheckTest(unittest.TestCase):
             server.check_modal()
         self.assertIsNone(server.modal_state["value"])
         self.assertTrue(server.modal_state["isChecked"])
+
+    def test_report_reads_value_and_checked_together(self):
+        server.modal_state.update(at=server.time.time(), value={"count": 1}, isChecked=True, isChecking=False)
+        self.assertEqual(server.modal_report(), {"modal": {"count": 1}, "modalChecked": True})
 
     def test_a_slow_command_doesnt_hold_up_requests(self):
         release, started = threading.Event(), threading.Event()
