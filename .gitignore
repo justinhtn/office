@@ -3,3 +3,5 @@ node_modules/
 __pycache__/
 plugin/tsconfig.json
 plugin/.claude-plugin/types/
+web/dist/
+web/dist.new/

@@ -7,6 +7,7 @@ publishes and from Claude Code's transcript files.
 import glob
 import hashlib
 import hmac
+import html
 import datetime
 import json
 import os
@@ -28,6 +29,14 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
+NO_INTERFACE_PAGE = """<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Agent Office</title>
+<body style="font:16px system-ui;margin:15vh auto;max-width:36em;padding:0 16px">
+<h1>The office isn't built yet</h1>
+<p>The server is running, but it can't find the built interface. If an update is running, wait for it to finish.</p>
+<p>Otherwise, run this in Terminal:</p>
+<pre style="white-space:pre-wrap">__UPDATE__</pre>
+<p>This page reloads by itself.</p>
+</body>"""
 DATA = Path(os.environ.get("AGENT_OFFICE_HOME", Path.home() / ".agent-office"))
 RAW_SESSIONS = DATA / "sessions.raw.json"
 PEOPLE = DATA / "people.json"
@@ -828,6 +837,14 @@ def file_diff(session_id, relative):
     return {"original": original if code == 0 else "", "modified": modified.decode("utf-8", "replace")}
 
 
+def office_page():
+    """The app, or a page saying how to get it. Pulling can remove the built files until the next build finishes."""
+    try:
+        return 200, (DIST / "index.html").read_text().replace("__OFFICE_TOKEN__", TOKEN)
+    except FileNotFoundError:
+        return 503, NO_INTERFACE_PAGE.replace("__UPDATE__", html.escape(str(ROOT / "scripts" / "update.sh")))
+
+
 def asset(relative):
     root = DIST.resolve()
     target = (root / relative).resolve()
@@ -1524,8 +1541,8 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             url = urlparse(self.path)
             if url.path == "/":
-                page = (DIST / "index.html").read_text().replace("__OFFICE_TOKEN__", TOKEN)
-                self.reply(200, page.encode(), "text/html; charset=utf-8")
+                status, page = office_page()
+                self.reply(status, page.encode(), "text/html; charset=utf-8")
                 return
             if url.path.startswith("/assets/"):
                 data, kind = asset(url.path.lstrip("/"))
@@ -1707,6 +1724,8 @@ if __name__ == "__main__":
     CONTEXT.mkdir(mode=0o700, exist_ok=True)
     COMPACTION.mkdir(mode=0o700, exist_ok=True)
     ensure_front_desk()
+    if not (DIST / "index.html").exists():
+        print(f"The interface isn't built. Run {ROOT / 'scripts' / 'update.sh'}", file=sys.stderr, flush=True)
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
