@@ -114,7 +114,7 @@ export function portrait(p) {
 
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
-const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.59,el:.08}
+const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
 let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
@@ -889,14 +889,36 @@ const LOUNGE_MAIN_X=.41
 const LOUNGE_MAIN_Z=.1
 const LOUNGE_SIDE_ACROSS=-3
 const LOUNGE_SIDE_FORWARD=1.15
+const LAYOUT_SETTING='office-layout'
+const ROOM_COLUMNS=3
+const SHARED_SPACES=['meeting','lounge','office']
+function rememberedLayout(){try{return JSON.parse(localStorage.getItem(LAYOUT_SETTING))||{}}catch{return {}}}
+// Nobody moves when someone else arrives: a newcomer takes a place nobody is using, or a new one at the end.
+function keepPlaces(places,present){
+  const kept=[...places],live=new Set([...present,...SHARED_SPACES])
+  present.filter(key=>!kept.includes(key)).forEach(key=>{const free=kept.findIndex(one=>!live.has(one));if(free<0)kept.push(key);else kept[free]=key})
+  while(kept.length&&!live.has(kept[kept.length-1]))kept.pop()
+  return kept
+}
 // Every team gets its own space, so teams read apart without closing up the floor.
 function planSpaces(){
   const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
-  const spaces=groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project)).map(t=>({kind:'team',team:t,W:Math.max(6.4,Math.ceil(t.members.length/2)*2.5+1.6),D:7.4}))
-  spaces.push({kind:'meeting',W:8.4,D:7})
+  const teamKey=t=>t.lead.teamId||t.lead.id,layout=rememberedLayout(),seats=layout.seats||{}
+  groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project))
+  // The Newsroom joined after the first layout, so it starts at the end like any newcomer.
+  const firstSlots=[...groups.map(teamKey).filter(key=>key!=='project:Newsroom'),...SHARED_SPACES]
+  const slots=keepPlaces(layout.slots||firstSlots,groups.map(teamKey))
   const onBreak=people.filter(p=>p.isOnBreak).length
-  if(idle.length||onBreak)spaces.push({kind:'lounge',people:idle,W:Math.max(9,(idle.length+onBreak)*2.3+3.6),D:7.8,breaks:onBreak})
-  spaces.push({kind:'office',W:7.4,D:7})
+  const spaces=slots.map(key=>{
+    if(key==='meeting')return {kind:'meeting',W:8.4,D:7}
+    if(key==='lounge')return {kind:'lounge',people:idle,W:Math.max(9,(idle.length+onBreak)*2.3+3.6),D:7.8,breaks:onBreak}
+    if(key==='office')return {kind:'office',W:7.4,D:7}
+    const team=groups.find(t=>teamKey(t)===key)
+    if(!team)return {kind:'empty',W:6.4,D:7.4}
+    team.seats=seats[key]=keepPlaces(seats[key]||[],team.members.map(m=>m.id))
+    return {kind:'team',team,W:Math.max(6.4,Math.ceil(team.seats.length/2)*2.5+1.6),D:7.4}
+  })
+  try{localStorage.setItem(LAYOUT_SETTING,JSON.stringify({slots,seats}))}catch{}
   return spaces
 }
 // Add ?perf to the address to read frame costs from window.__office in the console.
@@ -1072,7 +1094,7 @@ function build(){
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
   scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
-  const spaces=planSpaces(),perRow=Math.max(2,Math.ceil(Math.sqrt(spaces.length)))
+  const spaces=planSpaces(),perRow=ROOM_COLUMNS
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
   const rowW=row=>row.reduce((n,z,i)=>n+z.W+(i?(z.kind==='office'?OFFICE_GAP:AISLE_GAP):0),0), rowD=row=>Math.max(...row.map(z=>z.D))
   const W=Math.max(16,...rows.map(rowW))+3, D=Math.max(12,rows.reduce((n,r)=>n+rowD(r),0)+(rows.length-1)*AISLE_GAP)+3.2
@@ -1326,6 +1348,7 @@ function drawThought(el,p,showWords,detailed){
   el.textContent=line
 }
 function drawSpace(space,x0,z0){
+  if(space.kind==='empty')return
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
   spots[key]={x:cx,z:cz,W,D}
   drawingKey=key
@@ -1337,12 +1360,12 @@ function drawSpace(space,x0,z0){
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
     if(isTeam){projector(team,x0,cz);spots[key].hasBoard=true}
-    const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
+    const columns=Math.ceil(team.seats.length/2),isShared=team.seats.length>1
     rubberMat(world,cx,cz,columns*2.5+1.1,isShared?4.1:3)
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
     if(isShared)box(world,columns*2.5,.09,.03,0xd9d6cf,cx,1.1,cz)
-    team.members.forEach((p,i)=>{
-      const col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.44:cz+row*.88
+    team.members.forEach(p=>{
+      const i=team.seats.indexOf(p.id),col=Math.floor(i/2),row=i%2===0?-1:1,sx=cx-(columns-1)*1.25+col*2.5,deskZ=isShared?cz+row*.58:cz,seatZ=isShared?cz+row*1.44:cz+row*.88
       deskTopic=topicOf(`${p.project} ${p.title||''}`)
       const screen=workstation(world,sx,deskZ,isShared?row:row,p.isRunning,p.id)
       if(REAL_FURNITURE)placeModel(OFFICE_CHAIR,sx,seatZ,row===-1?0:Math.PI);else chair(world,sx,seatZ,row)

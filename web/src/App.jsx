@@ -106,10 +106,14 @@ function Newsroom({ day, onClose }) {
               <span><b>{topic.title}</b><small>{[topic.area, topic.minutes && `${topic.minutes} min`].filter(Boolean).join(' · ')}</small><span>{topic.why}</span></span>
             </label>
           ))}
-          <input className="newsroom-custom" placeholder="Or something else you're curious about" value={custom} onChange={event => setCustom(event.target.value)} />
-          <button className="primary" disabled={!chosen.length && !custom.trim()} onClick={send}>Write today's piece</button>
         </> : <p>Nothing yet today. Nell looks for topics each morning.</p>}
       </div>
+      {!day.edition && !day.pick && day.topics.length > 0 && (
+        <footer className="newsroom-send">
+          <input className="newsroom-custom" placeholder="Or something else you're curious about" value={custom} onChange={event => setCustom(event.target.value)} />
+          <button className="primary" disabled={!chosen.length && !custom.trim()} onClick={send}>Write today's piece</button>
+        </footer>
+      )}
     </section>
   )
 }

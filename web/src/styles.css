@@ -320,8 +320,8 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .card-actions button:hover { background: var(--bg-hover); }
 .card-foot { display: flex; align-items: center; justify-content: space-between; }
 .card-tools { display: flex; gap: 2px; margin-left: auto; }
-.drawer-backdrop { position: absolute; inset: 0; }
-.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--bg); color: var(--text); border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(0, 0, 0, .2); animation: drawer-in .16s ease-out; }
+.drawer-backdrop { position: absolute; inset: 0; z-index: 1; }
+.drawer { position: absolute; z-index: 2; top: 48px; right: 0; bottom: 30px; width: min(560px, 100%); background: var(--bg); color: var(--text); border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(0, 0, 0, .2); animation: drawer-in .16s ease-out; }
 .session-tabs .drawer-close { margin: auto 0 auto auto; padding: 0; }
 @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
@@ -335,7 +335,8 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .topbar { top: 0; grid-template-columns: 1fr minmax(180px, 360px) 1fr auto; }
 .needs { top: 0; }
 .statusbar { bottom: 0; }
-.corner { padding-bottom: 40px; }
+.corner { padding-top: 58px; padding-bottom: 40px; }
+.team-menu { max-height: 100%; }
 .topbar, .needs, .statusbar, .team-list { --glass-text: rgba(255, 255, 255, .94); --glass-muted: rgba(255, 255, 255, .68); background: rgba(14, 17, 24, .38); -webkit-backdrop-filter: blur(16px) saturate(1.25); backdrop-filter: blur(16px) saturate(1.25); color: var(--glass-text); border-color: rgba(255, 255, 255, .1); box-shadow: none; }
 .topbar .counts, .needs small, .statusbar small, .statusbar button { color: var(--glass-muted); }
 .search { background: rgba(255, 255, 255, .1); color: var(--glass-muted); }
@@ -367,6 +368,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .newsroom-topic.on { border-color: var(--accent); background: var(--accent-wash); }
 .newsroom-topic > span { display: flex; flex-direction: column; gap: 2px; }
 .newsroom-topic small { color: var(--muted); }
+.newsroom-send { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .newsroom-custom { padding: 7px 9px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
 .newsroom-piece { line-height: 1.55; }
 .newsroom audio { width: 100%; }
