@@ -35,6 +35,7 @@ type Listed = {
   title?: string
   cwd?: string
   prNumber?: number
+  prState?: string
   isRunning?: boolean
   lastActivityAt?: string
   link?: string
@@ -56,6 +57,7 @@ type Person = {
   helpers?: string[]
   lastActivityAt?: string
   lastUpdate?: string
+  prOutcome?: string | null
   request?: { message?: string } | null
   teamId?: string
   teamName?: string
@@ -90,6 +92,7 @@ function toRow(session: Listed) {
     cwd: session.cwd,
     startedBy: session.startedBy ?? session.parentSessionId,
     prNumber: session.prNumber,
+    prState: session.prState,
     isRunning: session.isRunning === true,
     lastActivityAt: session.lastActivityAt ?? '',
     link: session.link,
@@ -346,6 +349,7 @@ async function teamStatus($: EngineInterface, isWholeOffice = false): Promise<st
     helpers: person.helpers?.length ? person.helpers : undefined,
     lastActiveMinutesAgo: person.lastActivityAt ? minutesSince(Date.parse(person.lastActivityAt)) : undefined,
     lastUpdate: person.lastUpdate || undefined,
+    prOutcome: person.prOutcome || undefined,
   }))
 
   return JSON.stringify({

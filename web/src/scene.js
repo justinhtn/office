@@ -1252,7 +1252,7 @@ function statusOfRow(p){
   if(p.isWaiting)return{label:'Waiting on job',fg:UI.waiting,bg:UI.waitingWash,rank:2}
   if(p.isFinished)return{label:'Finished',fg:UI.waiting,bg:UI.waitingWash,rank:3}
   if(p.isRunning)return{label:'Working',fg:UI.working,bg:UI.workingWash,rank:1}
-  return{label:'Idle',fg:UI.muted,bg:UI.idleWash,rank:4}
+  return{label:p.prOutcome||'Idle',fg:UI.muted,bg:UI.idleWash,rank:4}
 }
 function roundRect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath()}
 function drawBoard(board){
