@@ -288,7 +288,7 @@ function modalLines(modal,isChecked){
   }
   const room=Math.max(0,MODAL_TV_ROWS-rows.length-1)
   if(stopped.length&&room){
-    rows.push({heading:'Stopped today'})
+    rows.push({heading:`Stopped in the last 24 hours · ${modal.stoppedCount}`})
     stopped.slice(0,room).forEach(app=>rows.push({name:app.name,detail:`${modalSpan(now-app.stoppedAt)} ago`}))
   }
   return {title:'Modal',note:apps.length||stopped.length?'':'No apps running',rows,idle:modal.idle?`${modal.idle} deployed app${modal.idle===1?'':'s'} with no tasks`:''}
@@ -331,7 +331,7 @@ function drawUsage(){
   const working=people.filter(p=>p.isActing).length,jobs=people.reduce((n,p)=>n+(p.jobs?.length||0),0),modal=usage?.modal
   g.fillStyle='#d4d4d8';g.font='20px '+boardFont;g.textAlign='left'
   g.fillText(`${working} working · ${jobs} job${jobs===1?'':'s'} running`,28,226)
-  g.fillStyle='#a1a1aa';g.fillText(modal?.isUnknownFormat?"Modal: can't read its list":modal?`Modal: ${modal.count} app${modal.count===1?'':'s'} running`:'Modal: not connected',28,262)
+  g.fillStyle='#a1a1aa';g.fillText(modal?.isUnknownFormat?"Modal: can't read its list":modal?`Modal: ${modal.count} app${modal.count===1?'':'s'} running`:usage?.modalChecked?'Modal: not connected':'Modal: checking…',28,262)
   texture.needsUpdate=true
 }
 function attachScreen(a,mesh){

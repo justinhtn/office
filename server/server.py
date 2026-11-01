@@ -1226,25 +1226,30 @@ def modal_time(text):
 MODAL_UNKNOWN_FORMAT = {"isUnknownFormat": True, "running": [], "count": 0, "apps": [], "stopped": [], "stoppedCount": 0, "idle": 0}
 
 
+def is_modal_app(app):
+    """Both fields being there is what marks a known format. Either can be blank."""
+    return isinstance(app, dict) and all(name in app or name.lower() in app for name in ("Description", "State"))
+
+
 def modal_summary(apps, now):
     """What the office shows from the command's list. App IDs stay out of it, and it has no spend to show."""
-    readable = [app for app in apps if isinstance(app, dict) and modal_field(app, "Description") and modal_field(app, "State")]
+    readable = [app for app in apps if is_modal_app(app)]
     if apps and not readable:
         return dict(MODAL_UNKNOWN_FORMAT)
     running, stopped, idle = [], [], 0
     for app in readable:
-        name = str(modal_field(app, "Description"))[:MODAL_NAME_LENGTH]
+        name = str(modal_field(app, "Description") or "Unnamed app")[:MODAL_NAME_LENGTH]
         state = str(modal_field(app, "State") or "")
         try:
             tasks = int(modal_field(app, "Tasks") or 0)
         except (TypeError, ValueError):
             tasks = 0
-        if re.search(r"stop", state, re.I):
+        if tasks or (state and not re.search(r"stop|deployed", state, re.I)):
+            running.append({"name": name, "tasks": tasks, "startedAt": modal_time(modal_field(app, "Created at"))})
+        elif re.search(r"stop", state, re.I):
             ended = modal_time(modal_field(app, "Stopped at"))
             if ended is not None and now - ended < MODAL_RECENT_S:
                 stopped.append({"name": name, "stoppedAt": ended})
-        elif tasks or not re.search(r"deployed", state, re.I):
-            running.append({"name": name, "tasks": tasks, "startedAt": modal_time(modal_field(app, "Created at"))})
         else:
             idle += 1
     running.sort(key=lambda app: app["startedAt"] or 0, reverse=True)
