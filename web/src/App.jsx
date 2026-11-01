@@ -164,6 +164,13 @@ function useVoices(everyone, selected) {
       queue.current = []
       skip()
     }
+    // Hearing someone straight away shows it works, and the click lets the browser play sound.
+    if (on) hear(selected || [...everyone].sort((one, other) => Date.parse(other.lastActivityAt || 0) - Date.parse(one.lastActivityAt || 0))[0]?.id)
+  }
+  function hear(id) {
+    if (!id) return
+    queue.current = [id, ...queue.current.filter(other => other !== id)]
+    next.current()
   }
   function skip() {
     const audio = player.current
@@ -172,7 +179,7 @@ function useVoices(everyone, selected) {
     audio.stop()
   }
 
-  return { isOn, speaker, problem, toggle, skip }
+  return { isOn, speaker, problem, toggle, skip, hear }
 }
 
 function Empty({ text }) {
@@ -572,7 +579,7 @@ function RequestBanner({ person, onShow }) {
   )
 }
 
-function Session({ person, everyone, teams, tab, onTab, onClose, onPick }) {
+function Session({ person, everyone, teams, tab, onTab, onClose, onPick, onHear }) {
   const [showPath, setShowPath] = useState(null)
   const [stage, setStage] = useState(null)
   useEffect(() => setStage(null), [person.id])
@@ -599,6 +606,7 @@ function Session({ person, everyone, teams, tab, onTab, onClose, onPick }) {
           <Avatar person={person} everyone={everyone} size={36} />
           <EditableText key={`name-${person.id}`} value={person.name} label="name" className="name" onSave={name => api('/api/rename', { id: person.id, name })} />
           <EditableText key={`label-${person.id}`} value={person.label} label="job label" className="job" onSave={label => api('/api/label', { id: person.id, label })} />
+          <button className="icon" title="Hear their latest update" aria-label="Hear their latest update" onClick={() => onHear(person.id)}><Volume2 size={14} /></button>
           <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
           <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : `Idle ${age(person.lastActivityAt)}`}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
@@ -770,7 +778,7 @@ export default function App() {
           <>
             <PanelResizeHandle className="handle" />
             <Panel id="session" order={2} minSize={28} defaultSize={40}>
-              <Session person={person} everyone={cast} teams={teams} tab={tab} onTab={setTab} onPick={pick} onClose={() => goToPlace(null)} />
+              <Session person={person} everyone={cast} teams={teams} tab={tab} onTab={setTab} onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)} />
             </Panel>
           </>
         )}
