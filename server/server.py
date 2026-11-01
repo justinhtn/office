@@ -18,6 +18,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +36,11 @@ FINISHED = DATA / "finished.json"
 AVATARS = DATA / "avatars.json"
 LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
+SPEECH = DATA / "speech"
+VOICE_KEY = DATA / "elevenlabs.key"
+VOICE_API = "https://api.elevenlabs.io/v1"
+VOICE_MODEL = "eleven_flash_v2_5"
+MAX_SPOKEN = 400
 WATCH_S = 2
 CALL_S = 60
 MEETING_S = 45
@@ -233,6 +240,7 @@ class Office:
                 "label": self.labels.get(row["id"]) or short_label(row.get("title", "")),
                 "isFinished": row["id"] in self.finished and not jobs[row["id"]] and not helpers[row["id"]],
                 "request": self.requests.get(row["id"]),
+                "wordsKey": hashlib.sha256(json.dumps([self.requests.get(row["id"]), TRANSCRIPTS.last_words(row["id"])]).encode()).hexdigest()[:16],
             }
             for row in rows
         ]
@@ -710,8 +718,93 @@ class Transcripts:
 
         return {"outputs": outputs, "plan": parsed["plan"], "turnStartedAt": parsed["turnStartedAt"]}
 
+    def last_words(self, session_id):
+        """What to read aloud from the latest turn: its recap, or else its final message."""
+        try:
+            messages = self.load(session_id)[1]["messages"]
+        except (Refused, OSError):
+            return ""
+        final = ""
+        for message in reversed(messages):
+            if message["role"] == "user":
+                break
+            if message["role"] == "recap":
+                return message["body"]
+            if message["role"] == "assistant" and not final:
+                final = message["body"]
+
+        return final
+
 
 TRANSCRIPTS = Transcripts()
+
+
+def speakable(text):
+    """Plain sentences, without the code, links and markdown nobody wants read out."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://\S+|`[^`]*`|[*_#>|]", " ", text)
+    text = " ".join(text.split())
+    if len(text) <= MAX_SPOKEN:
+        return text
+    cut = text[:MAX_SPOKEN]
+    end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+
+    return cut[:end + 1] if end > 0 else cut
+
+
+def spoken_text(person):
+    if person.get("request"):
+        return speakable(f"I need you. {person['request']['message']}")
+
+    return speakable(TRANSCRIPTS.last_words(person["id"]))
+
+
+def voice_request(path, api_key, body=None):
+    data = json.dumps(body).encode() if body else None
+    request = urllib.request.Request(f"{VOICE_API}{path}", data=data, headers={"xi-api-key": api_key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read()
+    except urllib.error.HTTPError as failure:
+        raise Refused(502, f"ElevenLabs refused the request ({failure.code}).")
+    except OSError:
+        raise Refused(502, "Couldn't reach ElevenLabs.")
+
+
+def voice_for(person, api_key):
+    """Each person keeps one voice, matched to their character."""
+    path = SPEECH / "voices.json"
+    voices = read_json(path, None)
+    if not voices:
+        listed = json.loads(voice_request("/voices", api_key)).get("voices", [])
+        voices = [{"id": v["voice_id"], "gender": (v.get("labels") or {}).get("gender", "")} for v in listed]
+        write_json(path, voices)
+    wanted = "female" if Office.sex_of_avatar(person.get("avatar")) == "f" else "male"
+    choices = [v["id"] for v in voices if v["gender"] == wanted] or [v["id"] for v in voices]
+    if not choices:
+        raise Refused(502, "This ElevenLabs account has no voices.")
+
+    return choices[int(hashlib.sha256(person["id"].encode()).hexdigest(), 16) % len(choices)]
+
+
+def speech_for(session_id):
+    """Audio for someone's latest words. Saved, so hearing them again costs nothing."""
+    try:
+        api_key = VOICE_KEY.read_text().strip()
+    except OSError:
+        raise Refused(409, "Add an ElevenLabs key to turn on voices.")
+    person = next((p for p in OFFICE.snapshot.get("people", []) if p["id"] == session_id), None)
+    text = person and spoken_text(person)
+    if not text:
+        raise Refused(404, "Nothing to say.")
+    voice = voice_for(person, api_key)
+    saved = SPEECH / f"{hashlib.sha256(f'{voice}:{VOICE_MODEL}:{text}'.encode()).hexdigest()}.mp3"
+    if not saved.exists():
+        saved.write_bytes(voice_request(f"/text-to-speech/{voice}", api_key, {"text": text, "model_id": VOICE_MODEL}))
+        saved.chmod(0o600)
+
+    return saved.read_bytes()
 
 
 def media_link(session_id, relative):
@@ -863,6 +956,8 @@ class Handler(BaseHTTPRequestHandler):
                 known_session(session_id)
                 before = query.get("before")
                 self.reply(200, TRANSCRIPTS.page(session_id, int(before) if before else None))
+            elif url.path == "/api/voice":
+                self.reply(200, {"isReady": VOICE_KEY.exists()})
             elif url.path == "/api/outputs":
                 known_session(session_id)
                 self.reply(200, TRANSCRIPTS.outputs(session_id))
@@ -898,7 +993,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/seen", "/api/open", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
+            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll"):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -906,6 +1001,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             session_id = body.get("id", "")
             known_session(session_id)
+            if route == "/api/speak":
+                self.reply(200, speech_for(session_id), "audio/mpeg")
+                return
             if route == "/api/open":
                 # The app's browser pane won't follow claude:// links, so the Mac opens it.
                 subprocess.run(["open", f"claude://claude.ai/epitaxy/{session_id}"], check=True, timeout=10)
@@ -953,6 +1051,7 @@ if __name__ == "__main__":
     DATA.mkdir(mode=0o700, exist_ok=True)
     BRIDGE.mkdir(mode=0o700, exist_ok=True)
     REQUESTS.mkdir(mode=0o700, exist_ok=True)
+    SPEECH.mkdir(mode=0o700, exist_ok=True)
     for stale in BRIDGE.iterdir():
         if stale.is_dir():
             stale.rmdir()

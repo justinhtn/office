@@ -272,3 +272,4 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .artifact:hover { background: var(--bg-hover); }
 .artifact span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .artifact small { color: var(--muted); }
+.voices { display: flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 10px; }

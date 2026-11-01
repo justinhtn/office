@@ -15,6 +15,17 @@ export async function api(path, body) {
   return data
 }
 
+export async function speak(id) {
+  const response = await fetch('/api/speak', {
+    method: 'POST',
+    headers: { 'X-Office-Token': token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'No voice available')
+
+  return URL.createObjectURL(await response.blob())
+}
+
 export const withId = (path, id, extra = {}) =>
   `${path}?${new URLSearchParams({ id, ...extra })}`
 

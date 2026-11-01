@@ -36,7 +36,8 @@ Session data needs at least one Claude Code session open. Without one, the offic
 - Secret-looking files such as `.env` aren't shown.
 - The server reads Claude Code's transcript files in `~/.claude/projects`, and the app's session records to find them. Videos and images an agent shared are streamed through private signed links.
 - The plugin adds a short list of session names to each session's system prompt, so you can refer to agents by name. This uses a small number of extra tokens per request.
-- The page loads its fonts from Google Fonts. Everything else is local.
+- The page loads its fonts from Google Fonts. Everything else is local, unless you turn on voices.
+- Voices are off by default. When on, an agent's recap or request is sent to ElevenLabs using your key, stored in `~/.agent-office/elevenlabs.key`. Agents on this Mac can read that file, so use a key limited to text to speech. ElevenLabs charges for each new line spoken.
 
 ## Limits
 

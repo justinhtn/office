@@ -5,10 +5,10 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, X,
+  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, createScene, helperCast, portrait } from './scene.js'
-import { age, api, teamsOf, withId } from './api.js'
+import { age, api, speak, teamsOf, withId } from './api.js'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
@@ -107,6 +107,72 @@ function Avatar({ person, size = 24 }) {
   return url
     ? <img className="avatar" src={url} alt="" width={size} height={size} />
     : <span className="avatar blank" style={{ width: size, height: size }}>{person.name[0]}</span>
+}
+
+const VOICE_SETTING = 'office-voices'
+
+// Reads out people as they finish, one at a time: whoever is open, and anyone who needs you.
+function useVoices(everyone, selected) {
+  const [isOn, setIsOn] = useState(() => {
+    try { return localStorage.getItem(VOICE_SETTING) === 'on' } catch { return false }
+  })
+  const [speaker, setSpeaker] = useState(null)
+  const [problem, setProblem] = useState('')
+  const heard = useRef(new Map())
+  const queue = useRef([])
+  const player = useRef(null)
+  const next = useRef(() => {})
+  next.current = async () => {
+    if (player.current || !queue.current.length) return
+    const id = queue.current.shift()
+    const audio = player.current = new Audio()
+    const finish = () => {
+      if (audio.src) URL.revokeObjectURL(audio.src)
+      if (player.current === audio) player.current = null
+      setSpeaker(null)
+      next.current()
+    }
+    audio.stop = finish
+    audio.onended = finish
+    audio.onerror = finish
+    setSpeaker(id)
+    try {
+      audio.src = await speak(id)
+      if (player.current !== audio) return
+      await audio.play()
+      setProblem('')
+    } catch (failure) {
+      setProblem(failure.message)
+      finish()
+    }
+  }
+  useEffect(() => {
+    for (const person of everyone) {
+      const wasHeard = heard.current.get(person.id)
+      if (person.isActing && !person.request) continue
+      heard.current.set(person.id, person.wordsKey)
+      const isNew = wasHeard !== undefined && wasHeard !== person.wordsKey
+      if (isOn && isNew && (person.id === selected || person.isFinished || person.request) && !queue.current.includes(person.id)) queue.current.push(person.id)
+    }
+    next.current()
+  }, [everyone, selected, isOn])
+  function toggle() {
+    const on = !isOn
+    setIsOn(on)
+    try { localStorage.setItem(VOICE_SETTING, on ? 'on' : 'off') } catch {}
+    if (!on) {
+      queue.current = []
+      skip()
+    }
+  }
+  function skip() {
+    const audio = player.current
+    if (!audio) return
+    audio.pause()
+    audio.stop()
+  }
+
+  return { isOn, speaker, problem, toggle, skip }
 }
 
 function Empty({ text }) {
@@ -602,6 +668,7 @@ export default function App() {
 
     return () => clearInterval(timer)
   }, [])
+  const voices = useVoices(everyone, selected)
   const keyActions = useRef({ overview() {}, team() {} })
   useEffect(() => {
     const onKey = event => {
@@ -668,6 +735,12 @@ export default function App() {
         <button className="search" onClick={() => setIsPaletteOpen(true)}>
           <Search size={14} /><span>Search agents and rooms</span><kbd>⌘</kbd><kbd>K</kbd>
         </button>
+        <span className="voices">
+          {voices.speaker && <small>{everyone.find(other => other.id === voices.speaker)?.name} is speaking</small>}
+          {voices.speaker && <button className="icon" title="Skip" aria-label="Skip" onClick={voices.skip}><SkipForward size={14} /></button>}
+          {voices.problem && <small className="error">{voices.problem}</small>}
+          <button className="icon" title={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-label={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-pressed={voices.isOn} onClick={voices.toggle}>{voices.isOn ? <Volume2 size={15} /> : <VolumeX size={15} />}</button>
+        </span>
         <span className="counts"><span className="dot working" />{working.filter(other => !other.isWaiting).length} working{working.some(other => other.isWaiting) ? ` · ${working.filter(other => other.isWaiting).length} waiting` : ''}</span>
       </header>
 
