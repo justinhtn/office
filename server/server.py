@@ -742,7 +742,7 @@ def file_text(session_id, relative):
     target = (cwd / relative).resolve()
     if not target.is_relative_to(cwd) or not target.is_file():
         raise Refused(404, "File not found in this session's folder.")
-    if SECRET_FILE.search(relative):
+    if SECRET_FILE.search(relative) or SECRET_FILE.search(target.name):
         raise Refused(403, "Secret files aren't shown here.")
     with target.open("rb") as handle:
         raw = handle.read(MAX_OUTPUT + 1)
@@ -777,7 +777,7 @@ def file_diff(session_id, relative):
     target = (cwd / relative).resolve()
     if not relative or not target.is_relative_to(cwd):
         raise Refused(404, "File not found in this session's folder.")
-    if SECRET_FILE.search(relative):
+    if SECRET_FILE.search(relative) or SECRET_FILE.search(target.name):
         raise Refused(403, "Secret files aren't shown here.")
     original, code = git(cwd, "show", f"HEAD:{relative}")
     modified = target.read_bytes()[:MAX_OUTPUT] if target.is_file() else b""
