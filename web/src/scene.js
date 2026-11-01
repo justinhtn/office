@@ -1000,6 +1000,13 @@ function releaseRoom(room){
     })
   })
 }
+// The bulb and the pool of light share materials that outlive the room.
+function releaseLighting(group){
+  group.traverse(o=>{
+    if(o.geometry)o.geometry.dispose()
+    if(o.material&&o.material!==lit.bulb&&o.material!==lit.pool)o.material.dispose()
+  })
+}
 // Furniture never moves once placed, so it's drawn in one go per material.
 function mergeFurniture(){
   world.updateMatrixWorld(true)
@@ -1151,7 +1158,7 @@ function build(){
   const buildStart=performance.now()
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; teamVolumes=[]; boards=[]
-  scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
+  scene.remove(lighting);releaseLighting(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
   const spaces=planSpaces(),perRow=ROOM_COLUMNS
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
   const rowW=row=>row.reduce((n,z,i)=>n+z.W+(i?(z.kind==='office'?OFFICE_GAP:AISLE_GAP):0),0), rowD=row=>Math.max(...row.map(z=>z.D))
