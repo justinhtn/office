@@ -1,0 +1,69 @@
+.phone { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-soft); color: var(--text); font-size: 15px; }
+.phone-screen { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); }
+.phone button, .phone a { -webkit-tap-highlight-color: transparent; }
+.phone h1 { margin: 0; font-size: 20px; font-weight: 600; }
+.phone h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 0 8px; font-size: 13px; font-weight: 600; }
+.phone h2 small { min-width: 0; font-weight: 400; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.phone small { font-size: 12px; }
+.phone-head { padding: calc(14px + env(safe-area-inset-top)) 0 12px; }
+.phone-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.phone-control { min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 6px 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.phone-control.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent-text); font-weight: 500; }
+.phone-speaking { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding-left: 12px; background: var(--bg); border-radius: 10px; }
+.phone-speaking button { width: 44px; height: 44px; display: grid; place-items: center; }
+.phone-note { margin: 10px 0 0; overflow-wrap: anywhere; }
+.phone-list { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+.phone-row { width: 100%; min-height: 60px; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; text-align: left; }
+.phone-row + .phone-row { border-top: 1px solid var(--line); }
+.phone-row:active { background: var(--bg-hover); }
+.phone-row > svg { flex: none; color: var(--faint); }
+.phone-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.phone-row-text b { font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.phone-row-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.phone-face { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 600; }
+.phone-face.news { background: var(--accent); }
+.phone-status { flex: none; max-width: 96px; padding: 2px 8px; border-radius: 10px; background: var(--bg-hover); color: var(--muted); font-size: 11px; line-height: 16px; text-align: center; }
+.phone-status.working { color: var(--working); }
+.phone-status.finished { color: var(--finished); }
+.phone-status.asks { background: var(--danger); color: #fff; }
+.phone-more { width: 100%; min-height: 48px; margin-top: 16px; color: var(--muted); }
+
+.phone-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; margin: 0 -16px; padding: calc(6px + env(safe-area-inset-top)) 16px 6px 4px; background: var(--bg-soft); border-bottom: 1px solid var(--line); }
+.phone-bar > button { flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
+.phone-person-state { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.phone-doing { margin: 10px 0 0; font-weight: 500; overflow-wrap: anywhere; }
+.phone-update { margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.phone-open { min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; color: var(--accent-text); font-weight: 500; text-decoration: none; }
+.phone .memory { margin-top: 10px; padding: 0; border: 0; }
+.phone .request { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.phone .request .dismiss, .phone .request-file { min-height: 44px; }
+.phone .request .dismiss { padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; }
+.phone .request-file { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-person .chat { height: auto; display: block; }
+.phone-person .chat .scroll { overflow: visible; height: auto; padding: 0; }
+.phone-person .working-line { padding: 6px 0; white-space: normal; border: 0; }
+.phone-person img, .phone-person video { max-width: 100%; height: auto; }
+.phone-person .media-row { flex-wrap: wrap; }
+.phone-person .media-item { flex: 1 1 100%; max-width: 100%; }
+.phone-person .expand, .phone-person .artifact { min-height: 44px; }
+.phone-person .bubble { max-width: 100%; overflow-wrap: anywhere; }
+.phone-stage { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; background: #111114; }
+.phone-stage .stage { flex: 1; }
+.phone-stage .icon { width: 44px; height: 44px; }
+
+.phone-news { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.phone-news .session { height: 100%; background: var(--bg); }
+.phone-news .session-head { padding-top: calc(8px + env(safe-area-inset-top)); }
+.phone-news .session-head .icon { width: 44px; height: 44px; }
+.phone-news .newsroom-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.phone-news .newsroom-body { display: block; }
+.phone-news .newsroom-topic { display: flex; flex: none; min-height: 56px; margin-bottom: 8px; padding: 12px; height: auto; }
+.phone-news .newsroom-topic > span { display: flex; flex-direction: column; min-width: 0; }
+.phone-news .newsroom-topic input { width: 20px; height: 20px; }
+.phone-news .newsroom-piece { overflow-wrap: anywhere; }
+.phone-news .newsroom-piece img { max-width: 100%; }
+.phone-news .voice-mode { min-height: 44px; }
+.phone-news .newsroom-send { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+/* Below 16px, iOS zooms the page when a field is focused. */
+.phone-news .newsroom-custom { width: 100%; min-height: 44px; font-size: 16px; }
+.phone-news .newsroom-send .primary { width: 100%; min-height: 48px; }

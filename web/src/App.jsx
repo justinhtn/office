@@ -9,6 +9,7 @@ import {
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import ReactMarkdown from 'react-markdown'
+import PhoneApp, { usePhoneWidth } from './PhoneApp.jsx'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
@@ -67,13 +68,14 @@ function officeTeams(active) {
 const OWNER = { name: 'You', avatar: OWNER_AVATAR, project: 'Your office' }
 
 // The morning's ten topics to choose from, and then the finished piece to read or listen to.
-function Newsroom({ day, onClose }) {
+function Newsroom({ day, onClose, onSent }) {
   const [chosen, setChosen] = useState([])
   const [custom, setCustom] = useState('')
   const [problem, setProblem] = useState('')
   const [audio, setAudio] = useState(null)
   const toggle = index => setChosen(current => (current.includes(index) ? current.filter(one => one !== index) : [...current, index].slice(-2)))
-  const send = () => api('/api/newsroom/pick', { choices: chosen, custom }).catch(failure => setProblem(failure.message))
+  const [isSent, setIsSent] = useState(false)
+  const send = () => api('/api/newsroom/pick', { choices: chosen, custom }).then(() => { setIsSent(true); onSent?.() }, failure => setProblem(failure.message))
   const listen = async () => {
     setProblem('')
     try { setAudio(await listenToEdition()) } catch (failure) { setProblem(failure.message) }
@@ -90,7 +92,7 @@ function Newsroom({ day, onClose }) {
         {day.edition ? <>
           {audio ? <audio src={audio} controls autoPlay /> : <button className="voice-mode" onClick={listen}><Volume2 size={14} /> Listen, using ElevenLabs credits</button>}
           <article className="newsroom-piece"><ReactMarkdown components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{day.edition}</ReactMarkdown></article>
-        </> : day.pick ? <p>Your pick is in. Nell is writing it now.</p> : day.topics.length ? <>
+        </> : day.pick || isSent ? <p>Your pick is in. Nell is writing it now.</p> : day.topics.length ? <>
           <p>Pick one or two for today, or type your own.</p>
           {day.topics.map((topic, index) => (
             <label key={index} className={`newsroom-topic ${chosen.includes(index) ? 'on' : ''}`}>
@@ -100,7 +102,7 @@ function Newsroom({ day, onClose }) {
           ))}
         </> : <p>Nothing yet today. Nell looks for topics each morning.</p>}
       </div>
-      {!day.edition && !day.pick && day.topics.length > 0 && (
+      {!day.edition && !day.pick && !isSent && day.topics.length > 0 && (
         <footer className="newsroom-send">
           <input className="newsroom-custom" placeholder="Or something else you're curious about" value={custom} onChange={event => setCustom(event.target.value)} />
           <button className="primary" disabled={!chosen.length && !custom.trim()} onClick={send}>Write today's piece</button>
@@ -523,8 +525,9 @@ function Helpers({ person }) {
 }
 
 // Chat and approvals happen in the Claude app, so this shows what an agent has made.
-function Outputs({ person, onExpand }) {
+function Outputs({ person, onExpand, limit = Infinity }) {
   const [data, setData] = useState(null)
+  const [shown, setShown] = useState(limit)
   const [error, setError] = useState('')
   useEffect(() => {
     setData(null)
@@ -548,7 +551,7 @@ function Outputs({ person, onExpand }) {
         {error && <p className="error">{error}</p>}
         {!error && !data && <Empty text="Loading…" />}
         {data?.outputs.length === 0 && <Empty text="Videos, images and artifacts this agent shares will appear here." />}
-        {data?.outputs.map(output => output.role === 'artifact' ? (
+        {data?.outputs.slice(0, shown).map(output => output.role === 'artifact' ? (
           <a key={output.url} className="artifact" href={output.url} target="_blank" rel="noreferrer">
             <FileIcon size={14} /><span><b>{output.title}</b><small>Artifact</small></span><ExternalLink size={13} />
           </a>
@@ -563,6 +566,7 @@ function Outputs({ person, onExpand }) {
             </button>
           </article>
         ))}
+        {data?.outputs.length > shown && <button className="phone-more" onClick={() => setShown(count => count + limit)}>Show more</button>}
       </div>
     </div>
   )
@@ -920,6 +924,7 @@ export default function App() {
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
   const lastPeople = useRef('')
+  const isPhone = usePhoneWidth()
 
   useEffect(() => {
     const poll = () =>
@@ -956,8 +961,9 @@ export default function App() {
     setNewsRead(date)
     try { localStorage.setItem(NEWS_READ_SETTING, date) } catch {}
   }
+  const refreshNews = () => api('/api/newsroom').then(setNewsDay, () => {})
   useEffect(() => {
-    const poll = () => api('/api/newsroom').then(setNewsDay, () => {})
+    const poll = refreshNews
     poll()
     const timer = setInterval(poll, USAGE_CHECK_MS)
 
@@ -1051,6 +1057,8 @@ export default function App() {
 
   const floor = useMemo(() => active.filter(other => !other.isAssistant), [active])
   const teams = useMemo(() => officeTeams(floor), [floor])
+  // Listed on the phone; the desktop shows them on the map.
+  const loungers = floor.filter(other => !teams.some(team => team.members.some(member => member.id === other.id)))
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
@@ -1084,6 +1092,29 @@ export default function App() {
       else goToPlace(null)
     },
     team: index => { if (teams[index]) pick(teams[index].lead.id) },
+  }
+
+  // No office map here: it's drawn by the 3D scene and steers its camera, and the phone has no scene.
+  if (isPhone) {
+    return (
+      <PhoneApp
+        person={person} everyone={cast} teams={teams} loungers={loungers} away={away} needsYou={needsYou} newsDay={newsDay}
+        needsNews={Boolean((newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn))}
+        isNewsOpen={isNewsOpen} shutDown={shutDown} awayMode={awayMode} voices={voices} problem={problem}
+        parts={{ Memory, Newsroom, Outputs, RequestBanner, Stage }}
+        onNewsSent={refreshNews} onSleep={toggleShutDown} onAway={toggleAway} onClosePerson={() => setSelected(null)} onCloseNews={() => setIsNewsOpen(false)}
+        // Tapping here doesn't switch the session on the Mac, since you may not be sitting at it.
+        onPick={id => {
+          setSelected(id)
+          setPlace(null)
+          if (everyone.find(other => other.id === id)?.isFinished) api('/api/seen', { id }).catch(() => {})
+        }}
+        onNews={() => {
+          setIsNewsOpen(true)
+          if (newsDay?.edition) markNewsRead(newsDay.date)
+        }}
+      />
+    )
   }
 
   return (
