@@ -115,7 +115,7 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
-let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -866,6 +866,7 @@ function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&by
 function teamsIn(list){return teamsOf(list.filter(p=>!p.isAssistant))}
 const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
 const WALL_HEIGHT=10
+const TEAM_VOLUME_HEIGHT=3
 const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
@@ -902,7 +903,7 @@ function keepPlaces(places,present){
 }
 // Every team gets its own space, so teams read apart without closing up the floor.
 function planSpaces(){
-  const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
+  const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)||t.lead.teamId==='project:Newsroom'),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
   const teamKey=t=>t.lead.teamId||t.lead.id,layout=rememberedLayout(),seats=layout.seats||{}
   groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project))
   // The Newsroom joined after the first layout, so it starts at the end like any newcomer.
@@ -1092,7 +1093,7 @@ function applyTimeOfDay(){
 function build(){
   const buildStart=performance.now()
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
-  scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
+  scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; teamVolumes=[]; boards=[]
   scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
   const spaces=planSpaces(),perRow=ROOM_COLUMNS
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
@@ -1352,10 +1353,15 @@ function drawSpace(space,x0,z0){
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
   spots[key]={x:cx,z:cz,W,D}
   drawingKey=key
-  const label=(name)=>addZoneTag(name,cx,z0-.2,key)
+  const label=(name)=>{spots[key].name=name;addZoneTag(name,cx,z0-.2,key)}
   if(kind==='team'){
     pendant(cx-W*.22,cz);pendant(cx+W*.22,cz,false)
     const {team}=space,uniform=new THREE.Color(uniformOf(team.lead.project)),isTeam=team.members.length>1
+    spots[key].color=`#${uniform.getHexString()}`
+    spots[key].teamName=spots[key].name=team.lead.teamName||team.lead.name
+    spots[key].team=team
+    // The floor is a thin strip from a low camera, so the hover area also covers the desks and people.
+    const volume=new THREE.Mesh(new THREE.BoxGeometry(W,TEAM_VOLUME_HEIGHT,D),new THREE.MeshBasicMaterial());volume.position.set(cx,TEAM_VOLUME_HEIGHT/2,cz);volume.visible=false;volume.spaceKey=key;world.add(volume);teamVolumes.push(volume)
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
@@ -1432,8 +1438,206 @@ const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 let drag=null,moved=false
 // Each person has an invisible box around them, so the whole body can be clicked, not just the name.
 const personUnder=ray=>ray.intersectObjects(actors.map(a=>a.g.children[0]))[0]
+// Point at a team's area and a button offers to take you there.
+const CHECK_IN_HEIGHT=2.4
+const CHECK_IN_CLEARANCE=115
+const checkIn=Object.assign(document.createElement('button'),{className:'check-in',hidden:true})
+checkIn.innerHTML='<span class="check-in-tag"><b>Drop in</b><small></small></span><i class="check-in-beam"></i><i class="check-in-tip"></i>'
+stage.appendChild(checkIn)
+const checkInFloor=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({transparent:true,depthWrite:false,map:paintTex(256,256,(g,w,h)=>{g.fillStyle='rgba(255,200,36,.2)';g.fillRect(0,0,w,h);g.strokeStyle='rgba(255,200,36,.95)';g.lineWidth=8;g.strokeRect(4,4,w-8,h-8)})}))
+checkInFloor.rotation.x=-Math.PI/2;checkInFloor.position.y=.05;checkInFloor.visible=false;scene.add(checkInFloor)
+let checkInKey=null
+const checkInSpot=new THREE.Vector3()
+checkIn.onclick=()=>{const key=checkInKey;checkInKey=null;placeCheckIn();onSpace(key)}
+function hoverSpace(ray){
+  const key=ray.intersectObjects([...teamVolumes,...floors])[0]?.object.spaceKey??null
+  checkInKey=spots[key]?.teamName?key:null
+}
+function placeCheckIn(){
+  const spot=spots[checkInKey]
+  checkInSpot.set(spot?.x??0,CHECK_IN_HEIGHT,spot?.z??0).project(camera)
+  if(!spot||lightsOut||drag||checkInKey===focusKey||checkInSpot.z>1){checkIn.hidden=true;checkInFloor.visible=false;return}
+  checkIn.querySelector('small').textContent=spot.teamName
+  checkIn.setAttribute('aria-label',`Drop in on ${spot.teamName}`)
+  checkInFloor.position.x=spot.x;checkInFloor.position.z=spot.z;checkInFloor.scale.set(spot.W,spot.D,1);checkInFloor.visible=true
+  checkIn.style.left=`${(checkInSpot.x+1)/2*stage.clientWidth}px`
+  const tipY=(1-checkInSpot.y)/2*stage.clientHeight
+  checkIn.style.top=`${tipY}px`
+  // In a short window the beam shortens so the tag stays below the top bar.
+  checkIn.style.setProperty('--beam',`${Math.max(10,Math.min(72,tipY-CHECK_IN_CLEARANCE))}px`)
+  checkIn.hidden=false
+}
+// A live floor plan drawn straight onto the glass panel, cheap to redraw because nothing is rendered in 3D.
+const MAP_WIDTH=280,MAP_ROOMS_WIDTH=328,MAP_COLUMN=94,MAP_EDGE=46,MAP_ROW_SQUEEZE=.95,MAP_TOP=6,MAP_BOX_PAD=6,MAP_LABEL_ROOM=14,MAP_DRAW_S=.1,MAP_DOT=3,MAP_PIP=2.6,MAP_DOT_REACH=6,MAP_FACE=22,MAP_PIP_GAP=6,MAP_PIP_SPREAD=.62,MAP_AISLE=.7,MAP_PING_S=1.6,MAP_VIEW_REACH=24
+const MAP_GOLD='#ffc824',MAP_WORKING='#54d1ff',MAP_IDLE='rgba(255,255,255,.42)',MAP_FURNITURE='rgba(255,255,255,.13)',MAP_FONT='Inter,system-ui,sans-serif'
+const map=Object.assign(document.createElement('canvas'),{className:'map'})
+map.setAttribute('aria-label','Map of the office')
+let lastMapDraw=0,mapFrame=null,mapHover=null,mapDots=[]
+function layoutMap(){
+  const all=Object.values(spots);if(!all.length)return null
+  const left=Math.min(...all.map(o=>o.x-o.W/2))-MAP_AISLE,right=Math.max(...all.map(o=>o.x+o.W/2))+MAP_AISLE,top=Math.min(...all.map(o=>o.z-o.D/2))-MAP_AISLE,bottom=Math.max(...all.map(o=>o.z+o.D/2))+MAP_AISLE
+  const scale=MAP_ROOMS_WIDTH/(right-left),x=x=>(x-left)*scale,y=z=>(z-top)*scale
+  // Rooms draw in even columns, tighter than the real floor, so the panel can hug them.
+  const rows={},shift=new Map()
+  all.forEach(o=>(rows[Math.round((o.z-o.D/2)*10)]??=[]).push(o))
+  Object.values(rows).forEach(row=>row.sort((a,b)=>a.x-b.x).forEach((o,i)=>shift.set(o,{x:MAP_EDGE+i*MAP_COLUMN-x(o.x),y:y(o.z)*(MAP_ROW_SQUEEZE-1)+MAP_TOP})))
+  return {scale,height:(bottom-top)*scale*MAP_ROW_SQUEEZE+MAP_TOP*2,x,y,gather:o=>shift.get(o)||{x:0,y:0}}
+}
+const mapNeedsYou=p=>Boolean(p.request||p.isFinished)
+const mapDotColor=p=>mapNeedsYou(p)?MAP_GOLD:p.isRunning||p.isWaiting?MAP_WORKING:MAP_IDLE
+const mapFaces=new Map()
+function mapFace(p){
+  if(!mapFaces.has(p.id)){mapFaces.set(p.id,null);portrait(p).then(url=>{const image=new Image();image.onload=()=>mapFaces.set(p.id,image);image.src=url},()=>{})}
+  return mapFaces.get(p.id)
+}
+function mapStatus(team){
+  const members=team.members.map(m=>people.find(one=>one.id===m.id)||m),working=members.filter(m=>m.isRunning).length
+  if(members.some(m=>m.request))return {text:'Asking for you',color:MAP_GOLD}
+  if(members.some(m=>m.isFinished))return {text:'Finished',color:MAP_GOLD}
+  if(working)return {text:`${working} working`,color:MAP_WORKING}
+  return {text:`${members.length} idle`,color:'rgba(255,255,255,.62)'}
+}
+const MAP_WOOD='#b98a5e',MAP_WOOD_EDGE='#6f4a2b',MAP_DARK_WOOD='#5a3722',MAP_SEAT='#b4bac2',MAP_SEAT_BACK='#6f757e',MAP_COUCH='#7cb4b4',MAP_COUCH_FRAME='#477a7d',MAP_RUG='#8e3a30',MAP_RUG_EDGE='#2f3f5e',MAP_RUG_LINE='rgba(236,214,170,.7)',MAP_LEAF='#5f9f62',MAP_LEAF_LIGHT='#8cc47d',MAP_OFFICE_RUG='#3d5067'
+function mapRect(g,x,y,w,h,r,color){g.fillStyle=color;g.beginPath();g.roundRect(x-w/2,y-h/2,w,h,r);g.fill()}
+function mapRound(g,x,y,r,color){g.fillStyle=color;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill()}
+function mapAt(g,x,y,turn,draw){g.save();g.translate(x,y);g.rotate(-turn);draw();g.restore()}
+function mapShadow(g,draw){g.save();g.shadowColor='rgba(0,0,0,.4)';g.shadowBlur=3;g.shadowOffsetY=1;draw();g.restore()}
+function mapPlant(g,x,y,r){
+  mapShadow(g,()=>mapRound(g,x,y,r,MAP_LEAF))
+  ;[[-.42,-.3],[.42,-.2],[.05,.42]].forEach(([a,b])=>mapRound(g,x+a*r,y+b*r,r*.45,MAP_LEAF_LIGHT))
+}
+function mapRug(g,x,y,w,h){
+  mapRect(g,x,y,w,h,2,MAP_RUG_EDGE);mapRect(g,x,y,w-5,h-5,1.5,MAP_RUG)
+  g.strokeStyle=MAP_RUG_LINE;g.lineWidth=.7;g.beginPath();g.roundRect(x-w/2+4.5,y-h/2+4.5,w-9,h-9,1);g.stroke()
+  const size=Math.min(w,h)*.24
+  g.beginPath();g.moveTo(x-size,y);g.lineTo(x,y-size);g.lineTo(x+size,y);g.lineTo(x,y+size);g.closePath();g.stroke()
+}
+// The back is at the top before turning, as on the real couch.
+function mapCouch(g,c,scale,x,y){
+  const w=2.5*scale,d=1.15*scale
+  mapAt(g,x(c.x),y(c.z),c.turn,()=>{
+    mapShadow(g,()=>mapRect(g,0,0,w,d,3,MAP_COUCH_FRAME))
+    mapRect(g,-w*.235,d*.14,w*.4,d*.62,1.5,MAP_COUCH);mapRect(g,w*.235,d*.14,w*.4,d*.62,1.5,MAP_COUCH)
+    mapRect(g,-w*.33,-d*.13,3.2,2,1,'#e0682f')
+  })
+}
+function mapChair(g,cx,cy,turn,size){
+  mapAt(g,cx,cy,turn,()=>{mapShadow(g,()=>mapRect(g,0,0,size,size,2,MAP_SEAT));mapRect(g,0,-size*.42,size*1.05,size*.32,1.2,MAP_SEAT_BACK)})
+}
+function mapLoungeMiddle(o){
+  const {couches,table}=loungeLayout(o.x,o.z),pieces=[...couches.map(c=>{const across=Math.abs(Math.sin(c.turn));return {x:c.x,z:c.z,w:1.25+across*-.675,d:.575+across*.675}}),{x:table.x,z:table.z,w:1.05,d:.475}]
+  return {x:(Math.min(...pieces.map(p=>p.x-p.w))+Math.max(...pieces.map(p=>p.x+p.w)))/2,z:(Math.min(...pieces.map(p=>p.z-p.d))+Math.max(...pieces.map(p=>p.z+p.d)))/2}
+}
+// Moves a shared room's furniture to the middle of its cell, below the label.
+function mapFurnitureShift(key,o,scale){
+  const middle=key==='lounge'?mapLoungeMiddle(o):key==='office'?{x:o.x,z:o.z-.85}:key==='meeting'?{x:o.x,z:o.z}:null
+  return middle?{x:(o.x-middle.x)*scale,y:(o.z-middle.z)*scale+MAP_LABEL_ROOM/2}:{x:0,y:0}
+}
+// Little versions of the real furniture, in their real arrangement.
+function drawMapFurniture(g,key,o,scale,x,y){
+  if(key==='lounge'){
+    const {couches,table}=loungeLayout(o.x,o.z),middle=mapLoungeMiddle(o)
+    mapRug(g,x(middle.x),y(middle.z),6.4*scale,4.8*scale)
+    couches.forEach(c=>mapCouch(g,c,scale,x,y))
+    mapAt(g,x(table.x),y(table.z),table.turn,()=>{
+      const w=2.1*scale,d=.95*scale
+      mapShadow(g,()=>mapRect(g,0,0,w,d,1.5,MAP_DARK_WOOD));mapRect(g,0,0,w-1.8,d-1.8,1,'#7c5233')
+      mapRect(g,-w*.27,0,4.6,3.4,.5,'#d8c9a8');mapRect(g,-w*.27,0,3.4,2.4,.4,'#7c2f25');mapRound(g,w*.27,0,1.9,MAP_LEAF_LIGHT)
+    })
+    mapPlant(g,x(middle.x)+2.6*scale,y(middle.z)+1.75*scale,3.2)
+  }
+  if(key==='meeting'){
+    const cx=x(o.x),cy=y(o.z),rx=2.5*scale,ry=1.15*scale
+    for(let i=0;i<8;i++){const side=i<4?-1:1;mapChair(g,x(o.x-1.8+(i%4)*1.2),y(o.z+side*1.75),side<0?0:Math.PI,.72*scale)}
+    mapShadow(g,()=>{g.fillStyle=MAP_WOOD_EDGE;g.beginPath();g.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);g.fill()})
+    g.fillStyle=MAP_WOOD;g.beginPath();g.ellipse(cx,cy,rx-1.4,ry-1.4,0,0,Math.PI*2);g.fill()
+    g.strokeStyle='rgba(255,235,205,.28)';g.lineWidth=.8;g.beginPath();g.ellipse(cx,cy,rx*.72,ry*.58,0,0,Math.PI*2);g.stroke()
+    mapRound(g,cx,cy,2.4,'#2c2f35');mapRound(g,cx,cy,1,'#9ba1a9')
+    ;[-1,1].forEach(side=>mapRect(g,cx+side*rx*.58,cy,4.2,5.4,.5,'rgba(255,255,255,.85)'))
+  }
+  if(key==='office'){
+    const cx=x(o.x),desk=y(o.z-.5),w=2.9*scale,d=1.1*scale
+    mapRect(g,cx,y(o.z-.85),5*scale,3.4*scale,2,MAP_OFFICE_RUG)
+    mapChair(g,cx,y(o.z-1.6),0,.86*scale)
+    mapShadow(g,()=>mapRect(g,cx,desk,w,d,1.5,MAP_WOOD_EDGE));mapRect(g,cx,desk,w-1.8,d-1.8,1,MAP_WOOD)
+    mapRect(g,cx,desk-d*.22,w*.36,1.8,.8,'#20242b');mapRect(g,cx,desk+d*.14,w*.26,2.6,.6,'rgba(255,255,255,.9)')
+    mapRound(g,cx+w*.36,desk,1.5,'#f1eadc');mapRound(g,cx+w*.36,desk,.8,'#5a3722')
+    mapPlant(g,cx+2.05*scale,y(o.z-2.1),3)
+  }
+}
+function drawMapPing(g,px,py,radius,now){
+  const age=(now%MAP_PING_S)/MAP_PING_S
+  g.strokeStyle=`rgba(255,200,36,${.8*(1-age)})`;g.lineWidth=1.5;g.beginPath();g.arc(px,py,radius+age*9,0,Math.PI*2);g.stroke()
+}
+function drawMapDot(g,p,px,py,radius,now){
+  if(mapNeedsYou(p))drawMapPing(g,px,py,radius,now)
+  g.fillStyle=mapDotColor(p);g.beginPath();g.arc(px,py,radius,0,Math.PI*2);g.fill()
+  if(p.id===selected){g.strokeStyle='#fff';g.lineWidth=1.3;g.beginPath();g.arc(px,py,radius+2.5,0,Math.PI*2);g.stroke()}
+  mapDots.push({p,x:px,y:py})
+}
+// A team is its lead's face, with everyone else as pips around it, like a party in a game.
+function drawMapTeam(g,o,members,x,y,now){
+  const near=mapFrame.gather(o),cx=x(o.x)+near.x,cy=y(o.z)+near.y,status=mapStatus(o.team),image=mapFace(o.team.lead),rh=o.D*mapFrame.scale,lead=people.find(one=>one.id===o.team.lead.id)||o.team.lead
+  if(mapNeedsYou(lead))drawMapPing(g,cx,cy,MAP_FACE,now)
+  g.save();g.beginPath();g.arc(cx,cy,MAP_FACE,0,Math.PI*2);g.closePath();g.fillStyle=o.color||'rgba(255,255,255,.2)';g.fill();g.clip()
+  if(image)g.drawImage(image,cx-MAP_FACE,cy-MAP_FACE,MAP_FACE*2,MAP_FACE*2)
+  g.restore()
+  g.strokeStyle=status.color;g.lineWidth=2;g.beginPath();g.arc(cx,cy,MAP_FACE,0,Math.PI*2);g.stroke()
+  const others=members.filter(p=>p.id!==o.team.lead.id)
+  // Half on each side of the face, clear of the name above and status below.
+  others.forEach((p,i)=>{const side=i%2?1:-1,count=i%2?Math.floor(others.length/2):Math.ceil(others.length/2),row=Math.floor(i/2),tilt=(row-(count-1)/2)*MAP_PIP_SPREAD,reach=MAP_FACE+MAP_PIP_GAP;drawMapDot(g,p,cx+side*Math.cos(tilt)*reach,cy+Math.sin(tilt)*reach,MAP_PIP,now)})
+  g.textAlign='center';g.textBaseline='bottom';g.fillStyle=status.color;g.font=`500 10px ${MAP_FONT}`;g.fillText(status.text,cx,cy+rh/2+1)
+}
+function drawMap(){
+  mapFrame=layoutMap()
+  map.hidden=lightsOut||!mapFrame
+  if(map.hidden)return
+  const {scale,height,x,y}=mapFrame,ratio=(window.devicePixelRatio||1)*(map.clientWidth||MAP_WIDTH)/MAP_WIDTH,g=map.getContext('2d'),w=Math.round(MAP_WIDTH*ratio),h=Math.round(height*ratio),now=performance.now()/1000
+  if(map.width!==w||map.height!==h){map.width=w;map.height=h}
+  g.setTransform(ratio,0,0,ratio,0,0);g.clearRect(0,0,MAP_WIDTH,height)
+  mapDots=[]
+  const live=actors.map(a=>({a,p:people.find(one=>one.id===a.p.id)||a.p}))
+  const rooms=Object.entries(spots),inRoom=(a,o)=>Math.abs(a.g.position.x-o.x)<o.W/2&&Math.abs(a.g.position.z-o.z)<o.D/2
+  rooms.forEach(([key,o])=>{
+    const near=mapFrame.gather(o),rx=x(o.x)+near.x-MAP_COLUMN/2,ry=y(o.z-o.D/2)+near.y,rw=MAP_COLUMN,rh=o.D*scale
+    // The same soft highlights as the panel's buttons.
+    if(key===mapHover||key===focusKey){g.fillStyle=key===focusKey?'rgba(255,255,255,.2)':'rgba(255,255,255,.14)';g.beginPath();g.roundRect(rx,ry-MAP_BOX_PAD,rw,rh+MAP_BOX_PAD*2,10);g.fill()}
+    const moved=mapFurnitureShift(key,o,scale);g.save();g.translate(near.x+moved.x,near.y+moved.y);drawMapFurniture(g,key,o,scale,x,y);g.restore()
+  })
+  // What the camera can see, as a faint cone.
+  const ox=Math.min(MAP_WIDTH,Math.max(0,x(camera.position.x))),oy=Math.min(height,Math.max(0,y(camera.position.z))),turn=Math.atan2(view.center.z-camera.position.z,view.center.x-camera.position.x),spread=Math.atan(Math.tan(camera.fov*Math.PI/360)*camera.aspect),reach=MAP_VIEW_REACH*scale
+  const cone=g.createRadialGradient(ox,oy,0,ox,oy,reach);cone.addColorStop(0,'rgba(255,255,255,.1)');cone.addColorStop(1,'rgba(255,255,255,0)')
+  g.fillStyle=cone;g.beginPath();g.moveTo(ox,oy);g.arc(ox,oy,reach,turn-spread,turn+spread);g.closePath();g.fill()
+  const seated=new Set()
+  rooms.forEach(([,o])=>{
+    const needsYou=live.some(({a,p})=>mapNeedsYou(p)&&inRoom(a,o))
+    g.textAlign='center';g.textBaseline='top';g.fillStyle=needsYou?MAP_GOLD:'rgba(255,255,255,.94)';g.font=`600 11px ${MAP_FONT}`
+    const near=mapFrame.gather(o);g.fillText(o.name||'',x(o.x)+near.x,y(o.z-o.D/2)+1+near.y,MAP_COLUMN-2)
+    if(!o.team)return
+    const members=live.filter(({a,p})=>inRoom(a,o)&&o.team.members.some(m=>m.id===p.id))
+    members.forEach(({p})=>seated.add(p.id))
+    drawMapTeam(g,o,members.map(({p})=>p),x,y,now)
+  })
+  live.filter(({p})=>!seated.has(p.id)).forEach(({a,p})=>{const room=rooms.find(([,o])=>inRoom(a,o)),near=room?mapFrame.gather(room[1]):{x:0,y:0},moved=room?mapFurnitureShift(room[0],room[1],scale):{x:0,y:0};drawMapDot(g,p,x(a.g.position.x)+near.x+moved.x,y(a.g.position.z)+near.y+moved.y,MAP_DOT,now)})
+}
+function mapTarget(e){
+  if(!mapFrame)return {}
+  const r=map.getBoundingClientRect(),k=MAP_WIDTH/r.width,mx=(e.clientX-r.left)*k,my=(e.clientY-r.top)*k,{scale,x,y}=mapFrame
+  const person=mapDots.find(dot=>Math.hypot(dot.x-mx,dot.y-my)<=MAP_DOT_REACH)
+  const space=Object.entries(spots).find(([,o])=>{const near=mapFrame.gather(o);return Math.abs(x(o.x)+near.x-mx)<=MAP_COLUMN/2&&Math.abs(y(o.z)+near.y-my)<=o.D*scale/2})
+  return {person:person?.p,spaceKey:space?.[0]}
+}
+map.addEventListener('pointermove',e=>{
+  const {person,spaceKey}=mapTarget(e)
+  map.style.cursor=person||spaceKey?'pointer':''
+  map.title=person?person.name:''
+  if(spaceKey!==mapHover){mapHover=spaceKey;drawMap()}
+})
+map.addEventListener('pointerleave',()=>{mapHover=null;drawMap()})
+map.addEventListener('click',e=>{const {person,spaceKey}=mapTarget(e);if(person)onPick(person.id);else if(spaceKey)onSpace(spaceKey)})
+canvas.addEventListener('pointerleave',e=>{if(!stage.contains(e.relatedTarget))checkInKey=null})
 canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
-canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
 canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
@@ -1441,6 +1645,8 @@ let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
 function loop(){const t=clock.getElapsedTime()
   if(fitDirty)fitCamera()
+  placeCheckIn()
+  if(t-lastMapDraw>MAP_DRAW_S){lastMapDraw=t;drawMap()}
   if(t-lastDaylight>60){lastDaylight=t;applyTimeOfDay()}
   // Models keep arriving after the room is built.
   if(t-lastReflections>REFLECTION_CHECK_S){lastReflections=t;dimReflections()}
@@ -1508,6 +1714,7 @@ return {
     boardFont=`"${family}",sans-serif`
     boards.forEach(drawBoard);drawDirectory();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
-  dispose(){clearInterval(timer);observer.disconnect();renderer.dispose()},
+  map,
+  dispose(){clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
 }
 }

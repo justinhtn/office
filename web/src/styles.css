@@ -220,6 +220,19 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .helpers { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .helper { display: inline-flex; align-items: center; gap: 5px; }
 .zone-tag { pointer-events: auto; cursor: pointer; }
+.check-in { position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: center; padding: 0; transform: translate(-50%, -100%); background: none; border: 0; cursor: pointer; }
+.check-in[hidden] { display: none; }
+.map-host { flex: none; }
+.map { display: block; width: 100%; height: auto; }
+.map[hidden] { display: none; }
+.check-in-tag { display: flex; flex-direction: column; align-items: center; padding: 7px 16px; background: rgba(14, 17, 24, .84); color: #fff; font: 700 14px Inter, system-ui, sans-serif; white-space: nowrap; border: 1px solid #ffc824; border-radius: 8px; box-shadow: 0 0 18px rgba(255, 200, 36, .55); animation: check-in-bob 1.6s ease-in-out infinite; }
+.check-in-tag small { font-weight: 500; font-size: 11px; color: rgba(255, 255, 255, .78); }
+.check-in:hover .check-in-tag { background: #ffc824; color: #17171c; }
+.check-in:hover .check-in-tag small { color: #17171c; }
+.check-in-beam { width: 3px; height: var(--beam, 72px); background: linear-gradient(#ffc824, rgba(255, 200, 36, .25)); box-shadow: 0 0 8px rgba(255, 200, 36, .7); }
+.check-in-tip { width: 12px; height: 12px; margin-bottom: -6px; background: #ffc824; transform: rotate(45deg); box-shadow: 0 0 12px #ffc824; }
+@keyframes check-in-bob { 50% { transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .check-in-tag { animation: none; } }
 .zone-tag:hover { background: #2b1d3a; }
 .team-button { flex: none; position: relative; display: flex; align-items: center; gap: 7px; height: 40px; padding: 0 10px 0 6px; border-radius: 7px; white-space: nowrap; text-align: left; }
 .team-button:hover { background: rgba(0, 0, 0, .06); }
@@ -301,7 +314,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .team-toggle b { font-size: 12px; font-weight: 600; }
 .team-toggle .flipped { transform: rotate(180deg); }
 .team-count { min-width: 17px; height: 17px; padding: 0 4px; display: grid; place-items: center; border-radius: 9px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 600; }
-.team-list { min-height: 0; width: 280px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; padding: 5px; background: rgba(255, 255, 255, .96); color: #17171c; border: 1px solid rgba(0, 0, 0, .08); border-radius: 10px; box-shadow: 0 4px 18px rgba(0, 0, 0, .18); }
+.team-list { min-height: 0; width: 292px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; padding: 5px; background: rgba(255, 255, 255, .96); color: #17171c; border: 1px solid rgba(0, 0, 0, .08); border-radius: 10px; box-shadow: 0 4px 18px rgba(0, 0, 0, .18); }
 .team-list .team-button { width: 100%; }
 .team-text { min-width: 0; }
 .team-text b, .team-text small { overflow: hidden; text-overflow: ellipsis; }

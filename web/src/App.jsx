@@ -4,7 +4,7 @@ import { DiffEditor, Editor } from '@monaco-editor/react'
 import { Tree } from 'react-arborist'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Sofa, Tv, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Volume2, VolumeX, SkipForward, X,
+  Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
@@ -24,13 +24,14 @@ async function loadBoardFont(family) {
   await Promise.all(['400', '500', '600'].map(weight => document.fonts.load(`${weight} 20px "${family}"`))).catch(() => {})
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, onPick, onSpace }) {
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, mapHost, onPick, onSpace }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
   space.current = onSpace
   useEffect(() => {
     scene.current = createScene(stage.current, canvas.current, tags.current, id => pick.current(id), key => space.current(key))
+    mapHost.current?.appendChild(scene.current.map)
 
     return () => scene.current.dispose()
   }, [])
@@ -60,16 +61,7 @@ const isBusy = person => person.isRunning || person.isFinished || Boolean(person
 
 // Teams as the office lays them out: anyone idle and alone is in the lounge.
 function officeTeams(active) {
-  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead))
-}
-
-function teamStatus(team) {
-  const working = team.members.filter(member => member.isRunning).length
-  const finished = team.members.filter(member => member.isFinished).length
-  if (working) return `${working} working`
-  if (finished) return `${finished} finished`
-
-  return `${team.members.length} ${team.members.length === 1 ? 'person' : 'people'}, idle`
+  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead) || team.lead.teamId === 'project:Newsroom')
 }
 
 const OWNER = { name: 'You', avatar: OWNER_AVATAR, project: 'Your office' }
@@ -118,13 +110,7 @@ function Newsroom({ day, onClose }) {
   )
 }
 
-function TeamMenu({ teams, hasLounge, focus, onTeam, onPlace, onNews, children }) {
-  const place = (key, label, Icon) => (
-    <button key={key} className={`team-button ${focus === key ? 'on' : ''}`} onClick={() => onPlace(key)}>
-      <span className="place-icon"><Icon size={17} /></span><b>{label}</b>
-    </button>
-  )
-
+function TeamMenu({ focus, mapHost, onPlace, onNews, children }) {
   return (
     <nav className="team-menu team-list" aria-label="Go to a team">
       {children}
@@ -132,21 +118,8 @@ function TeamMenu({ teams, hasLounge, focus, onTeam, onPlace, onNews, children }
       <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
         <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
       </button>
-      <button className={`team-button ${focus === 'office' ? 'on' : ''}`} onClick={() => onPlace('office')}>
-        <Avatar person={OWNER} size={28} /><span className="team-text"><b>Your office</b><small>Usage, Mia and everyone</small></span>
-      </button>
-      <span className="team-divider" />
-      {teams.map((team, index) => (
-        <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
-          <Avatar person={team.lead} size={28} />
-          {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
-          <span className="team-text"><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
-        </button>
-      ))}
-      <span className="team-divider" />
+      <div className="map-host" ref={mapHost} />
       <button className="team-button" onClick={onNews}><span className="place-icon"><Newspaper size={17} /></span><b>Today's reading</b></button>
-      {place('meeting', 'Meeting room', Tv)}
-      {hasLounge && place('lounge', 'Lounge', Sofa)}
     </nav>
   )
 }
@@ -974,6 +947,7 @@ export default function App() {
   const [usage, setUsage] = useState(null)
   const [newsDay, setNewsDay] = useState(null)
   const [isNewsOpen, setIsNewsOpen] = useState(false)
+  const mapHost = useRef(null)
   const [newsRead, setNewsRead] = useState(() => {
     try { return localStorage.getItem(NEWS_READ_SETTING) } catch { return null }
   })
@@ -1077,7 +1051,6 @@ export default function App() {
 
   const floor = useMemo(() => active.filter(other => !other.isAssistant), [active])
   const teams = useMemo(() => officeTeams(floor), [floor])
-  const loungers = floor.filter(other => !teams.some(team => team.members.some(member => member.id === other.id)))
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
@@ -1133,7 +1106,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown} onPick={pick} onSpace={goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
         <div className="corner">
           {!person && !shutDown && place === 'office' && (
@@ -1157,7 +1130,7 @@ export default function App() {
             />
           )}
           {isNewsOpen && newsDay && <Drawer onClose={() => setIsNewsOpen(false)}><Newsroom day={newsDay} onClose={() => setIsNewsOpen(false)} /></Drawer>}
-          <TeamMenu onNews={() => setIsNewsOpen(true)} teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace}>
+          <TeamMenu onNews={() => setIsNewsOpen(true)} focus={focus} mapHost={mapHost} onPlace={goToPlace}>
             <span className="voices">
             <button className={`voice-mode shut-down ${shutDown ? 'on' : ''}`} title={shutDown ? "Turn the lights back on, and hear what's waiting" : 'Put the office to sleep: lights, TVs and name tags go off, and nobody alerts you. Agents keep working'} aria-pressed={shutDown} onClick={toggleShutDown}><Power size={14} /> {shutDown ? 'Wake up' : 'Sleep'}</button>
             <button className={`voice-mode away-mode ${awayMode ? 'on' : ''}`} title={awayMode ? "You're away. Click when you're back to hear what's waiting" : 'Nobody alerts you until you come back. Mia keeps everything waiting'} aria-pressed={awayMode} onClick={toggleAway}>{awayMode ? <><Moon size={14} /> I'm back</> : <><Moon size={14} /> Set away</>}</button>
