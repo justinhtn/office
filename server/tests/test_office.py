@@ -294,6 +294,10 @@ class PrOutcomeTests(OfficeCase):
         self.ingest(row("a", **self.MERGED))
         self.assertIsNone(self.ingest(row("a", prNumber=9))["a"]["prOutcome"])
 
+    def test_the_outcome_goes_when_the_pr_is_unbound(self):
+        self.ingest(row("a", **self.MERGED))
+        self.assertIsNone(self.ingest(row("a"))["a"]["prOutcome"])
+
     def test_no_pr_means_no_outcome(self):
         self.assertIsNone(self.ingest(row("a"))["a"]["prOutcome"])
         self.assertIsNone(self.ingest(row("a", prState="MERGED"))["a"]["prOutcome"])

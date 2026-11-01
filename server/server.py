@@ -643,11 +643,13 @@ class Office:
     def note_pr_outcome(self, row):
         """A PR that has just ended settles any finish from before it. Each ending counts once, even after a restart."""
         state, number = str(row.get("prState") or "").upper(), str(row.get("prNumber") or "")
-        if self.pr_outcomes is None or not number:
+        if self.pr_outcomes is None or (not number and row["id"] not in self.pr_outcomes):
             return
         entry = self.pr_outcomes.setdefault(row["id"], {"ended": {}, "showing": None})
         if entry["showing"] != number:
             entry["showing"] = None
+        if not number:
+            return
         if state in PR_ENDED and entry["ended"].get(number) != state:
             entry["ended"][number] = state
             # The app can report a merge after the finish that followed it, so a fresh finish keeps its hand up.
