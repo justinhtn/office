@@ -24,7 +24,7 @@ def load_server():
     spec = importlib.util.spec_from_file_location("office_server", SERVER_PATH)
     module = importlib.util.module_from_spec(spec)
     environment = {"AGENT_OFFICE_HOME": str(DATA), "HOME": str(HOME)}
-    # Port 0 is never listened on from here: it only keeps the module away from the real default.
+    # The module never listens by itself. Port 0 keeps its allowed hosts away from the real default.
     with mock.patch.dict(os.environ, environment), mock.patch.object(sys, "argv", ["server.py", "0"]):
         spec.loader.exec_module(module)
     for path in (module.DATA, module.CLAUDE_PROJECTS, module.APP_SESSIONS):
