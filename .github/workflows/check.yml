@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # This job's name is a required check on main. Renaming it blocks every pull request.
+  # Branch protection refers to a check by this name, so keep it stable if it is ever required.
   check:
     name: check
     runs-on: ubuntu-24.04

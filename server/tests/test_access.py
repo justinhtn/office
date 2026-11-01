@@ -71,9 +71,17 @@ class SessionFileTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 404)
 
     def test_assets_stay_in_the_assets_folder(self):
-        for path in ("assets/../index.html", "assets/../../server/server.py", "index.html"):
-            with self.subTest(path), self.assertRaises(server.Refused):
-                server.asset(path)
+        # These files exist and have a type that is served, so only the folder check can refuse them.
+        dist = WORK / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "assets" / "app.js").write_text("APP")
+        (dist / "beside.js").write_text("BESIDE")
+        (WORK / "outside.js").write_text("OUTSIDE")
+        with mock.patch.object(server, "DIST", dist):
+            self.assertEqual(server.asset("assets/app.js")[0], b"APP")
+            for path in ("beside.js", "assets/../beside.js", "assets/../../outside.js"):
+                with self.subTest(path), self.assertRaises(server.Refused):
+                    server.asset(path)
 
 
 class RequestTests(unittest.TestCase):
