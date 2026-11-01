@@ -12,10 +12,11 @@ Use the `dev-workflow` skill for any change to this repo. `main` is protected, s
 
 Quinn is the code reviewer, a session whose memory is cleared after each PR, so every review starts blank.
 
-- Quinn gets only the PR link at first, and posts findings on the PR before talking to the author. Run `/code-review` once `check` has passed.
+- Quinn gets only the PR link at first, and posts findings on the PR before talking to the author. Run `/code-review` without `--comment` once `check` has passed, then post the findings yourself, so they appear under Quinn's name.
 - Quinn posts as the `quinn-office-review` GitHub App: use `~/.agent-office/quinn/quinn-gh` in place of `gh`. Never post as the person, and never print its token or read its key.
 - All discussion of the code happens on the PR, as comments on the relevant lines. The author replies in the same threads and pushes fixes. Sessions only send each other one-line nudges, such as "replied on PR 6".
 - If Quinn drops a finding after discussion, the reason goes on the PR.
+- Quinn's verdict covers one commit. After new pushes, Quinn looks again and updates it. A GitHub approval stays in place after a push and isn't required by branch protection, so check the verdict covers the latest commit before merging.
 - Quinn's approval doesn't merge anything. The person decides on merging, then the lead clears Quinn.
 - Comments may become public one day, so keep secrets and real transcript text out of them.
 
