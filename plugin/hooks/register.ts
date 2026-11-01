@@ -35,6 +35,7 @@ type Listed = {
   title?: string
   cwd?: string
   prNumber?: number
+  prState?: string
   isRunning?: boolean
   lastActivityAt?: string
   link?: string
@@ -90,6 +91,7 @@ function toRow(session: Listed) {
     cwd: session.cwd,
     startedBy: session.startedBy ?? session.parentSessionId,
     prNumber: session.prNumber,
+    prState: session.prState,
     isRunning: session.isRunning === true,
     lastActivityAt: session.lastActivityAt ?? '',
     link: session.link,

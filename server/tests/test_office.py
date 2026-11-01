@@ -70,7 +70,7 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(placed["kid"]["teamId"], "project:Gamma")
 
 
-class StatusTests(unittest.TestCase):
+class OfficeCase(unittest.TestCase):
     def setUp(self):
         clean_slate()
         self.office = server.Office()
@@ -90,6 +90,8 @@ class StatusTests(unittest.TestCase):
     def job(self, age):
         return assistant(tool("j1", "Bash", command="x", run_in_background=True, description="Train"), timestamp=ago(age))
 
+
+class StatusTests(OfficeCase):
     def test_a_running_session_is_acting(self):
         person = self.ingest(row("a", isRunning=True))["a"]
         self.assertTrue(person["isRunning"] and person["isActing"])
@@ -165,6 +167,76 @@ class StatusTests(unittest.TestCase):
         server.write_json(server.REQUESTS / "r1.json", {"session": "a", "message": "Look", "at": "2026-01-01T10:00:00Z"})
         self.assertEqual(self.ingest(row("a"))["a"]["request"]["message"], "Look")
         self.assertEqual(len(list(server.REQUESTS.glob("*.json"))), 1)
+
+
+class PrOutcomeTests(OfficeCase):
+    MERGED = {"prNumber": 8, "prState": "MERGED"}
+
+    def finish(self, **pr):
+        self.ingest(row("a", isRunning=True, **pr))
+
+        return self.ingest(row("a", isRunning=False, **pr))["a"]
+
+    def test_a_merge_clears_the_finish_before_it_and_says_so(self):
+        self.assertTrue(self.finish(prNumber=8, prState="OPEN")["isFinished"])
+        person = self.ingest(row("a", **self.MERGED))["a"]
+        self.assertFalse(person["isFinished"])
+        self.assertEqual((person["prOutcome"], person["lastUpdate"]), ("PR 8 merged", "PR 8 merged"))
+        self.assertEqual(server.read_json(server.FINISHED, None), [])
+
+    def test_a_pr_closed_without_merging_reads_differently(self):
+        self.finish(prNumber=2, prState="OPEN")
+        person = self.ingest(row("a", prNumber=2, prState="CLOSED"))["a"]
+        self.assertFalse(person["isFinished"])
+        self.assertEqual(person["prOutcome"], "PR 2 closed")
+
+    def test_a_finish_after_the_merge_raises_the_hand_again(self):
+        self.ingest(row("a", **self.MERGED))
+        person = self.finish(**self.MERGED)
+        self.assertTrue(person["isFinished"])
+        self.assertIsNone(person["prOutcome"])
+
+    def test_a_merge_seen_with_the_finish_keeps_the_hand_up(self):
+        self.ingest(row("a", isRunning=True, prNumber=8, prState="OPEN"))
+        person = self.ingest(row("a", isRunning=False, **self.MERGED))["a"]
+        self.assertTrue(person["isFinished"])
+
+    def test_an_ending_only_counts_once_even_after_a_restart(self):
+        self.ingest(row("a", **self.MERGED))
+        self.office = server.Office()
+        self.assertTrue(self.finish(**self.MERGED)["isFinished"])
+        self.office = server.Office()
+        self.assertTrue(self.ingest(row("a", isRunning=False, **self.MERGED))["a"]["isFinished"])
+
+    def test_a_pending_question_stays_up(self):
+        server.REQUESTS.mkdir()
+        server.write_json(server.REQUESTS / "r1.json", {"session": "a", "message": "Look", "at": "2026-01-01T10:00:00Z"})
+        person = self.ingest(row("a", **self.MERGED))["a"]
+        self.assertEqual(person["request"]["message"], "Look")
+        self.assertIsNone(person["prOutcome"])
+
+    def test_the_outcome_gives_way_to_later_work(self):
+        self.ingest(row("a", **self.MERGED))
+        self.assertIsNone(self.ingest(row("a", isRunning=True, **self.MERGED))["a"]["prOutcome"])
+        self.office.mark_seen("a")
+        self.assertIsNone(self.ingest(row("a", isRunning=False, **self.MERGED))["a"]["prOutcome"])
+
+    def test_a_new_pr_starts_over(self):
+        self.ingest(row("a", **self.MERGED))
+        self.assertIsNone(self.ingest(row("a", prNumber=9, prState="OPEN"))["a"]["prOutcome"])
+        self.finish(prNumber=9, prState="OPEN")
+        person = self.ingest(row("a", prNumber=9, prState="MERGED"))["a"]
+        self.assertEqual((person["isFinished"], person["prOutcome"]), (False, "PR 9 merged"))
+
+    def test_a_row_without_a_state_changes_nothing(self):
+        self.ingest(row("a", **self.MERGED))
+        self.assertEqual(self.ingest(row("a", prNumber=8))["a"]["prOutcome"], "PR 8 merged")
+        self.assertTrue(self.finish(prNumber=8)["isFinished"])
+        self.assertTrue(self.ingest(row("a", **self.MERGED))["a"]["isFinished"])
+
+    def test_no_pr_means_no_outcome(self):
+        person = self.ingest(row("a"))["a"]
+        self.assertIsNone(person["prOutcome"])
 
 
 if __name__ == "__main__":

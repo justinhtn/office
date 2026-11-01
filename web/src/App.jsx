@@ -841,7 +841,7 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
           <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
         </header>
         <div className="card-state">
-          <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : `Idle ${age(person.lastActivityAt)}`}</span>
+          <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : person.prOutcome || `Idle ${age(person.lastActivityAt)}`}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
         {person.title && !person.title.startsWith(person.label) && <p className="card-doing">{person.title}</p>}
