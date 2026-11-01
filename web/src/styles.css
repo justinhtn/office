@@ -387,3 +387,5 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .newsroom audio { width: 100%; }
 .voice-mode.shut-down.on { color: #fff; border-color: rgba(255, 255, 255, .5); background: rgba(255, 255, 255, .16); }
 .team-list .voice-mode { padding: 0 6px; font-size: 11px; }
+.room-title { position: absolute; top: 48px; left: 12px; z-index: 3; padding: 5px 10px; font: 600 13px Inter, system-ui, sans-serif; color: #fff; background: rgba(14, 17, 24, .84); border-radius: 8px; box-shadow: 0 1px 6px rgba(0, 0, 0, .16); }
+.room-title button { color: inherit; font: inherit; background: none; border: 0; padding: 0; cursor: pointer; }

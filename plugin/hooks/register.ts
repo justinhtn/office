@@ -63,6 +63,7 @@ type Person = {
   request?: { message?: string } | null
   teamId?: string
   teamName?: string
+  teamGroup?: string
   teamLeadId?: string
   isIndependent?: boolean
 }
@@ -139,7 +140,7 @@ async function holdsLease($: EngineInterface): Promise<boolean> {
   return true
 }
 
-// Files each team's sessions under a sidebar group of the same name. Each move is only tried once,
+// Files each project's sessions under a sidebar group of the same name, whatever the office calls the team. Each move is only tried once,
 // so a refused one doesn't come back, and sessions the person has filed elsewhere can move again by hand.
 async function syncSidebar($: EngineInterface, rows: { id: string; group?: string }[]): Promise<void> {
   try {
@@ -148,15 +149,15 @@ async function syncSidebar($: EngineInterface, rows: { id: string; group?: strin
     const tried = (await $.fs.exists(path)) ? (JSON.parse(await $.fs.read(path)) as Record<string, string>) : {}
     const grouped = new Map(rows.map(row => [row.id, row.group]))
     const due = people
-      .filter(person => !person.isIndependent && !person.isAssistant && person.teamName && grouped.has(person.id))
-      .filter(person => grouped.get(person.id) !== person.teamName && tried[person.id] !== person.teamName)
+      .filter(person => !person.isIndependent && !person.isAssistant && person.teamGroup && grouped.has(person.id))
+      .filter(person => grouped.get(person.id) !== person.teamGroup && tried[person.id] !== person.teamGroup)
       .slice(0, SIDEBAR_MOVES_PER_PASS)
     if (!due.length) return
     const listed = await $.mcp.call(SIDEBAR_TOOLS, 'list_groups', {})
     if (listed.isError) return
     const groups = new Map((JSON.parse(textOf(listed)) as { id: string; name: string }[]).map(group => [group.name, group.id]))
     for (const person of due) {
-      const name = person.teamName as string
+      const name = person.teamGroup as string
       tried[person.id] = name
       if (!groups.has(name)) {
         const made = await $.mcp.call(SIDEBAR_TOOLS, 'create_group', { name })
