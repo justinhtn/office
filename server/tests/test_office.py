@@ -159,6 +159,13 @@ class StatusTests(unittest.TestCase):
         self.assertIsNone(self.ingest(row("a"))["a"]["request"])
         self.assertEqual(list(server.REQUESTS.glob("*.json")), [])
 
+    def test_a_reply_before_the_request_leaves_it_waiting(self):
+        server.REQUESTS.mkdir()
+        self.with_transcript("a", user("Earlier", timestamp="2026-01-01T09:00:00Z"))
+        server.write_json(server.REQUESTS / "r1.json", {"session": "a", "message": "Look", "at": "2026-01-01T10:00:00Z"})
+        self.assertEqual(self.ingest(row("a"))["a"]["request"]["message"], "Look")
+        self.assertEqual(len(list(server.REQUESTS.glob("*.json"))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

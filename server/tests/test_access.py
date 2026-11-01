@@ -97,8 +97,8 @@ class RequestTests(unittest.TestCase):
     def setUp(self):
         clean_slate()
 
-    def send(self, method, path, token=None, host=HOST, origin=None, body=None):
-        headers = {"Host": host}
+    def send(self, method, path, token=None, host=HOST, origin=None, body=None, extra_headers=None):
+        headers = {"Host": host, **(extra_headers or {})}
         if token is not None:
             headers["X-Office-Token"] = token
         if origin:
@@ -120,11 +120,9 @@ class RequestTests(unittest.TestCase):
             with self.subTest(token):
                 self.assertEqual(self.send("GET", "/api/sessions", token=token)[0], 403)
 
-    def test_a_token_that_is_not_ascii_lets_nothing_out(self):
-        # compare_digest raises on these, so today this is a 500 and not a 403. Either keeps data safe.
-        with mock.patch.object(server.traceback, "print_exc"):
-            status, body = self.send("GET", "/api/sessions", token="caf\xe9")
-        self.assertIn(status, (403, 500))
+    def test_a_token_that_is_not_ascii_is_refused(self):
+        status, body = self.send("GET", "/api/sessions", token="caf\xe9")
+        self.assertEqual(status, 403)
         self.assertNotIn(b"people", body)
 
     def test_changes_need_a_token_and_leave_nothing_behind(self):
@@ -156,6 +154,24 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(self.send("GET", address(picture, signature)), (200, b"PICTURE"))
         self.assertEqual(self.send("GET", address(other, signature))[0], 403)
         self.assertEqual(self.send("GET", address(picture, "0" * 64))[0], 403)
+
+    def media_address(self, path):
+        return "/media?" + urlencode({"id": SESSION, "path": str(path), "sig": server.media_signature(SESSION, str(path))})
+
+    def test_a_signature_does_not_open_other_kinds_of_file(self):
+        notes = WORK / "notes.txt"
+        notes.write_text("PRIVATE")
+        status, body = self.send("GET", self.media_address(notes))
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"PRIVATE", body)
+
+    def test_media_serves_the_range_asked_for(self):
+        picture = WORK / "a.png"
+        picture.write_bytes(b"0123456789")
+        address = self.media_address(picture)
+        self.assertEqual(self.send("GET", address, extra_headers={"Range": "bytes=2-4"}), (206, b"234"))
+        self.assertEqual(self.send("GET", address, extra_headers={"Range": "bytes=-3"}), (206, b"789"))
+        self.assertEqual(self.send("GET", address, extra_headers={"Range": "bytes=20-"})[0], 416)
 
 
 if __name__ == "__main__":
