@@ -1210,24 +1210,28 @@ modal_lock = threading.Lock()
 
 
 def modal_field(app, name):
-    """The command's JSON uses snake_case, and older versions used the table's headings."""
+    """Modal 1.6 uses snake_case in its JSON, and 1.3 used the table's headings."""
     return app.get(name.lower().replace(" ", "_"), app.get(name))
 
 
 def modal_time(text):
     try:
         return datetime.datetime.fromisoformat(str(text)).timestamp()
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
         return None
+
+
+MODAL_UNKNOWN_FORMAT = {"isUnknownFormat": True, "running": [], "count": 0, "apps": [], "stopped": [], "stoppedCount": 0, "idle": 0}
 
 
 def modal_summary(apps, now):
     """What the office shows from the command's list. App IDs stay out of it, and it has no spend to show."""
+    readable = [app for app in apps if isinstance(app, dict) and modal_field(app, "Description") and modal_field(app, "State")]
+    if apps and not readable:
+        return dict(MODAL_UNKNOWN_FORMAT)
     running, stopped, idle = [], [], 0
-    for app in apps:
-        if not isinstance(app, dict):
-            continue
-        name = str(modal_field(app, "Description") or "Modal app")[:MODAL_NAME_LENGTH]
+    for app in readable:
+        name = str(modal_field(app, "Description"))[:MODAL_NAME_LENGTH]
         state = str(modal_field(app, "State") or "")
         try:
             tasks = int(modal_field(app, "Tasks") or 0)
@@ -1249,17 +1253,29 @@ def modal_summary(apps, now):
 
 def check_modal():
     value = None
+    try:
+        value = read_modal()
+    finally:
+        with modal_lock:
+            modal_state.update(value=value, isChecked=True, isChecking=False)
+
+
+def read_modal():
     command = shutil.which("modal") or next((str(p) for p in (Path.home() / ".local/bin/modal", Path("/opt/homebrew/bin/modal"), Path("/usr/local/bin/modal")) if p.exists()), None)
-    if command:
-        try:
-            done = subprocess.run([command, "app", "list", "--json"], capture_output=True, text=True, timeout=20)
-            apps = json.loads(done.stdout) if done.returncode == 0 else None
-            if isinstance(apps, list):
-                value = modal_summary(apps, time.time())
-        except (OSError, ValueError, subprocess.SubprocessError):
-            pass
-    with modal_lock:
-        modal_state.update(value=value, isChecked=True, isChecking=False)
+    if not command:
+        return None
+    try:
+        done = subprocess.run([command, "app", "list", "--json"], capture_output=True, text=True, timeout=20)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        apps = json.loads(done.stdout)
+    except ValueError:
+        return dict(MODAL_UNKNOWN_FORMAT)
+
+    return modal_summary(apps, time.time()) if isinstance(apps, list) else dict(MODAL_UNKNOWN_FORMAT)
 
 
 def modal_apps():

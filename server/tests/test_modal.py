@@ -18,6 +18,12 @@ APPS = [
     {"app_id": "ap-secretfive", "description": "run", "state": "ephemeral", "tasks": "1", "created_at": "2026-11-01 12:10:00-08:00", "stopped_at": None},
 ]
 
+# Modal 1.3 used the table's headings, with the same values.
+HEADINGS = [
+    {"App ID": app["app_id"], "Description": app["description"], "State": app["state"], "Tasks": app["tasks"], "Created at": app["created_at"], "Stopped at": app["stopped_at"]}
+    for app in APPS
+]
+
 
 def finished(stdout="[]", returncode=0):
     return mock.Mock(stdout=stdout, returncode=returncode)
@@ -34,19 +40,27 @@ class ModalSummaryTest(unittest.TestCase):
 
     def test_never_includes_app_ids(self):
         self.assertNotIn("ap-secret", json.dumps(server.modal_summary(APPS, NOW)))
-        nameless = server.modal_summary([{"app_id": "ap-secret", "state": "ephemeral", "tasks": "1"}], NOW)
-        self.assertEqual(nameless["apps"][0]["name"], "Modal app")
-        self.assertNotIn("ap-secret", json.dumps(nameless))
+        self.assertNotIn("ap-secret", json.dumps(server.modal_summary(HEADINGS, NOW)))
 
-    def test_reads_the_older_headings_too(self):
-        summary = server.modal_summary([{"App ID": "ap-x", "Description": "train", "State": "ephemeral", "Tasks": 3, "Created at": "2026-11-01 12:00:00-08:00", "Stopped at": None}], NOW)
-        self.assertEqual(summary["apps"][0]["name"], "train")
-        self.assertEqual(summary["apps"][0]["tasks"], 3)
+    def test_reads_both_formats_the_same(self):
+        self.assertEqual(server.modal_summary(HEADINGS, NOW), server.modal_summary(APPS, NOW))
+
+    def test_an_unrecognized_format_is_flagged_without_listing_apps(self):
+        for apps in ([{"id": "ap-secret", "status": "running"}], ["nope"], [{"app_id": "ap-secret", "state": "ephemeral", "tasks": "1"}]):
+            summary = server.modal_summary(apps, NOW)
+            self.assertTrue(summary["isUnknownFormat"], apps)
+            self.assertEqual((summary["apps"], summary["count"]), ([], 0))
+            self.assertNotIn("ap-secret", json.dumps(summary))
+        self.assertNotIn("isUnknownFormat", server.modal_summary([], NOW))
 
     def test_odd_values_dont_break_it(self):
-        summary = server.modal_summary(["nope", {"description": "a", "state": "ephemeral", "tasks": "many", "created_at": "soon"}, {"state": "stopped", "stopped_at": None}], NOW)
+        summary = server.modal_summary(["nope", {"description": "a", "state": "ephemeral", "tasks": "many", "created_at": "soon"}, {"description": "b", "state": "stopped", "stopped_at": None}], NOW)
         self.assertEqual(summary["apps"], [{"name": "a", "tasks": 0, "startedAt": None}])
         self.assertEqual(summary["stopped"], [])
+
+    def test_absurd_timestamps_dont_break_it(self):
+        summary = server.modal_summary([{"description": "a", "state": "ephemeral", "tasks": "1", "created_at": "0001-01-01 00:00:00+14:00"}, {"description": "b", "state": "stopped", "stopped_at": "9999-12-31 23:59:59-14:00"}], NOW)
+        self.assertEqual(summary["apps"][0]["name"], "a")
 
 
 class ModalCheckTest(unittest.TestCase):
@@ -71,8 +85,20 @@ class ModalCheckTest(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["/fake/modal", "app", "list", "--json"])
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
+    def test_an_unexpected_answer_is_flagged(self):
+        for stdout in ("not json", "{}"):
+            self.check(return_value=finished(stdout))
+            self.assertTrue(server.modal_state["value"]["isUnknownFormat"], stdout)
+
+    def test_an_unexpected_error_cant_leave_the_check_stuck(self):
+        server.modal_state.update(value={"count": 9}, isChecking=True)
+        with mock.patch.object(server, "read_modal", side_effect=OverflowError), self.assertRaises(OverflowError):
+            server.check_modal()
+        self.assertIsNone(server.modal_state["value"])
+        self.assertFalse(server.modal_state["isChecking"])
+
     def test_failures_read_as_not_connected(self):
-        for behaviour in ({"side_effect": TimeoutExpired("modal", 20)}, {"side_effect": OSError()}, {"return_value": finished("", 1)}, {"return_value": finished("not json")}, {"return_value": finished("{}")}):
+        for behaviour in ({"side_effect": TimeoutExpired("modal", 20)}, {"side_effect": OSError()}, {"return_value": finished("", 1)}):
             server.modal_state.update(value={"count": 9}, isChecking=True)
             self.check(**behaviour)
             self.assertIsNone(server.modal_state["value"], behaviour)

@@ -279,6 +279,7 @@ function modalSpan(seconds){
 }
 function modalLines(modal,isChecked){
   if(!modal)return {title:isChecked?"Modal isn't connected":'Checking Modal…',note:isChecked?'Install the modal command and log in to see jobs here.':'',rows:[]}
+  if(modal.isUnknownFormat)return {title:"Can't read Modal's list",note:"The office doesn't know this modal version's format.",rows:[]}
   const now=Date.now()/1000,rows=[],apps=modal.apps||[],stopped=modal.stopped||[]
   if(apps.length){
     rows.push({heading:`Running · ${modal.count}`})
@@ -330,7 +331,7 @@ function drawUsage(){
   const working=people.filter(p=>p.isActing).length,jobs=people.reduce((n,p)=>n+(p.jobs?.length||0),0),modal=usage?.modal
   g.fillStyle='#d4d4d8';g.font='20px '+boardFont;g.textAlign='left'
   g.fillText(`${working} working · ${jobs} job${jobs===1?'':'s'} running`,28,226)
-  g.fillStyle='#a1a1aa';g.fillText(modal?`Modal: ${modal.count} app${modal.count===1?'':'s'} running`:'Modal: not connected',28,262)
+  g.fillStyle='#a1a1aa';g.fillText(modal?.isUnknownFormat?"Modal: can't read its list":modal?`Modal: ${modal.count} app${modal.count===1?'':'s'} running`:'Modal: not connected',28,262)
   texture.needsUpdate=true
 }
 function attachScreen(a,mesh){

@@ -380,7 +380,7 @@ function Usage({ usage, people, boardFont, onBoardFont, onPick, onClose }) {
 
         <h3>Modal</h3>
         {usage?.modal
-          ? (usage.modal.count ? usage.modal.running.map(app => <div key={app} className="usage-row"><span className="dot working" /><span>{app}</span></div>) : <small>No apps running.</small>)
+          ? usage.modal.isUnknownFormat ? <small>Can't read Modal's list. This version of the modal command uses a format the office doesn't know.</small> : (usage.modal.count ? usage.modal.running.map(app => <div key={app} className="usage-row"><span className="dot working" /><span>{app}</span></div>) : <small>No apps running.</small>)
           : <small>Not available. Install the Modal command to see running apps. Spend is on the Modal dashboard.</small>}
 
         <h3>Running now</h3>
