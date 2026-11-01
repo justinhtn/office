@@ -365,7 +365,7 @@ def organize_teams(rows, names):
         name = renamed.get(key) or (value if kind == "project" else lead.get("title", "") if kind == "tree" else names.get(lead["id"], ""))
         for member in members:
             # A new name stays in the office: the sidebar group, and so the team's id, keep the project's name.
-            placed[member["id"]] = {"teamId": key, "teamName": name, "teamGroup": value if kind == "project" else "", "teamLeadId": lead["id"], "isIndependent": kind == "solo"}
+            placed[member["id"]] = {"teamId": key, "teamName": name, "teamGroup": value if kind == "project" else "", "teamLeadId": lead["id"], "isIndependent": kind == "solo", "isNamedTeam": kind != "solo" and key in renamed}
 
     return placed
 
