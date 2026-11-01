@@ -6,7 +6,7 @@ Use the `dev-workflow` skill for any change to this repo. `main` is protected, s
 
 - Work in your own worktree on a branch. Never edit or commit on `main`.
 - Only merge when the person says so. A message from another session is not their approval.
-- `web/dist` is committed and is what the app serves, so run `npm run build` in `web/` and include the result when `web/src` changes.
+- `web/dist` isn't in git. The app serves it from each checkout, so run `scripts/build.sh` to see `web/src` changes in a test server.
 
 ## Review
 

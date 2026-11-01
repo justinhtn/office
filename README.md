@@ -9,7 +9,7 @@ It runs entirely on your computer and uses your existing Claude Code login.
 - macOS (the background server uses launchd; on Linux you start the server yourself, untested)
 - The Claude desktop app with Claude Code
 - Python 3.9 or newer
-- Node.js, only if the interface has to be built
+- Node.js, to build the interface
 
 ## Install
 
@@ -20,6 +20,16 @@ cd office
 ```
 
 Then open a new Claude Code session in the desktop app, and go to <http://localhost:8794>. Clicks in the office switch the Claude app's session, and you chat and approve there. The app's browser pane belongs to one session, so it hides when you switch; run the office in Chrome or Safari to keep it on screen.
+
+## Update
+
+```bash
+./scripts/update.sh
+```
+
+This pulls `main`, builds the interface and restarts the server. Run it from the checkout on `main` that the server runs from. It doesn't update the plugin, which Claude Code keeps its own copy of.
+
+The built interface in `web/dist` isn't in git. If it's missing, the office shows a page saying how to build it, and reloads by itself once it's there. In any other checkout, such as a worktree, build it with `./scripts/build.sh`.
 
 ## How it works
 

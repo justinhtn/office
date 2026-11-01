@@ -83,6 +83,21 @@ class SessionFileTests(unittest.TestCase):
                 with self.subTest(path), self.assertRaises(server.Refused):
                     server.asset(path)
 
+    def test_no_built_interface_shows_how_to_build_it(self):
+        with mock.patch.object(server, "DIST", WORK / "no-dist"):
+            status, page = server.office_page()
+        self.assertEqual(status, 503)
+        self.assertIn("update.sh", page)
+        self.assertIn("build.sh", page)
+        self.assertNotIn(server.TOKEN, page)
+
+    def test_a_built_interface_gets_the_token(self):
+        dist = WORK / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("token=__OFFICE_TOKEN__")
+        with mock.patch.object(server, "DIST", dist):
+            self.assertEqual(server.office_page(), (200, f"token={server.TOKEN}"))
+
 
 class RequestTests(unittest.TestCase):
     """Real requests to the real handler, on a free loopback port chosen for this test."""
@@ -109,6 +124,13 @@ class RequestTests(unittest.TestCase):
         response = connection.getresponse()
 
         return response.status, response.read()
+
+    def test_with_no_built_interface_the_page_explains_and_assets_are_missing(self):
+        with mock.patch.object(server, "DIST", WORK / "no-dist"):
+            status, page = self.send("GET", "/")
+            self.assertEqual(status, 503)
+            self.assertIn(b"update.sh", page)
+            self.assertEqual(self.send("GET", "/assets/app.js")[0], 404)
 
     def test_the_right_token_is_let_in(self):
         status, body = self.send("GET", "/api/sessions", token=server.TOKEN)

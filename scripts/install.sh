@@ -13,17 +13,15 @@ need() {
 }
 need claude "Install Claude Code first: https://claude.com/claude-code"
 need python3 "Install Python 3.9 or newer."
+need npm "Install Node.js to build the interface."
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' || { echo "Agent Office needs Python 3.9 or newer." >&2; exit 1; }
-
-if [ ! -f "$ROOT/web/dist/index.html" ]; then
-  need npm "Install Node.js to build the interface."
-  (cd "$ROOT/web" && npm ci && npm run build)
-fi
 
 if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
   echo "Port $PORT is already in use. Stop whatever is using it, or set AGENT_OFFICE_PORT." >&2
   exit 1
 fi
+
+"$ROOT/scripts/build.sh"
 
 mkdir -p "$DATA/requests" "$DATA/context" "$DATA/compaction"
 chmod 700 "$DATA" "$DATA/requests"
