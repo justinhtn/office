@@ -636,12 +636,12 @@ class Office:
     def note_pr_outcome(self, row):
         """A PR that has just ended settles any finish from before it. Each ending counts once, even after a restart."""
         state = str(row.get("prState") or "").upper()
-        if state in PR_ENDED:
+        if state in PR_ENDED and row.get("prNumber"):
             ended = f"PR {row.get('prNumber')} {PR_ENDED[state]}"
             if self.pr_outcomes.get(row["id"], {}).get("text") != ended:
                 self.finished.discard(row["id"])
                 self.pr_outcomes[row["id"]] = {"text": ended, "isCurrent": True}
-        elif state:
+        elif state and state not in PR_ENDED:
             self.pr_outcomes.pop(row["id"], None)
 
     def rename(self, session_id, name):

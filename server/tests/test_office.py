@@ -235,8 +235,8 @@ class PrOutcomeTests(OfficeCase):
         self.assertTrue(self.ingest(row("a", **self.MERGED))["a"]["isFinished"])
 
     def test_no_pr_means_no_outcome(self):
-        person = self.ingest(row("a"))["a"]
-        self.assertIsNone(person["prOutcome"])
+        self.assertIsNone(self.ingest(row("a"))["a"]["prOutcome"])
+        self.assertIsNone(self.ingest(row("a", prState="MERGED"))["a"]["prOutcome"])
 
 
 if __name__ == "__main__":
