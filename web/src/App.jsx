@@ -134,6 +134,10 @@ function Drawer({ onClose, children }) {
   )
 }
 
+function TeamName({ person }) {
+  return <EditableText key={person.teamId} value={person.teamName} label="team name" className="team-rename" onSave={name => api('/api/team-name', { teamId: person.teamId, name })} />
+}
+
 // Which team someone is on, chosen here if the office guessed wrong.
 function TeamChoice({ person, teams }) {
   const [problem, setProblem] = useState('')
@@ -161,7 +165,7 @@ function TeamChoice({ person, teams }) {
           <option value="new">New team…</option>
         </select>
       </label>
-      {!person.isIndependent && <EditableText key={person.teamId} value={person.teamName} label="team name" className="team-rename" onSave={name => api('/api/team-name', { id: person.id, teamId: person.teamId, name })} />}
+      {!person.isIndependent && <TeamName person={person} />}
       {problem && <small className="error">{problem}</small>}
     </div>
   )
@@ -1108,6 +1112,7 @@ export default function App() {
         {active.length > 0
           ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
+        {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         <div className="corner">
           {!person && !shutDown && place === 'office' && (
             <>

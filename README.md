@@ -31,7 +31,7 @@ Session data needs at least one Claude Code session open. Without one, the offic
 
 ## Teams
 
-A project is a team, named after its sidebar group or folder. The session that started the others leads it. Sessions with no project stay together if one started another, and anyone left is an independent developer. Open someone in the office to move them to another team or rename theirs. The plugin files each team's sessions under a sidebar group of the same name, trying each move once.
+A project is a team, named after its sidebar group or folder. The session that started the others leads it. Sessions with no project stay together if one started another, and anyone left is an independent developer. Open someone in the office to move them to another team, or click the team's name above its room to rename it. A new name only changes the office. The plugin files each project's sessions under a sidebar group named after the project, trying each move once.
 
 ## Opening the office
 

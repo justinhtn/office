@@ -312,6 +312,8 @@ def organize_teams(rows, names):
     """
     choices = read_json(TEAMS, {})
     moved, renamed = choices.get("moved", {}), choices.get("names", {})
+    # A renamed team is offered under its new name, so moving someone there joins the same team.
+    renamed_teams = {name: key for key, name in renamed.items()}
     by_id = {row["id"]: row for row in rows}
 
     def root_of(row):
@@ -337,7 +339,7 @@ def organize_teams(rows, names):
         elif chosen == "independent":
             key = f"solo:{row['id']}"
         elif chosen:
-            key = f"project:{chosen}"
+            key = renamed_teams.get(chosen) or f"project:{chosen}"
         elif row.get("project") not in NO_PROJECT:
             key = f"project:{row['project']}"
         elif root["id"] != row["id"] or started.get(row["id"]):
@@ -353,9 +355,22 @@ def organize_teams(rows, names):
         kind, _, value = key.partition(":")
         name = renamed.get(key) or (value if kind == "project" else lead.get("title", "") if kind == "tree" else names.get(lead["id"], ""))
         for member in members:
-            placed[member["id"]] = {"teamId": key, "teamName": name, "teamLeadId": lead["id"], "isIndependent": kind == "solo"}
+            # A new name stays in the office: the sidebar group, and so the team's id, keep the project's name.
+            placed[member["id"]] = {"teamId": key, "teamName": name, "teamGroup": value if kind == "project" else "", "teamLeadId": lead["id"], "isIndependent": kind == "solo"}
 
     return placed
+
+
+def team_name_problem(people, team_id, name):
+    if not TEAM_NAME.match(name):
+        return "Use letters and numbers, up to 40 characters."
+    teams = [person for person in people if not person.get("isIndependent")]
+    if not any(person.get("teamId") == team_id for person in teams):
+        return "That team isn't in the office."
+    if any(person.get("teamId") != team_id and person.get("teamName", "").lower() == name.lower() for person in teams):
+        return "Another team already has that name."
+
+    return ""
 
 
 class Office:
@@ -1549,10 +1564,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/api/team-name":
                 name = str(body.get("name", "")).strip()
-                if not TEAM_NAME.match(name):
-                    raise Refused(400, "Use letters and numbers, up to 40 characters.")
+                team_id = str(body.get("teamId", ""))
+                with OFFICE.lock:
+                    problem = team_name_problem(OFFICE.snapshot.get("people", []), team_id, name)
+                if problem:
+                    raise Refused(400, problem)
                 choices = read_json(TEAMS, {})
-                write_json(TEAMS, {**choices, "names": {**choices.get("names", {}), str(body.get("teamId", "")): name}})
+                write_json(TEAMS, {**choices, "names": {**choices.get("names", {}), team_id: name}})
                 OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
                 return
