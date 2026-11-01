@@ -59,9 +59,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, m
 
 const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0
 
-// Teams as the office lays them out: anyone idle and alone is in the lounge.
+// Teams as the office lays them out: anyone idle and alone is in the lounge, unless their team has a name.
 function officeTeams(active) {
-  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead) || team.lead.teamId === 'project:Newsroom')
+  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead) || team.lead.isNamedTeam || team.lead.teamId === 'project:Newsroom')
 }
 
 const OWNER = { name: 'You', avatar: OWNER_AVATAR, project: 'Your office' }
@@ -742,7 +742,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isAssistant || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
+  person.isAssistant || (person.isNamedTeam && person.id === person.teamLeadId) || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },

@@ -38,6 +38,13 @@ class TeamRenameTest(unittest.TestCase):
             self.assertEqual(person["teamId"], "project:SuperPup")
             self.assertEqual(person["teamGroup"], "SuperPup")
 
+    def test_only_teams_given_a_name_are_marked(self):
+        self.choose(names={"project:Review": "Code Review", "solo:c": "Cleo"})
+        placed = self.organize([row("a", "Review"), row("b", "Other"), row("c", "No folder")])
+        self.assertTrue(placed["a"]["isNamedTeam"])
+        self.assertFalse(placed["b"]["isNamedTeam"])
+        self.assertFalse(placed["c"]["isNamedTeam"])
+
     def test_a_team_with_no_project_gets_no_sidebar_group(self):
         self.choose(names={"tree:a": "Kennel"})
         placed = self.organize([row("a", "No folder"), row("b", "No folder", "a")])

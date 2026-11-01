@@ -927,7 +927,7 @@ const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
 const LIGHTS_OUT_DIM=.45
-const SCREEN_OFF=.03,MODAL_TV_ROWS=8
+const SCREEN_OFF=.03,SOLO_BOARD=.6,MODAL_TV_ROWS=8
 const SLEEP_REFLECTIONS=.06
 const NIGHT_REFLECTIONS=.45
 const REFLECTION_CHECK_S=2
@@ -959,7 +959,7 @@ function keepPlaces(places,present){
 }
 // Every team gets its own space, so teams read apart without closing up the floor.
 function planSpaces(){
-  const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)||t.lead.teamId==='project:Newsroom'),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
+  const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)||t.lead.isNamedTeam||t.lead.teamId==='project:Newsroom'),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
   const teamKey=t=>t.lead.teamId||t.lead.id,layout=rememberedLayout(),seats=layout.seats||{}
   groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project))
   // The Newsroom joined after the first layout, so it starts at the end like any newcomer.
@@ -1327,7 +1327,7 @@ function drawBoard(board){
   // The team's own header, with the time and task progress on the right.
   const isTeam=team.members.length>1
   g.textBaseline='middle';g.textAlign='left';g.fillStyle=UI.text;g.font='600 28px '+boardFont;g.fillText(fit(team.name,520),24,36)
-  g.fillStyle=UI.muted;g.font='15px '+boardFont;g.fillText(fit(team.isIndependent?lead.title:`Led by ${lead.name} · ${lead.title}`,600),24,66)
+  g.fillStyle=UI.muted;g.font='15px '+boardFont;g.fillText(fit(team.isIndependent||!isTeam?lead.title:`Led by ${lead.name} · ${lead.title}`,600),24,66)
   const updated=new Date()
   g.textAlign='right';g.fillStyle=UI.muted;g.font='13px '+boardFont;g.fillText(`Live ${updated.getHours()}:${String(updated.getMinutes()).padStart(2,'0')}`,W-24,32)
   g.fillStyle=UI.working;g.beginPath();g.arc(W-24-g.measureText(`Live ${updated.getHours()}:${String(updated.getMinutes()).padStart(2,'0')}`).width-11,32,4,0,7);g.fill()
@@ -1348,8 +1348,8 @@ function drawBoard(board){
     if(p.id===lead.id){g.fillStyle=UI.soft;g.fillRect(margin,top+1,right-margin,52)}
     const face=faces.get(p.id)
     g.save();g.beginPath();g.arc(margin+22,y,17,0,7);g.clip();g.fillStyle=UI.hover;g.fillRect(margin+5,y-17,34,34);if(face)g.drawImage(face,margin+5,y-17,34,34);g.restore()
-    g.fillStyle=isIdle?UI.muted:UI.text;g.font='600 16px '+boardFont;g.fillText(fit(p.name,pillX-nameX-14),nameX,p.id===lead.id?y-8:y)
-    if(p.id===lead.id){g.fillStyle=UI.faint;g.font='12px '+boardFont;g.fillText('Lead',nameX,y+11)}
+    g.fillStyle=isIdle?UI.muted:UI.text;g.font='600 16px '+boardFont;g.fillText(fit(p.name,pillX-nameX-14),nameX,isTeam&&p.id===lead.id?y-8:y)
+    if(isTeam&&p.id===lead.id){g.fillStyle=UI.faint;g.font='12px '+boardFont;g.fillText('Lead',nameX,y+11)}
     g.font='500 13px '+boardFont;const pillW=g.measureText(status.label).width+22
     g.fillStyle=status.bg;roundRect(g,pillX,y-12,pillW,24,12);g.fill();g.fillStyle=status.fg;g.fillText(status.label,pillX+11,y+.5)
     const doing=p.request?.message||p.jobs?.[0]||(p.isRunning?p.step||p.recent?.[p.recent.length-1]:'')||p.label||p.title
@@ -1377,7 +1377,8 @@ function glassReflection(){
   return texture
 }
 function projector(team,x0,cz){
-  const width=5.6,height=2.8,y=2.75,x=x0+.42
+  // Someone alone only has one row, and a smaller screen doesn't block the overview.
+  const size=team.members.length>1?1:SOLO_BOARD,width=5.6*size,height=2.8*size,y=size===1?2.75:2.1,x=x0+.42
   // A slim display on a rolling stand.
   const body=new THREE.Mesh(roundedPanel(width+.09,height+.09,.055,.045),new THREE.MeshPhongMaterial({color:0x08090b,specular:0x6a7078,shininess:90}));body.rotation.y=Math.PI/2;body.position.set(x,y,cz);body.castShadow=true;world.add(body)
   box(world,.09,y-.3,.16,0x3a3e46,x-.06,(y-.3)/2+.05,cz)
@@ -1388,7 +1389,7 @@ function projector(team,x0,cz){
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
   // Light from the screen, falling on the floor in front of it.
   const glowMap=paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,2,w/2,w/2,w/2);r.addColorStop(0,'rgba(150,185,255,.28)');r.addColorStop(1,'rgba(150,185,255,0)');g.fillStyle=r;g.fillRect(0,0,w,w)})
-  const spill=new THREE.Mesh(new THREE.PlaneGeometry(3,6.2),new THREE.MeshBasicMaterial({map:glowMap,transparent:true,depthWrite:false}));spill.rotation.x=-Math.PI/2;spill.position.set(x+1.2,.035,cz);world.add(spill)
+  const spill=new THREE.Mesh(new THREE.PlaneGeometry(3*size,6.2*size),new THREE.MeshBasicMaterial({map:glowMap,transparent:true,depthWrite:false}));spill.rotation.x=-Math.PI/2;spill.position.set(x+1.2*size,.035,cz);world.add(spill)
   // A glass front that reflects the windows and shifts as the camera moves.
   const reflection=glassReflection();
   const glassFront=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:reflection,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glassFront.rotation.y=Math.PI/2;glassFront.position.set(x+.036,y,cz);world.add(glassFront)
@@ -1429,7 +1430,7 @@ function drawSpace(space,x0,z0){
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
-    if(isTeam){projector(team,x0,cz);spots[key].hasBoard=true}
+    projector(team,x0,cz);spots[key].hasBoard=true
     const columns=Math.ceil(team.seats.length/2),isShared=team.seats.length>1
     rubberMat(world,cx,cz,columns*2.5+1.1,isShared?4.1:3)
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
@@ -1766,7 +1767,7 @@ return {
     if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
     speaker=nextSpeaker
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.isNamedTeam,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
