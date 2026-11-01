@@ -104,7 +104,7 @@ export function portrait(p) {
 
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
-const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.72,el:.38}
+const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.55,el:.22}
 let boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
@@ -131,9 +131,9 @@ const FLOOR_T=repeat=>paintTex(1024,1024,(g,w,h)=>{
   for(let y=0;y<h;y+=ROW){
     let x=-rand()*420
     while(x<w){
-      const long=320+rand()*360,tone=212+rand()*16
-      g.fillStyle=`rgb(${tone},${tone-22},${tone-52})`;g.fillRect(x,y,long,ROW)
-      for(let i=0;i<14;i++){g.strokeStyle=`rgba(120,86,50,${.03+rand()*.06})`;g.lineWidth=1+rand()*1.4;const gy=y+rand()*ROW;g.beginPath();g.moveTo(x,gy);g.bezierCurveTo(x+long*.3,gy+rand()*7-3,x+long*.7,gy+rand()*7-3,x+long,gy);g.stroke()}
+      const long=320+rand()*360,tone=84+rand()*18
+      g.fillStyle=`rgb(${tone+8},${tone-18},${tone-38})`;g.fillRect(x,y,long,ROW)
+      for(let i=0;i<14;i++){g.strokeStyle=`rgba(30,20,12,${.1+rand()*.14})`;g.lineWidth=1+rand()*1.4;const gy=y+rand()*ROW;g.beginPath();g.moveTo(x,gy);g.bezierCurveTo(x+long*.3,gy+rand()*7-3,x+long*.7,gy+rand()*7-3,x+long,gy);g.stroke()}
       g.fillStyle='rgba(70,48,28,.28)';g.fillRect(x+long-1,y,1.5,ROW)
       x+=long
     }
@@ -168,7 +168,7 @@ function skyline(seed,rx=1){return paintTex(2048,768,(g,w,h)=>{
   row(h*.98,90,300,70,170,['#7f9bb3','#8ba5ba','#a3b2bd','#6f8ea9'],{w:4,h:6,gap:6},.4)
   row(h*1.02,70,260,110,240,['#526f8b','#60798f','#7c8c98','#465f78','#8d8f8c'],{w:7,h:10,gap:8},.2)
 },rx,1)}
-const WHITE=0xf6f4ef,ORANGE=0xe0682f,WOOD=0xc98f55,CHARCOAL=0x2f3540,LEAF=0x2f8f54
+const WHITE=0xf6f4ef,ORANGE=0xe0682f,WOOD=0x5c402c,CHARCOAL=0x2f3540,LEAF=0x2f8f54
 const SCREEN_W=256,SCREEN_H=144,faces=new Map()
 function faceImage(person){
   const key=`${castOf(person)}|${person.project}`
@@ -465,22 +465,18 @@ async function setPose(a,pose){
   if(a.action&&a.action!==next)a.action.crossFadeTo(next,.25,false)
   a.action=next
 }
-function officeRug(parent,x,z){
-  const rug=(w,d,c,y)=>{const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);parent.add(m)}
-  rug(5,4.2,0x2f3a52,.03);rug(4.7,3.9,0xb9a98d,.034);rug(4.5,3.7,0x46587a,.038)
-}
 function credenza(parent,x,z){
-  box(parent,2.4,.08,.48,0x8a5a33,x,.86,z)
-  box(parent,2.3,.6,.42,0x6d4527,x,.52,z)
-  ;[-.77,0,.77].forEach(dx=>{box(parent,.72,.52,.012,0x7d5230,x+dx,.52,z+.215);box(parent,.14,.02,.02,SILVER,x+dx,.6,z+.23)})
+  box(parent,2.4,.08,.48,0x5e422e,x,.86,z)
+  box(parent,2.3,.6,.42,0x4f3726,x,.52,z)
+  ;[-.77,0,.77].forEach(dx=>{box(parent,.72,.52,.012,0x583e2b,x+dx,.52,z+.215);box(parent,.14,.02,.02,SILVER,x+dx,.6,z+.23)})
   ;[-1,1].forEach(side=>box(parent,.06,.22,.34,CHARCOAL,x+side*1.08,.11,z))
   deskPlant(parent,x-.8,z);book(parent,x+.6,.92,z,.34,.26,.05,bookColor(24),.15,24);book(parent,x+.62,.97,z,.3,.24,.04,bookColor(26),-.1,26)
 }
 function bookcase(parent,x,z){
   const WIDE=1.8,TALL=2.05
-  box(parent,.34,TALL,.05,0x5a3a22,x,TALL/2,z-WIDE/2);box(parent,.34,TALL,.05,0x5a3a22,x,TALL/2,z+WIDE/2);box(parent,.03,TALL,WIDE,0x4a2f1b,x-.16,TALL/2,z)
+  box(parent,.34,TALL,.05,0x4a3324,x,TALL/2,z-WIDE/2);box(parent,.34,TALL,.05,0x4a3324,x,TALL/2,z+WIDE/2);box(parent,.03,TALL,WIDE,0x3a281c,x-.16,TALL/2,z)
   for(let shelf=0;shelf<5;shelf++){
-    const y=.06+shelf*.49;box(parent,.34,.04,WIDE,0x6d4527,x,y,z)
+    const y=.06+shelf*.49;box(parent,.34,.04,WIDE,0x4f3726,x,y,z)
     if(shelf===4)continue
     let at=z-WIDE/2+.08,n=shelf*7+3
     while(at<z+WIDE/2-.16){n=(n*31+11)%97;const thick=.05+(n%4)*.018;if(n%9){const high=.27+(n%5)*.028;const title=SHELF[n%SHELF.length];box(parent,.22,high,thick,bookColor(title),x,y+.02+high/2,at+thick/2);bookSpine(parent,title,x+.112,y+.02+high/2,at+thick/2,thick,high)}at+=thick+.006}
@@ -533,7 +529,7 @@ function plant(parent,x,z,size=1){
   }
   foliage(parent,x,0,z,leaves,seed)
 }
-const WOOD_TOP=()=>new THREE.MeshLambertMaterial({map:paintTex(512,256,(g,w,h)=>{g.fillStyle='#b98450';g.fillRect(0,0,w,h);for(let i=0;i<90;i++){const y=(i*53)%h;g.strokeStyle=i%3?'rgba(112,70,34,.2)':'rgba(226,179,126,.26)';g.lineWidth=1+(i%3);g.beginPath();g.moveTo(0,y);g.bezierCurveTo(w*.3,y+(i%9)-4,w*.7,y-(i%7)+3,w,y+(i%5)-2);g.stroke()}})})
+const WOOD_TOP=()=>new THREE.MeshLambertMaterial({map:paintTex(512,256,(g,w,h)=>{g.fillStyle='#5a3f2b';g.fillRect(0,0,w,h);for(let i=0;i<90;i++){const y=(i*53)%h;g.strokeStyle=i%3?'rgba(28,18,10,.32)':'rgba(132,102,78,.2)';g.lineWidth=1+(i%3);g.beginPath();g.moveTo(0,y);g.bezierCurveTo(w*.3,y+(i%9)-4,w*.7,y-(i%7)+3,w,y+(i%5)-2);g.stroke()}})})
 let woodTop=null
 const SILVER=0xc9ccd1
 function tableTop(parent,x,z,length,depth){
@@ -755,7 +751,6 @@ function loungeSpot(cx,W,i,places){
 }
 function realLounge(world,x0,cx,cz,W,D){
   loadLighting()
-  rug(world,cx,cz+1.15,W-1.6,3.5,0xe6dfd2,0x7d8b90)
   for(let i=0;i<sofaCount(W);i++)placeModel('B07PC15YLQ',sofaX(cx,W,i),cz-.1,0)
   placeModel('coffee_table_round_01',cx,cz+1.95,0,1.2)
   placeModel('B07B7LL5LN',x0+1.2,cz+2.15,1.15)
@@ -776,7 +771,7 @@ function rug(parent,x,z,w,d,edge,fill){
   const under=new THREE.Mesh(new THREE.PlaneGeometry(w,d),soft(edge));under.rotation.x=-Math.PI/2;under.position.set(x,.03,z);under.receiveShadow=true;parent.add(under)
   const top=new THREE.Mesh(new THREE.PlaneGeometry(w-.3,d-.3),soft(fill));top.rotation.x=-Math.PI/2;top.position.set(x,.034,z);top.receiveShadow=true;parent.add(top)
 }
-let people=[], selected=null, actors=[], tags=[], view={az:.72,el:.38,dist:30,zoom:0,center:new THREE.Vector3()}
+let people=[], selected=null, actors=[], tags=[], view={az:home.az,el:home.el,dist:30,zoom:0,center:new THREE.Vector3()}
 function leadOf(p,byId){let l=p;const seen=new Set([p.id]);while(l.startedBy&&byId[l.startedBy]&&!seen.has(l.startedBy)){seen.add(l.startedBy);l=byId[l.startedBy]}return l}
 function teamsIn(list){return teamsOf(list.filter(p=>!p.isAssistant))}
 const busy=p=>p.isRunning||p.isFinished||Boolean(p.request)||Boolean(p.meetingWith&&p.meetingWith.length)
@@ -845,12 +840,79 @@ function mergeFurniture(){
     world.add(one)
   })
 }
-const CARPET_T=(rx,ry)=>paintTex(256,256,(g,w,h)=>{
-  let r=19;const rand=()=>(r=(r*9301+49297)%233280)/233280
-  g.fillStyle='#fff';g.fillRect(0,0,w,h)
-  for(let i=0;i<5200;i++){const shade=205+rand()*50;g.fillStyle=`rgba(${shade},${shade},${shade},.55)`;g.fillRect(rand()*w,rand()*h,2+rand()*3,1)}
-  g.fillStyle='rgba(60,60,60,.12)';g.fillRect(0,0,w,1.5);g.fillRect(0,0,1.5,h)
-},rx,ry)
+// The lounge's Persian-style rug, painted here: border bands, a central medallion and mirrored flowers.
+const RUGS={crimson:{field:'#8c2a25',border:'#1e3050',guard:'#a9833c',cream:'#e4d4ae',a:'#2f6f73',b:'#d27f5c',c:'#c79c3d'}}
+const rugTextures=new Map()
+function rugTexture(W,D,name){
+  const key=`${name}|${W}|${D}`
+  if(rugTextures.has(key))return rugTextures.get(key)
+  const p=RUGS[name],scale=1536/Math.max(W,D),t=paintTex(Math.round(W*scale),Math.round(D*scale),(g,w,h)=>{
+    let r=nameHash(name)%233280;const rand=()=>(r=(r*9301+49297)%233280)/233280
+    const u=Math.min(w,h),cx=w/2,cy=h/2,guard=u*.016,main=u*.06
+    const frame=(inset,c)=>{g.fillStyle=c;g.fillRect(inset,inset,w-inset*2,h-inset*2)}
+    const diamond=(x,y,a,b,c)=>{g.fillStyle=c;g.beginPath();g.moveTo(x,y-b);g.lineTo(x+a,y);g.lineTo(x,y+b);g.lineTo(x-a,y);g.closePath();g.fill()}
+    const rosette=(x,y,R,c1,c2,c3)=>{
+      g.fillStyle=c1;for(let i=0;i<8;i++){const a=i*Math.PI/4;g.beginPath();g.ellipse(x+Math.cos(a)*R*.62,y+Math.sin(a)*R*.62,R*.38,R*.22,a,0,7);g.fill()}
+      g.fillStyle=c2;g.beginPath();g.arc(x,y,R*.42,0,7);g.fill()
+      g.fillStyle=c3;g.beginPath();g.arc(x,y,R*.2,0,7);g.fill()
+    }
+    const palmette=(x,y,R,dir,c1,c2)=>{
+      for(let i=-2;i<=2;i++){const a=dir+i*.42;g.fillStyle=i%2?c2:c1;g.beginPath();g.ellipse(x+Math.cos(a)*R*.6,y+Math.sin(a)*R*.6,R*.48,R*.15,a,0,7);g.fill()}
+      diamond(x,y,R*.2,R*.2,c2)
+    }
+    frame(0,p.guard);frame(guard*.35,p.border);frame(guard*.7,p.guard)
+    // Small flowers along an edge band, placed outward from the middle so opposite sides match.
+    const along=(inset,size,draw)=>{
+      const step=size*2.3
+      const side=(length,place)=>{const n=Math.floor((length/2-inset-size)/step);for(let i=-n;i<=n;i++)place(length/2+i*step,i)}
+      side(w,(x,i)=>{draw(x,inset,i);draw(x,h-inset,i)})
+      side(h,(y,i)=>{draw(inset,y,i);draw(w-inset,y,i)})
+    }
+    along(guard*.85,guard*.42,(x,y,i)=>diamond(x,y,guard*.34,guard*.34,i%2?p.a:p.c))
+    frame(guard*1.5,p.border)
+    const middle=guard*1.5+main/2
+    along(middle,main*.42,(x,y,i)=>{
+      if(i%2){diamond(x,y,main*.42,main*.34,p.c);diamond(x,y,main*.28,main*.22,p.border);rosette(x,y,main*.2,p.b,p.cream,p.a)}
+      else rosette(x,y,main*.34,p.a,p.cream,p.b)
+    })
+    frame(guard*1.5+main,p.guard);frame(guard*1.5+main+guard*.25,p.cream);frame(guard*1.5+main+guard*.5,p.guard);frame(guard*1.5+main+guard*.75,p.field)
+    const inner=guard*1.5+main+guard*.75,fieldW=w/2-inner,fieldH=h/2-inner
+    // Quarter of the field, mirrored four ways.
+    const cell=u*.075
+    g.lineWidth=u*.0035;g.lineCap='round'
+    for(let col=0;col*cell<fieldW-cell*.3;col++)for(let row=0;row*cell<fieldH-cell*.3;row++){
+      const dx=(col+.5)*cell,dy=(row+.5)*cell,kind=(col*3+row*5)%4
+      if(dx/(u*.22)+dy/(u*.15)<1&&w>=h||dx/(u*.15)+dy/(u*.22)<1&&w<h)continue
+      ;[[1,1],[-1,1],[1,-1],[-1,-1]].forEach(([a,b])=>{
+        const x=cx+a*dx,y=cy+b*dy,turn=Math.atan2(b*dy,a*dx)
+        g.strokeStyle=p.a;g.beginPath();g.moveTo(x,y);g.lineTo(x+a*cell*.5,y);g.lineTo(x+a*cell*.5,y+b*cell*.5);g.stroke()
+        if(kind===0)rosette(x,y,cell*.3,p.b,p.cream,p.field)
+        else if(kind===1)palmette(x,y,cell*.36,turn,p.c,p.a)
+        else if(kind===2){diamond(x,y,cell*.26,cell*.26,p.a);diamond(x,y,cell*.14,cell*.14,p.cream)}
+        else palmette(x,y,cell*.32,turn+Math.PI/2,p.b,p.cream)
+      })
+    }
+    // Corner spandrels and the central medallion.
+    const spand=u*.13
+    ;[[inner,inner,1,1],[w-inner,inner,-1,1],[inner,h-inner,1,-1],[w-inner,h-inner,-1,-1]].forEach(([x,y,a,b])=>{
+      g.fillStyle=p.border;g.beginPath();g.moveTo(x,y);g.lineTo(x+a*spand,y);g.lineTo(x,y+b*spand);g.closePath();g.fill()
+      rosette(x+a*spand*.3,y+b*spand*.3,spand*.14,p.c,p.cream,p.a)
+    })
+    const horizontal=w>=h,mx=u*(horizontal?.22:.15),my=u*(horizontal?.15:.22)
+    diamond(cx,cy,mx+u*.008,my+u*.008,p.cream);diamond(cx,cy,mx,my,p.border);diamond(cx,cy,mx*.62,my*.62,p.a);diamond(cx,cy,mx*.46,my*.46,p.field)
+    rosette(cx,cy,u*.05,p.c,p.cream,p.b)
+    ;[-1,1].forEach(side=>{
+      rosette(cx+(horizontal?side*mx*.78:0),cy+(horizontal?0:side*my*.78),u*.022,p.b,p.cream,p.a)
+      palmette(cx+(horizontal?side*(mx+u*.035):0),cy+(horizontal?0:side*(my+u*.035)),u*.035,horizontal?(side>0?0:Math.PI):(side>0?Math.PI/2:-Math.PI/2),p.c,p.cream)
+    })
+    // Hand-dyed wool: uneven bands of colour and a fine woven grain.
+    for(let y=0;y<h;y+=4+rand()*14){const b=4+rand()*14;g.fillStyle=`rgba(${rand()<.5?'255,235,210':'20,10,5'},${rand()*.05})`;g.fillRect(0,y,w,b)}
+    for(let i=0;i<w*h/50;i++){g.fillStyle=`rgba(${rand()<.5?'255,245,225':'15,8,4'},${.03+rand()*.08})`;g.fillRect(rand()*w,rand()*h,1.5,1.5)}
+  })
+  t.keep=true;t.anisotropy=8
+  rugTextures.set(key,t)
+  return t
+}
 function build(){
   const buildStart=performance.now()
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
@@ -903,8 +965,9 @@ function build(){
   })
   // Each area's floor is woven carpet in a quieter shade of its colour.
   floors.forEach(area=>{
-    const size=area.geometry.parameters,tint=area.material.color.clone().lerp(new THREE.Color(0xc9c5bd),.45)
-    area.material=new THREE.MeshLambertMaterial({color:tint,map:CARPET_T(size.width/2.2,size.height/2.2)});area.receiveShadow=true
+    const size=area.geometry.parameters
+    // Rooms without a rug are bare wood, but stay clickable.
+    area.material=area.rug?new THREE.MeshLambertMaterial({color:0xcfc6b8,map:rugTexture(size.width,size.height,area.rug)}):new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false});area.receiveShadow=true
   })
   actors.filter(a=>a.walkPending).forEach(startWalk)
   mergeFurniture()
@@ -919,6 +982,17 @@ function fitCamera(){
   const {W,D}=floorSize,ceilingRoom=(WALL_HEIGHT-1.2-home.center.y)/Math.sin(home.el)
   home.dist=Math.min(Math.max(14,Math.max(W,D)*.62),ceilingRoom)
   if(first){view.dist=home.dist;view.center.copy(home.center)}
+}
+// Ribbed black rubber under the desks and chairs.
+let rubberTexture=null
+function rubberMat(parent,x,z,w,d){
+  if(!rubberTexture){
+    rubberTexture=paintTex(128,128,(g,tw,th)=>{g.fillStyle='#fff';g.fillRect(0,0,tw,th);g.fillStyle='rgba(0,0,0,.28)';for(let y=0;y<th;y+=16)g.fillRect(0,y,tw,5)},1,1)
+    rubberTexture.keep=true
+  }
+  const m=box(parent,w,.03,d,new THREE.MeshLambertMaterial({color:0x2b2c2e,map:rubberTexture}),x,.015,z)
+  const uv=m.geometry.attributes.uv;for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getX(i)*w*1.6,uv.getY(i)*d*1.6)
+  return m
 }
 function flat(w,d,c,x,y,z){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mat(c));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;world.add(m);return m}
 const WALK_SPEED=2.4, arrived=new Map()
@@ -1079,12 +1153,13 @@ function drawSpace(space,x0,z0){
   const label=(name)=>addZoneTag(name,cx,z0-.2,key)
   if(kind==='team'){
     const {team}=space,uniform=new THREE.Color(uniformOf(team.lead.project)),isTeam=team.members.length>1
-    floors.push(Object.assign(flat(W,D,uniform.clone().lerp(new THREE.Color(0xffffff),.82).getHex(),cx,.02,cz),{spaceKey:key}))
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}))
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
     if(isTeam){projector(team,x0,cz);spots[key].hasBoard=true}
     label(team.isIndependent?team.name:`${team.name} · Led by ${team.lead.name}`)
     const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
+    rubberMat(world,cx,cz,columns*2.5+1.1,isShared?4.1:3)
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
     if(isShared)box(world,columns*2.5,.09,.03,0xd9d6cf,cx,1.1,cz)
     team.members.forEach((p,i)=>{
@@ -1097,7 +1172,7 @@ function drawSpace(space,x0,z0){
     })
   }
   if(kind==='lounge'){
-    floors.push(Object.assign(flat(W,D,0xe6d8c4,cx,.02,cz),{spaceKey:key}));label('Lounge')
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key,rug:'crimson'}));label('Lounge')
     if(REAL_FURNITURE)realLounge(world,x0,cx,cz,W,D)
     else{rug(world,cx,cz+1.15,W-1.6,3.5,0x2d7f8c,0xe9dcc4);couch(world,cx,cz-.1,W-1.2);coffeeTable(world,cx,cz+1.9,Math.min(2.8,W*.36));armchair(world,x0+1.15,cz+2.15,1.15);if(W>9)armchair(world,x0+W-1.15,cz+2.15,-1.15);floorLamp(world,x0+.55,cz-.9)}
     const places=space.people.length+space.breaks,spotAt=i=>loungeSpot(cx,W,i,places)
@@ -1108,7 +1183,7 @@ function drawSpace(space,x0,z0){
     if(!REAL_FURNITURE)plant(world,x0+W-.6,z0+D-.7,.9)
   }
   if(kind==='meeting'){
-    floors.push(Object.assign(flat(W,D,0xd8c6ae,cx,.02,cz),{spaceKey:key}));label('Meeting room')
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Meeting room')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     const top=new THREE.Mesh(new THREE.CylinderGeometry(1,1,.1,40),mat(WOOD));top.scale.set(2.5,1,1.1);top.position.set(cx,1,cz);top.castShadow=top.receiveShadow=true;world.add(top)
     const stem=new THREE.Mesh(new THREE.CylinderGeometry(.16,.3,1,10),mat(CHARCOAL));stem.position.set(cx,.5,cz);world.add(stem)
@@ -1117,8 +1192,9 @@ function drawSpace(space,x0,z0){
   }
   if(kind==='office'){
     deskTopic='general'
-    floors.push(Object.assign(flat(W,D,0xcfdde6,cx,.02,cz),{spaceKey:key}));label('Your office')
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Your office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
+    rubberMat(world,cx,cz-.95,3.4,3.3)
     attachUsageScreen(desk(world,cx,cz-.5,1,true,'you'));if(REAL_FURNITURE)placeModel(OFFICE_CHAIR,cx,cz-1.7,0);else chair(world,cx,cz-1.7,-1)
     ;[.3,1.4,2.5].forEach(dx=>officeSpots.push({x:cx+dx,z:cz+2.6,face:Math.PI}))
     const assistant=people.find(p=>p.isAssistant)
@@ -1126,6 +1202,7 @@ function drawSpace(space,x0,z0){
       // Angled toward the office's usual view, with the monitor off to one side so it doesn't hide her.
       const hx=x0+1.7,hz=cz+1.05,turn=MIA_DESK_TURN,group=new THREE.Group();group.position.set(hx,0,hz);group.rotation.y=turn;world.add(group)
       const toWorld=(lx,lz)=>[hx+lx*Math.cos(turn)+lz*Math.sin(turn),hz-lx*Math.sin(turn)+lz*Math.cos(turn)]
+      rubberMat(group,0,-.3,3,2.7)
       tableTop(group,0,0,2.1,1.1)
       const screen=workstation(group,-.68,0,-1,true,'front desk')
       const [sx,sz]=toWorld(.3,-.95)
@@ -1135,7 +1212,6 @@ function drawSpace(space,x0,z0){
     }
     plant(world,x0+W-.6,z0+.7,1.1)
     plant(world,x0+.65,z0+D-.6,.9)
-    officeRug(world,cx-.3,cz-.45)
     credenza(world,x0+1.5,z0+.3)
     bookcase(world,x0+.24,cz-1.3)
     directoryBoard(x0,cz-.9)
