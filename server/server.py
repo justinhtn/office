@@ -75,6 +75,12 @@ SPEECH_USAGE = SPEECH / "usage.json"
 VOICE_MODE = DATA / "voice_mode.json"
 AWAY_MODE = DATA / "away_mode.json"
 SHUT_DOWN = DATA / "shut_down.json"
+TELEGRAM_PLUGIN = "telegram@claude-plugins-official"
+TELEGRAM_STATE = Path.home() / ".claude" / "channels" / "telegram"
+TELEGRAM_LOG = DATA / "logs" / "mia-telegram.log"
+TELEGRAM_QUIET_S = 10
+TELEGRAM_WAIT_S = 60
+TELEGRAM_NOTE = "The person has set themselves away and may text you on Telegram. Answer those texts with the Telegram reply tool. Reply to this note with only the word ready, without using any tools."
 SPEECH_DAILY_CAP = 20_000
 MODAL_CHECK_S = 60
 ANNOUNCED_PEOPLE = 3
@@ -197,10 +203,67 @@ def plain_for_reading(text):
     return " ".join(text.split())[:MAX_LISTEN]
 
 
+telegram_mia = {"process": None}
+telegram_lock = threading.Lock()
+
+
 def ensure_front_desk():
     (FRONT_DESK / ".claude").mkdir(mode=0o700, parents=True, exist_ok=True)
     (FRONT_DESK / "CLAUDE.md").write_text(FRONT_DESK_GUIDE)
     write_json(FRONT_DESK / ".claude" / "settings.json", {"permissions": {"deny": ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "WebSearch"]}})
+    if (TELEGRAM_STATE / ".env").exists():
+        # Off for the desktop session: a second Telegram server there would swallow texts. The away copy turns it on.
+        write_json(FRONT_DESK / ".claude" / "settings.local.json", {"permissions": {"allow": ["mcp__plugin_telegram_telegram__reply"]}, "enabledPlugins": {TELEGRAM_PLUGIN: False}})
+
+
+def mia_session():
+    folder = CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", str(FRONT_DESK.resolve()))
+    transcripts = sorted(folder.glob("*.jsonl"), key=lambda one: one.stat().st_mtime)
+
+    return transcripts[-1] if transcripts else None
+
+
+def stop_mia_copies(session):
+    listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if re.search(rf"--resume[ =]{session}", command) and int(pid) != os.getpid():
+            try:
+                os.kill(int(pid), 15)
+            except OSError:
+                pass
+
+
+def start_telegram_mia(transcript):
+    # Only start replying once it has finished any turn in progress.
+    deadline = time.time() + TELEGRAM_WAIT_S
+    while time.time() < deadline and time.time() - transcript.stat().st_mtime < TELEGRAM_QUIET_S:
+        time.sleep(1)
+    stop_mia_copies(transcript.stem)
+    TELEGRAM_LOG.parent.mkdir(mode=0o700, exist_ok=True)
+    settings = json.dumps({"enabledPlugins": {TELEGRAM_PLUGIN: True}})
+    command = f"exec claude -p --input-format stream-json --output-format stream-json --verbose --no-chrome --settings '{settings}' --resume {transcript.stem} --channels plugin:{TELEGRAM_PLUGIN}"
+    with open(TELEGRAM_LOG, "ab") as log:
+        # The login shell finds claude and bun, which aren't on the background server's PATH.
+        process = subprocess.Popen([os.environ.get("SHELL", "/bin/zsh"), "-lic", command], cwd=FRONT_DESK.resolve(), stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+    process.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": TELEGRAM_NOTE}}).encode() + b"\n")
+    process.stdin.flush()
+    telegram_mia["process"] = process
+
+
+def sync_telegram_mia():
+    with telegram_lock:
+        transcript = mia_session()
+        if not transcript or not (TELEGRAM_STATE / "access.json").exists():
+            return
+        process = telegram_mia["process"]
+        is_running = process is not None and process.poll() is None
+        is_away = read_json(AWAY_MODE, {}).get("isOn") is True
+        if is_away and not is_running:
+            start_telegram_mia(transcript)
+        elif not is_away and is_running:
+            stop_mia_copies(transcript.stem)
+            telegram_mia["process"] = None
 
 
 def assistant_link():
@@ -1470,6 +1533,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/api/away-mode":
                 write_json(AWAY_MODE, {"isOn": body.get("isOn") is True})
+                threading.Thread(target=sync_telegram_mia, daemon=True).start()
                 self.reply(200, {"status": "ok"})
                 return
             if route == "/api/announce":
@@ -1562,5 +1626,6 @@ if __name__ == "__main__":
             stale.rmdir()
         else:
             stale.unlink(missing_ok=True)
+    threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
