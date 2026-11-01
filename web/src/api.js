@@ -15,11 +15,11 @@ export async function api(path, body) {
   return data
 }
 
-export async function speak(id) {
+export async function speak(id, kind = 'words') {
   const response = await fetch('/api/speak', {
     method: 'POST',
     headers: { 'X-Office-Token': token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
+    body: JSON.stringify({ id, kind }),
   })
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'No voice available')
 

@@ -5,7 +5,7 @@ import { Tree } from 'react-arborist'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, Search, Volume2, VolumeX, SkipForward, X,
+  Armchair, Check, Circle, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Search, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, createScene, helperCast, portrait } from './scene.js'
 import { age, api, speak, teamsOf, withId } from './api.js'
@@ -13,7 +13,7 @@ import { age, api, speak, teamsOf, withId } from './api.js'
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
 const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
-function Room({ people, selected, focus, speaker, onPick, onSpace, children }) {
+function Room({ people, selected, focus, speaker, usage, onPick, onSpace, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -24,8 +24,8 @@ function Room({ people, selected, focus, speaker, onPick, onSpace, children }) {
     return () => scene.current.dispose()
   }, [])
   useEffect(() => {
-    scene.current.update(people, selected, focus, speaker)
-  }, [people, selected, focus, speaker])
+    scene.current.update(people, selected, focus, speaker, usage)
+  }, [people, selected, focus, speaker, usage])
 
   return (
     <div className="room" ref={stage}>
@@ -110,22 +110,29 @@ function Avatar({ person, size = 24 }) {
 }
 
 const VOICE_SETTING = 'office-voices'
+const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
+const USAGE_CHECK_MS = 15000
 
 // One voice at a time: agents you have open, and anyone asking for you. The rest stay quiet.
 function useVoices(everyone, listening) {
   const [isOn, setIsOn] = useState(() => {
     try { return localStorage.getItem(VOICE_SETTING) === 'on' } catch { return false }
   })
+  const [speaksWhileWorking, setSpeaksWhileWorking] = useState(() => {
+    try { return localStorage.getItem(LINES_SETTING) !== 'off' } catch { return true }
+  })
   const [speaker, setSpeaker] = useState(null)
   const [problem, setProblem] = useState('')
   const heard = useRef(new Map())
+  const heardLines = useRef(new Map())
+  const spokenLines = useRef(new Map())
   const queue = useRef([])
   const player = useRef(null)
   const next = useRef(() => {})
   next.current = async () => {
     if (player.current || !queue.current.length) return
-    const id = queue.current.shift()
+    const { id, kind } = queue.current.shift()
     const audio = player.current = new Audio()
     const finish = () => {
       if (audio.src) URL.revokeObjectURL(audio.src)
@@ -138,7 +145,7 @@ function useVoices(everyone, listening) {
     audio.onerror = finish
     setSpeaker(id)
     try {
-      audio.src = await speak(id)
+      audio.src = await speak(id, kind)
       if (player.current !== audio) return
       await audio.play()
       setProblem('')
@@ -149,14 +156,24 @@ function useVoices(everyone, listening) {
   }
   useEffect(() => {
     for (const person of everyone) {
+      const isListening = listening.includes(person.id)
+      // Lines written mid-turn replace any still waiting, so you never hear a backlog.
+      const wasLine = heardLines.current.get(person.id)
+      heardLines.current.set(person.id, person.lineKey)
+      if (isOn && speaksWhileWorking && isListening && person.isActing && wasLine !== undefined && wasLine !== person.lineKey) {
+        queue.current = [...queue.current.filter(item => item.id !== person.id || item.kind !== 'line'), { id: person.id, kind: 'line' }]
+        spokenLines.current.set(person.id, person.lineKey)
+      }
       const wasHeard = heard.current.get(person.id)
       if (person.isActing && !person.request) continue
       heard.current.set(person.id, person.wordsKey)
       const isNew = wasHeard !== undefined && wasHeard !== person.wordsKey
-      if (isOn && isNew && (listening.includes(person.id) || person.request) && !queue.current.includes(person.id)) queue.current.push(person.id)
+      if (!isOn || !isNew || !(isListening || person.request)) continue
+      if (person.wordsAreLine && spokenLines.current.get(person.id) === person.lineKey) continue
+      queue.current = [...queue.current.filter(item => item.id !== person.id), { id: person.id, kind: 'words' }]
     }
     next.current()
-  }, [everyone, listening.join(), isOn])
+  }, [everyone, listening.join(), isOn, speaksWhileWorking])
   function toggle() {
     const on = !isOn
     setIsOn(on)
@@ -170,8 +187,14 @@ function useVoices(everyone, listening) {
   }
   function hear(id) {
     if (!id) return
-    queue.current = [id, ...queue.current.filter(other => other !== id)]
+    queue.current = [{ id, kind: 'words' }, ...queue.current.filter(item => item.id !== id)]
     next.current()
+  }
+  function toggleWhileWorking() {
+    const on = !speaksWhileWorking
+    setSpeaksWhileWorking(on)
+    try { localStorage.setItem(LINES_SETTING, on ? 'on' : 'off') } catch {}
+    if (!on) queue.current = queue.current.filter(item => item.kind !== 'line')
   }
   function skip() {
     const audio = player.current
@@ -180,7 +203,55 @@ function useVoices(everyone, listening) {
     audio.stop()
   }
 
-  return { isOn, speaker, problem, toggle, skip, hear }
+  return { isOn, speaker, problem, toggle, skip, hear, speaksWhileWorking, toggleWhileWorking }
+}
+
+function Meter({ label, percent, detail }) {
+  return (
+    <div className="meter">
+      <span><b>{label}</b><small>{detail}</small></span>
+      <div className="meter-track"><i className={percent >= 80 ? 'high' : ''} style={{ width: `${Math.min(100, percent)}%` }} /></div>
+    </div>
+  )
+}
+
+// What's running and what it's costing, on the person's own desk.
+function Usage({ usage, people, onPick, onClose }) {
+  const working = people.filter(person => person.isActing)
+  const jobs = people.flatMap(person => (person.jobs || []).map(job => ({ person, job })))
+  const speech = usage?.speech
+  const claude = usage?.claude
+
+  return (
+    <section className="session usage">
+      <header className="session-head">
+        <div className="session-who"><b className="name">Usage</b></div>
+        <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="scroll pad usage-list">
+        <h3>Claude Code{claude?.plan ? ` · ${claude.plan}` : ''}</h3>
+        {claude?.windows?.map(window => <Meter key={window.label} label={window.label} percent={window.percentUsed} detail={`${window.percentUsed}% · resets in ${window.resetsIn}`} />)}
+        {claude?.extraUsage?.enabled && <Meter label="Extra usage" percent={100 * Number(claude.extraUsage.spent) / Number(claude.extraUsage.monthlyLimit || 1)} detail={`$${claude.extraUsage.spent} of $${claude.extraUsage.monthlyLimit}`} />}
+        {!claude && <small>Not available yet. It appears once a session running the latest plugin reports it.</small>}
+
+        <h3>ElevenLabs</h3>
+        {speech?.isOn ? <>
+          <Meter label="Today" percent={100 * speech.today / speech.cap} detail={`${speech.today.toLocaleString()} of ${speech.cap.toLocaleString()} characters`} />
+          <small>{speech.month.toLocaleString()} characters this month, from the office only. Voices stop for the day at the limit.</small>
+        </> : <small>Voices aren't set up.</small>}
+
+        <h3>Modal</h3>
+        {usage?.modal
+          ? (usage.modal.count ? usage.modal.running.map(app => <div key={app} className="usage-row"><span className="dot working" /><span>{app}</span></div>) : <small>No apps running.</small>)
+          : <small>Not available. Install the Modal command to see running apps. Spend is on the Modal dashboard.</small>}
+
+        <h3>Running now</h3>
+        {working.map(person => <button key={person.id} className="usage-row" onClick={() => onPick(person.id)}><span className="dot working" /><b>{person.name}</b><small>{person.step || 'Working'}</small></button>)}
+        {jobs.map(({ person, job }) => <button key={`${person.id}${job}`} className="usage-row" onClick={() => onPick(person.id)}><span className="dot finished" /><b>{person.name}</b><small>{job}{person.jobStartedAt ? ` · ${Math.max(1, Math.round((Date.now() / 1000 - person.jobStartedAt) / 60))}m` : ''}</small></button>)}
+        {!working.length && !jobs.length && <small>Nothing is running.</small>}
+      </div>
+    </section>
+  )
 }
 
 function Empty({ text }) {
@@ -690,13 +761,22 @@ export default function App() {
   }, [])
   const [onScreen, setOnScreen] = useState('')
   // Whoever is open in the Claude app speaks, and whoever you clicked here.
+  const [usage, setUsage] = useState(null)
+  useEffect(() => {
+    const poll = () => api('/api/usage').then(setUsage, () => {})
+    poll()
+    const timer = setInterval(poll, USAGE_CHECK_MS)
+
+    return () => clearInterval(timer)
+  }, [])
   const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean))
   // A window left open picks up new builds by itself.
   useEffect(() => {
     const own = document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src')
     const timer = setInterval(() => {
-      fetch('/', { cache: 'no-store' }).then(response => response.text()).then(page => {
-        if (own && !page.includes(own)) window.location.reload()
+      // During a build the page is briefly missing, so only reload for a working one.
+      fetch('/', { cache: 'no-store' }).then(response => (response.ok ? response.text() : '')).then(page => {
+        if (own && page.includes('/assets/index-') && !page.includes(own)) window.location.reload()
       }).catch(() => {})
     }, BUILD_CHECK_MS)
 
@@ -772,6 +852,7 @@ export default function App() {
           {voices.speaker && <small>{everyone.find(other => other.id === voices.speaker)?.name} is speaking</small>}
           {voices.speaker && <button className="icon" title="Skip" aria-label="Skip" onClick={voices.skip}><SkipForward size={14} /></button>}
           {voices.problem && <small className="error">{voices.problem}</small>}
+          {voices.isOn && <button className={`icon ${voices.speaksWhileWorking ? 'on' : ''}`} title={voices.speaksWhileWorking ? 'Speaking while working. Turn off for end-of-turn only' : 'Speak while working'} aria-label="Speak while working" aria-pressed={voices.speaksWhileWorking} onClick={voices.toggleWhileWorking}><MessageCircle size={14} /></button>}
           <button className="icon" title={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-label={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-pressed={voices.isOn} onClick={voices.toggle}>{voices.isOn ? <Volume2 size={15} /> : <VolumeX size={15} />}</button>
         </span>
         <span className="counts"><span className="dot working" />{working.filter(other => !other.isWaiting).length} working{working.some(other => other.isWaiting) ? ` · ${working.filter(other => other.isWaiting).length} waiting` : ''}</span>
@@ -789,16 +870,24 @@ export default function App() {
       </div>
 
       {problem && <p className="error banner">{problem}</p>}
-      <PanelGroup direction="horizontal" className="work" autoSaveId={person ? 'office-chat-open' : 'office-floor'}>
-        <Panel id="floor" order={1} minSize={25} defaultSize={person ? 60 : 100}>
+      <PanelGroup direction="horizontal" className="work" autoSaveId={person || place === 'office' ? 'office-chat-open' : 'office-floor'}>
+        <Panel id="floor" order={1} minSize={25} defaultSize={person || place === 'office' ? 60 : 100}>
           {active.length > 0
             ? (
-              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} onPick={pick} onSpace={goToSpace}>
+              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} onPick={pick} onSpace={goToSpace}>
                 <TeamBar teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
               </Room>
             )
             : !problem && <Empty text="Waiting for session data…" />}
         </Panel>
+        {!person && place === 'office' && (
+          <>
+            <PanelResizeHandle className="handle" />
+            <Panel id="session" order={2} minSize={28} defaultSize={40}>
+              <Usage usage={usage} people={cast} onPick={pick} onClose={() => goToPlace(null)} />
+            </Panel>
+          </>
+        )}
         {person && (
           <>
             <PanelResizeHandle className="handle" />

@@ -273,3 +273,15 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .artifact span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .artifact small { color: var(--muted); }
 .voices { display: flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 10px; }
+.usage-list { display: flex; flex-direction: column; gap: 8px; }
+.usage-list h3 { margin: 12px 0 0; font-size: 12px; font-weight: 600; }
+.usage-list h3:first-child { margin-top: 0; }
+.usage-list small { color: var(--muted); }
+.meter span { display: flex; justify-content: space-between; gap: 8px; }
+.meter b { font-weight: 500; }
+.meter-track { height: 6px; margin-top: 4px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
+.meter-track i { display: block; height: 100%; background: var(--accent); }
+.meter-track i.high { background: var(--danger); }
+.usage-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 3px 0; text-align: left; }
+.usage-row b { font-weight: 500; }
+.usage-row small { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

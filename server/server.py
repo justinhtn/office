@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -39,6 +40,11 @@ REQUESTS = DATA / "requests"
 SPEECH = DATA / "speech"
 FOCUS = DATA / "focus.json"
 FOCUS_MAX_AGE_S = 10
+USAGE = DATA / "usage.json"
+SPEECH_USAGE = SPEECH / "usage.json"
+SPEECH_DAILY_CAP = 20_000
+MODAL_CHECK_S = 60
+USAGE_MAX_AGE_S = 600
 VOICE_KEY = DATA / "elevenlabs.key"
 VOICE_API = "https://api.elevenlabs.io/v1"
 VOICE_MODEL = "eleven_flash_v2_5"
@@ -243,6 +249,9 @@ class Office:
                 "isFinished": row["id"] in self.finished and not jobs[row["id"]] and not helpers[row["id"]],
                 "request": self.requests.get(row["id"]),
                 "wordsKey": hashlib.sha256(json.dumps([self.requests.get(row["id"]), TRANSCRIPTS.last_words(row["id"])]).encode()).hexdigest()[:16],
+                "lastUpdate": speakable(TRANSCRIPTS.last_report(row["id"])),
+                "lineKey": hashlib.sha256(TRANSCRIPTS.last_line(row["id"]).encode()).hexdigest()[:16],
+                "wordsAreLine": not self.requests.get(row["id"]) and TRANSCRIPTS.last_words(row["id"]) == TRANSCRIPTS.last_line(row["id"]),
             }
             for row in rows
         ]
@@ -720,6 +729,29 @@ class Transcripts:
 
         return {"outputs": outputs, "plan": parsed["plan"], "turnStartedAt": parsed["turnStartedAt"]}
 
+    def last_line(self, session_id):
+        """The newest thing written in the current turn, which may still be going."""
+        try:
+            messages = self.load(session_id)[1]["messages"]
+        except (Refused, OSError):
+            return ""
+        for message in reversed(messages):
+            if message["role"] == "user":
+                return ""
+            if message["role"] == "assistant":
+                return message["body"]
+
+        return ""
+
+    def last_report(self, session_id):
+        """The latest thing this session told anyone, however long ago."""
+        try:
+            messages = self.load(session_id)[1]["messages"]
+        except (Refused, OSError):
+            return ""
+
+        return next((m["body"] for m in reversed(messages) if m["role"] in ("recap", "assistant")), "")
+
     def last_words(self, session_id):
         """What to read aloud from the latest turn: its recap, or else its final message."""
         try:
@@ -764,7 +796,9 @@ def speakable(text):
     return cut[:end + 1] if end > 0 else cut
 
 
-def spoken_text(person):
+def spoken_text(person, kind="words"):
+    if kind == "line":
+        return speakable(TRANSCRIPTS.last_line(person["id"]))
     if person.get("request"):
         return speakable(f"I need you. {person['request']['message']}")
 
@@ -799,21 +833,73 @@ def voice_for(person, api_key):
     return choices[int(hashlib.sha256(person["id"].encode()).hexdigest(), 16) % len(choices)]
 
 
-def speech_for(session_id):
+def speech_used():
+    used = read_json(SPEECH_USAGE, {})
+    today = time.strftime("%Y-%m-%d")
+
+    return used, today
+
+
+modal_state = {"at": 0, "value": None}
+
+
+def modal_apps():
+    """Apps from the Modal command, if it's installed. Spend isn't available from it."""
+    if time.time() - modal_state["at"] < MODAL_CHECK_S:
+        return modal_state["value"]
+    modal_state["at"] = time.time()
+    modal_state["value"] = None
+    command = shutil.which("modal") or next((str(p) for p in (Path.home() / ".local/bin/modal", Path("/opt/homebrew/bin/modal"), Path("/usr/local/bin/modal")) if p.exists()), None)
+    if command:
+        try:
+            done = subprocess.run([command, "app", "list", "--json"], capture_output=True, text=True, timeout=20)
+            apps = json.loads(done.stdout) if done.returncode == 0 else None
+            if isinstance(apps, list):
+                running = [str(app.get("Description") or app.get("App ID") or "App") for app in apps if not re.search(r"stopped", str(app.get("State", "")), re.I)]
+                modal_state["value"] = {"running": running[:10], "count": len(running)}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+
+    return modal_state["value"]
+
+
+def usage_report():
+    used, today = speech_used()
+    claude = read_json(USAGE, {})
+    month = today[:7]
+
+    return {
+        # Old limits could look reassuring, so show nothing rather than stale numbers.
+        "claude": claude.get("plan") if isinstance(claude, dict) and time.time() - claude.get("at", 0) / 1000 < USAGE_MAX_AGE_S else None,
+        "speech": {
+            "today": used.get(today, 0),
+            "month": sum(chars for day, chars in used.items() if day.startswith(month)),
+            "cap": SPEECH_DAILY_CAP,
+            "isOn": VOICE_KEY.exists(),
+        },
+        "modal": modal_apps(),
+    }
+
+
+def speech_for(session_id, kind):
     """Audio for someone's latest words. Saved, so hearing them again costs nothing."""
     try:
         api_key = VOICE_KEY.read_text().strip()
     except OSError:
         raise Refused(409, "Add an ElevenLabs key to turn on voices.")
     person = next((p for p in OFFICE.snapshot.get("people", []) if p["id"] == session_id), None)
-    text = person and spoken_text(person)
+    text = person and spoken_text(person, kind)
     if not text:
         raise Refused(404, "Nothing to say.")
     voice = voice_for(person, api_key)
     saved = SPEECH / f"{hashlib.sha256(f'{voice}:{VOICE_MODEL}:{text}'.encode()).hexdigest()}.mp3"
     if not saved.exists():
+        used, today = speech_used()
+        if used.get(today, 0) + len(text) > SPEECH_DAILY_CAP:
+            raise Refused(429, "Voices reached today's limit.")
         saved.write_bytes(voice_request(f"/text-to-speech/{voice}", api_key, {"text": text, "model_id": VOICE_MODEL}))
         saved.chmod(0o600)
+        write_json(SPEECH_USAGE, {**used, today: used.get(today, 0) + len(text)})
 
     return saved.read_bytes()
 
@@ -967,6 +1053,8 @@ class Handler(BaseHTTPRequestHandler):
                 known_session(session_id)
                 before = query.get("before")
                 self.reply(200, TRANSCRIPTS.page(session_id, int(before) if before else None))
+            elif url.path == "/api/usage":
+                self.reply(200, usage_report())
             elif url.path == "/api/voice":
                 self.reply(200, {"isReady": VOICE_KEY.exists()})
             elif url.path == "/api/outputs":
@@ -1013,7 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
             session_id = body.get("id", "")
             known_session(session_id)
             if route == "/api/speak":
-                self.reply(200, speech_for(session_id), "audio/mpeg")
+                self.reply(200, speech_for(session_id, "line" if body.get("kind") == "line" else "words"), "audio/mpeg")
                 return
             if route == "/api/open":
                 # The app's browser pane won't follow claude:// links, so the Mac opens it.

@@ -14,6 +14,7 @@ const MODEL_SCALE = .0122
 const JAW_OPEN = .22
 const SPEAKER_ANGLES = [.7, -.7, .35, -.35, 1.05, -1.05, 0]
 const SPEAKER_DISTANCE = 4.6
+const AWAY_DISTANCE = 6.5
 const SPEAKER_HEIGHT = 1.35
 const SPEAKER_RISE = .1
 const CLIPS = { sit: 'sit_chair_idle_neutral_01', work: 'sit_chair_idle_neutral_01', stand: 'idle_neutral_01', wave: 'wave_01', walk: 'walk_neutral' }
@@ -97,7 +98,7 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.72,el:.38}
-let speaker=null,speakerView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+let speaker=null,usage=null,usageScreen=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -134,6 +135,33 @@ function faceImage(person){
   const key=`${castOf(person)}|${person.project}`
   if(!faces.has(key)){const entry={image:null};faces.set(key,entry);portrait(person).then(url=>{const image=new Image();image.onload=()=>{entry.image=image;actors.forEach(a=>{if(a.screen)a.screen.drawn=''})};image.src=url},()=>{})}
   return faces.get(key).image
+}
+// The monitor on the person's own desk shows what's running and what it costs.
+function attachUsageScreen(mesh){
+  const canvas=document.createElement('canvas');canvas.width=640;canvas.height=324
+  const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
+  mesh.material=new THREE.MeshBasicMaterial({map:texture})
+  usageScreen={canvas,texture};drawUsage()
+}
+function drawUsage(){
+  if(!usageScreen)return
+  const {canvas,texture}=usageScreen,g=canvas.getContext('2d'),W=canvas.width,H=canvas.height
+  g.fillStyle='#17181c';g.fillRect(0,0,W,H)
+  g.fillStyle='#f4f4f5';g.font='600 26px Inter,sans-serif';g.textAlign='left';g.fillText('Usage',28,44)
+  const meter=(label,detail,part,y)=>{
+    g.fillStyle='#d4d4d8';g.font='20px Inter,sans-serif';g.textAlign='left';g.fillText(label,28,y)
+    g.fillStyle='#a1a1aa';g.textAlign='right';g.fillText(detail,W-28,y)
+    g.fillStyle='#2e2f36';g.fillRect(28,y+10,W-56,9)
+    if(part!==null){g.fillStyle=part>=.8?'#ef4444':'#818cf8';g.fillRect(28,y+10,(W-56)*Math.min(1,part),9)}
+  }
+  const week=usage?.claude?.windows?.[0],speech=usage?.speech
+  meter('Claude this week',week?`${week.percentUsed}%`:'Not available',week?week.percentUsed/100:null,92)
+  meter('Voices today',speech?.isOn?`${speech.today.toLocaleString()} of ${speech.cap.toLocaleString()}`:'Off',speech?.isOn?speech.today/speech.cap:null,156)
+  const working=people.filter(p=>p.isActing).length,jobs=people.reduce((n,p)=>n+(p.jobs?.length||0),0),modal=usage?.modal
+  g.fillStyle='#d4d4d8';g.font='20px Inter,sans-serif';g.textAlign='left'
+  g.fillText(`${working} working · ${jobs} job${jobs===1?'':'s'} running`,28,226)
+  g.fillStyle='#a1a1aa';g.fillText(modal?`Modal: ${modal.count} app${modal.count===1?'':'s'} running`:'Modal: not connected',28,262)
+  texture.needsUpdate=true
 }
 function attachScreen(a,mesh){
   const canvas=document.createElement('canvas');canvas.width=SCREEN_W;canvas.height=SCREEN_H
@@ -695,7 +723,7 @@ function drawSpace(space,x0,z0){
   if(kind==='office'){
     floors.push(Object.assign(flat(W,D,0xcfdde6,cx,.02,cz),{spaceKey:key}));label('Your office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
-    desk(world,cx,cz-.5,1,true,'you');chair(world,cx,cz-1.7,-1)
+    attachUsageScreen(desk(world,cx,cz-.5,1,true,'you'));chair(world,cx,cz-1.7,-1)
     ;[-1.2,0,1.2].forEach(dx=>officeSpots.push({x:cx+dx,z:cz+1.6,face:Math.PI}))
     plant(world,x0+W-.6,z0+.7,1.1)
     box(world,1.8,.8,.35,WOOD,x0+1.2,.4,z0+.28)
@@ -722,6 +750,9 @@ function loop(){const t=clock.getElapsedTime()
     const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
+    // Someone can be away from their team's table, on a break or in a meeting, so go to them.
+    const chosen=!talker&&spot&&selected&&selected!==focusKey&&actors.find(a=>a.p.id===selected)
+    if(chosen&&Math.hypot(chosen.g.position.x-spot.x,chosen.g.position.z-spot.z)>Math.max(spot.W,spot.D)*.6){if(awayView?.id!==selected)awayView={id:selected,az:clearViewOf(chosen)};const offset=awayView.az-view.az;goal.x=chosen.g.position.x;goal.y=chosen.g.position.y+SPEAKER_HEIGHT;goal.z=chosen.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=AWAY_DISTANCE}
     if(talker){if(speakerView===null)speakerView=clearViewOf(talker);const offset=speakerView-view.az;goal.x=talker.g.position.x;goal.y=talker.g.position.y+SPEAKER_HEIGHT;goal.z=talker.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=SPEAKER_DISTANCE}
     view.center.x+=(goal.x-view.center.x)*ease;view.center.y+=(goal.y-view.center.y)*ease;view.center.z+=(goal.z-view.center.z)*ease
     view.az+=(goal.az-view.az)*ease;view.el+=(goal.el-view.el)*ease;view.dist+=(goal.d-view.dist)*ease
@@ -748,7 +779,7 @@ function loop(){const t=clock.getElapsedTime()
 const timer=setInterval(loop,33)
 let signature=''
 return {
-  update(nextPeople,nextSelected,nextFocus,nextSpeaker=null){
+  update(nextPeople,nextSelected,nextFocus,nextSpeaker=null,nextUsage=null){
     selected=nextSelected
     if(nextSpeaker!==speaker)speakerView=null
     if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
@@ -757,6 +788,7 @@ return {
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
+    usage=nextUsage;drawUsage()
   },
   dispose(){clearInterval(timer);observer.disconnect();renderer.dispose()},
 }
