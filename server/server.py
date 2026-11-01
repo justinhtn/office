@@ -1211,9 +1211,15 @@ modal_state = {"at": 0, "value": None, "isChecked": False, "isChecking": False}
 modal_lock = threading.Lock()
 
 
-def modal_field(app, name):
+def modal_key(app, name):
     """Modal 1.6 uses snake_case in its JSON, and 1.3 used the table's headings."""
-    return app.get(name.lower().replace(" ", "_"), app.get(name))
+    snake = name.lower().replace(" ", "_")
+
+    return snake if snake in app else name
+
+
+def modal_field(app, name):
+    return app.get(modal_key(app, name))
 
 
 def modal_time(text):
@@ -1228,7 +1234,7 @@ MODAL_UNKNOWN_FORMAT = {"isUnknownFormat": True, "running": [], "count": 0, "app
 
 def is_modal_app(app):
     """Both fields being there is what marks a known format. Either can be blank."""
-    return isinstance(app, dict) and all(name in app or name.lower() in app for name in ("Description", "State"))
+    return isinstance(app, dict) and all(modal_key(app, name) in app for name in ("Description", "State"))
 
 
 def modal_summary(apps, now):
@@ -1238,8 +1244,8 @@ def modal_summary(apps, now):
         return dict(MODAL_UNKNOWN_FORMAT)
     running, stopped, idle = [], [], 0
     for app in readable:
-        name = str(modal_field(app, "Description") or "Unnamed app")[:MODAL_NAME_LENGTH]
-        state = str(modal_field(app, "State") or "")
+        name = (str(modal_field(app, "Description") or "").strip() or "Unnamed app")[:MODAL_NAME_LENGTH]
+        state = str(modal_field(app, "State") or "").strip()
         try:
             tasks = int(modal_field(app, "Tasks") or 0)
         except (TypeError, ValueError):
@@ -1250,10 +1256,13 @@ def modal_summary(apps, now):
             ended = modal_time(modal_field(app, "Stopped at"))
             if ended is not None and now - ended < MODAL_RECENT_S:
                 stopped.append({"name": name, "stoppedAt": ended})
+            elif ended is None and re.search(r"stopping", state, re.I):
+                # It's still going down, so it has no stop time yet.
+                stopped.append({"name": name, "stoppedAt": None})
         else:
             idle += 1
     running.sort(key=lambda app: app["startedAt"] or 0, reverse=True)
-    stopped.sort(key=lambda app: app["stoppedAt"], reverse=True)
+    stopped.sort(key=lambda app: now if app["stoppedAt"] is None else app["stoppedAt"], reverse=True)
 
     return {"running": [app["name"] for app in running[:10]], "count": len(running), "apps": running[:MODAL_ROWS], "stopped": stopped[:MODAL_ROWS], "stoppedCount": len(stopped), "idle": idle}
 
@@ -1295,6 +1304,13 @@ def modal_apps():
         return modal_state["value"]
 
 
+def modal_report():
+    """Read together, so a check finishing in between can't look like "not connected"."""
+    modal_apps()
+    with modal_lock:
+        return {"modal": modal_state["value"], "modalChecked": modal_state["isChecked"]}
+
+
 def directory():
     """Every team and independent developer from the notebook, most recently active first."""
     book = read_json(NOTEBOOK_INDEX, {})
@@ -1324,8 +1340,7 @@ def usage_report():
             "cap": SPEECH_DAILY_CAP,
             "isOn": VOICE_KEY.exists(),
         },
-        "modal": modal_apps(),
-        "modalChecked": modal_state["isChecked"],
+        **modal_report(),
         "directory": directory(),
     }
 
