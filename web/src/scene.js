@@ -11,6 +11,9 @@ const cloneSkinned = model => SkeletonUtils.clone(model)
 import { teamsOf } from './api.js'
 
 const AVATARS = '/assets/avatars'
+// The person's own avatar: one of the cast with red hair.
+export const OWNER_AVATAR = 'Owner'
+const OWNER_BODY = 'Male_Adult_08'
 export const CAST = ['Female_Adult_01','Female_Adult_03','Female_Adult_04','Female_Adult_07','Female_Adult_08','Female_Adult_12','Female_Adult_13','Female_Adult_17','Female_Party_02','Business_Female_01','Male_Adult_01','Male_Adult_02','Male_Adult_04','Male_Adult_06','Male_Adult_08','Male_Adult_09','Male_Adult_10','Male_Adult_12','Male_Adult_16','Male_Adult_17']
 const UNIFORMS = [0xe0342c,0x2a5bd7,0x1fa24a,0xf08a24,0x8a4bd7,0x18a7a0,0xd23ba8,0x8b6b3d]
 const nameHash = s => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7)
@@ -34,7 +37,8 @@ const templates = new Map(), clips = new Map()
 // The files carry a stray light and TGA textures the loader skips, so both are replaced.
 function template(id) {
   if (!templates.has(id)) {
-    templates.set(id, fbx(`${AVATARS}/${id}/${id}.fbx`).then(model => {
+    const folder = id === OWNER_AVATAR ? OWNER_BODY : id
+    templates.set(id, fbx(`${AVATARS}/${folder}/${folder}.fbx`).then(model => {
       const strays = []
       model.traverse(o => { if (o.isLight || o.isCamera) strays.push(o) })
       strays.forEach(o => o.parent.remove(o))
@@ -46,11 +50,12 @@ function template(id) {
         const list = Array.isArray(o.material) ? o.material : [o.material]
         const made = list.map(old => {
           const see = /_opacity$/.test(old.name)
-          const map = textures.load(`${AVATARS}/${id}/${old.name}_color.${see ? 'png' : 'jpg'}`)
+          const isOwnerHead = id === OWNER_AVATAR && /_head$/.test(old.name)
+          const map = textures.load(isOwnerHead ? `${AVATARS}/owner_head_color.jpg` : id === OWNER_AVATAR && see ? `${AVATARS}/owner_opacity_color.png` : `${AVATARS}/${folder}/${old.name}_color.${see ? 'png' : 'jpg'}`)
           map.anisotropy = 8
           if (see) return new THREE.MeshLambertMaterial({ map, skinning: true, side: THREE.DoubleSide, alphaTest: .4 })
-          const normalMap = textures.load(`${AVATARS}/${id}/${old.name}_normal.jpg`)
-          const specularMap = textures.load(`${AVATARS}/${id}/${old.name}_specular.jpg`)
+          const normalMap = textures.load(`${AVATARS}/${folder}/${old.name}_normal.jpg`)
+          const specularMap = textures.load(`${AVATARS}/${folder}/${old.name}_specular.jpg`)
           return new THREE.MeshPhongMaterial({ map, normalMap, specularMap, normalScale: new THREE.Vector2(.9, .9), specular: 0x4a4a4a, shininess: 26, skinning: true })
         })
         o.material = made.length === 1 ? made[0] : made
@@ -109,8 +114,8 @@ export function portrait(p) {
 
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
-const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.55,el:.08}
-let lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.59,el:.08}
+let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -187,7 +192,7 @@ function attachUsageScreen(mesh){
   const canvas=document.createElement('canvas');canvas.width=640;canvas.height=324
   const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
   mesh.material=new THREE.MeshBasicMaterial({map:texture})
-  usageScreen={canvas,texture};drawUsage()
+  usageScreen={canvas,texture,material:mesh.material};drawUsage();applyTimeOfDay()
 }
 // A wall display in your office listing every team and independent developer. Rows can be clicked.
 function directoryBoard(x0,cz){
@@ -199,7 +204,7 @@ function directoryBoard(x0,cz){
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
   const glass=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:glassReflection(),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glass.rotation.y=Math.PI/2;glass.position.set(x+.036,y,cz);world.add(glass)
   const g=canvas.getContext('2d');g.scale(2,2)
-  directory={g,texture,panel,hits:[],hover:null};drawDirectory()
+  directory={g,texture,panel,hits:[],hover:null};drawDirectory();applyTimeOfDay()
 }
 function directoryRow(ray){
   if(!directory)return null
@@ -491,12 +496,12 @@ function bookcase(parent,x,z){
 }
 function floorLamp(parent,x,z){
   box(parent,.34,.03,.34,CHARCOAL,x,.02,z);box(parent,.03,1.72,.03,CHARCOAL,x,.88,z)
-  const shade=new THREE.Mesh(new THREE.CylinderGeometry(.17,.27,.34,18,1,true),new THREE.MeshBasicMaterial({color:0xfff0cf,side:THREE.DoubleSide}));shade.position.set(x,1.82,z);parent.add(shade)
+  const shadeGlow=new THREE.MeshBasicMaterial({color:0xfff0cf,side:THREE.DoubleSide});lit.selfLit.push({material:shadeGlow,base:0xfff0cf,isLamp:true});const shade=new THREE.Mesh(new THREE.CylinderGeometry(.17,.27,.34,18,1,true),shadeGlow);shade.position.set(x,1.82,z);parent.add(shade)
 }
 function wallArt(parent,x,z){
   box(parent,1.5,1.02,.04,0x22252b,x,1.7,z)
   const art=paintTex(384,256,(g,w,h)=>{const sky=g.createLinearGradient(0,0,0,h);sky.addColorStop(0,'#f2c58a');sky.addColorStop(.6,'#e0805f');sky.addColorStop(1,'#3a4a68');g.fillStyle=sky;g.fillRect(0,0,w,h);g.fillStyle='#fbe6b8';g.beginPath();g.arc(w*.68,h*.42,30,0,7);g.fill();g.fillStyle='#2f3d58';g.beginPath();g.moveTo(0,h);g.lineTo(0,h*.62);g.lineTo(w*.3,h*.4);g.lineTo(w*.55,h*.66);g.lineTo(w*.8,h*.5);g.lineTo(w,h*.68);g.lineTo(w,h);g.fill()})
-  const panel=new THREE.Mesh(new THREE.PlaneGeometry(1.38,.9),new THREE.MeshBasicMaterial({map:art}));panel.position.set(x,1.7,z+.024);parent.add(panel)
+  const artMaterial=new THREE.MeshBasicMaterial({map:art});lit.selfLit.push({material:artMaterial,base:0xffffff});const panel=new THREE.Mesh(new THREE.PlaneGeometry(1.38,.9),artMaterial);panel.position.set(x,1.7,z+.024);parent.add(panel)
 }
 const soft=c=>mats['s'+c]||(mats['s'+c]=new THREE.MeshLambertMaterial({color:c}))
 function rbox(parent,w,h,d,r,c,x=0,y=0,z=0){const m=new THREE.Mesh(new RoundedBoxGeometry(w,h,d,2,Math.min(r,w/2-.001,h/2-.001,d/2-.001)),typeof c==='number'?soft(c):c);m.position.set(x,y,z);m.castShadow=m.receiveShadow=true;parent.add(m);return m}
@@ -800,18 +805,32 @@ function realLounge(world,x0,cx,cz,W,D){
   placeModel('B073755HVS',x0+.5,cz-1.25,.6)
 }
 function coffeeMachine(parent,x,y,z){
-  const steel=mat(0xb9bcc0),dark=mat(0x1b1c1f)
+  const steel=new THREE.MeshPhongMaterial({color:0x17181b,specular:0x9aa0a8,shininess:80}),dark=mat(0x08090a)
   const part=(w,h,d,material,px,py,pz)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);m.position.set(x+px,y+py,z+pz);m.castShadow=true;parent.add(m);return m}
   part(.62,.05,.42,steel,0,.025,0)
   part(.58,.03,.2,dark,0,.06,.1)
   part(.62,.5,.14,steel,0,.3,-.12)
   part(.62,.13,.42,steel,0,.6,0)
   part(.56,.04,.38,dark,0,.685,0)
-  ;[-.14,.14].forEach(dx=>{const head=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.07,12),dark);head.position.set(x+dx,y+.5,z+.1);parent.add(head);part(.03,.02,.15,dark,dx,.46,.2)})
-  const wand=new THREE.Mesh(new THREE.CylinderGeometry(.008,.008,.22,8),steel);wand.position.set(x+.27,y+.42,z+.15);wand.rotation.z=.18;parent.add(wand)
+  ;[-.14,.14].forEach(dx=>{const head=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.07,12),mat(0xb9bcc0));head.position.set(x+dx,y+.5,z+.1);parent.add(head);part(.03,.02,.15,dark,dx,.46,.2)})
+  const wand=new THREE.Mesh(new THREE.CylinderGeometry(.008,.008,.22,8),mat(0xb9bcc0));wand.position.set(x+.27,y+.42,z+.15);wand.rotation.z=.18;parent.add(wand)
   const gauge=new THREE.Mesh(new THREE.CircleGeometry(.04,16),new THREE.MeshBasicMaterial({color:0xf2f0ea}));gauge.position.set(x,y+.6,z+.212);parent.add(gauge)
   ;[-.14,.14].forEach(dx=>{const cup=new THREE.Mesh(new THREE.CylinderGeometry(.038,.03,.07,12),mat(WHITE));cup.position.set(x+dx,y+.11,z+.1);parent.add(cup)})
   ;[-.14,.14].forEach(dx=>{const cup=new THREE.Mesh(new THREE.CylinderGeometry(.038,.03,.07,12),mat(WHITE));cup.position.set(x+dx,y+.74,z);parent.add(cup)})
+}
+// A small black metal rack with two shelves of cups.
+function cupRack(parent,x,y,z){
+  const metal=new THREE.MeshPhongMaterial({color:0x17181b,specular:0x7a8088,shininess:60}),WIDE=.74,DEEP=.2
+  const bar=(w,h,d,px,py,pz)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),metal);m.position.set(x+px,y+py,z+pz);m.castShadow=true;parent.add(m)}
+  bar(WIDE,.015,DEEP,0,.008,0);bar(WIDE,.015,DEEP,0,.2,0)
+  ;[-1,1].forEach(side=>{bar(.015,.38,.015,side*(WIDE/2-.01),.19,DEEP/2-.01);bar(.015,.38,.015,side*(WIDE/2-.01),.19,-DEEP/2+.01)})
+  const colors=[0xf3efe6,0xc2563f,0xf3efe6,0x2f5a4a,0xf3efe6]
+  ;[.015,.207].forEach((shelf,row)=>{
+    for(let i=0;i<5;i++){
+      const cx=-WIDE/2+.09+i*(WIDE-.18)/4,cup=new THREE.Mesh(new THREE.CylinderGeometry(.05,.04,.1,14),mat(colors[(i+row*2)%colors.length]));cup.position.set(x+cx,y+shelf+.05,z);cup.castShadow=true;parent.add(cup)
+      const handle=new THREE.Mesh(new THREE.TorusGeometry(.024,.006,6,12),mat(colors[(i+row*2)%colors.length]));handle.position.set(x+cx+.052,y+shelf+.052,z);parent.add(handle)
+    }
+  })
 }
 function kitchenSink(parent,x,y,z){
   const steel=mat(0xc7cacd),basin=new THREE.MeshLambertMaterial({color:0x6b6e72})
@@ -831,6 +850,7 @@ function kitchen(world,x,z0){
   rbox(world,BAR_LENGTH-.25,.97,.46,.03,WOOD,middle,.485,counter);rbox(world,BAR_LENGTH,.09,.72,.03,0xe9e6df,middle,1.015,counter)
   coffeeMachine(world,middle-BAR_LENGTH/2+.5,COUNTER_TOP,counter-.02)
   kitchenSink(world,middle+BAR_LENGTH/2-.45,COUNTER_TOP,counter+.03)
+  cupRack(world,middle-.05,COUNTER_TOP,counter-.12)
   // Where people stand to make a coffee, at the machine's end of the counter.
   coffeeSpot={x:middle-BAR_LENGTH/2-.45,z:counter,face:Math.PI/2}
   barSeats(x,z0).forEach(stool=>placeModel('B08568HG2X',stool.x,stool.z-.0,Math.PI))
@@ -849,6 +869,12 @@ const WALL_HEIGHT=10
 const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
+const LIGHTS_OUT_DIM=.45
+const SCREEN_OFF=.03
+const SLEEP_REFLECTIONS=.06
+const NIGHT_REFLECTIONS=.45
+const REFLECTION_CHECK_S=2
+const OVERVIEW_TAG_SCALE=1.05
 const TABLE_TOP=1.055
 const COUNTER_TOP=1.06
 const BAR_LENGTH=3.7
@@ -857,7 +883,7 @@ const BAR_STOOLS=[-2.1,-1.3,-.5,.3]
 const BAR_SEAT_Y=.2
 const BREW_SECONDS=7
 const MIN_HOME_DIST=6
-const HOME_PULL_BACK=2
+const HOME_PULL_BACK=2.2
 // Places the couches and table on the rug, a little clear of the coffee counter.
 const LOUNGE_MAIN_X=.41
 const LOUNGE_MAIN_Z=.1
@@ -1000,32 +1026,52 @@ function rugTexture(W,D,name){
   return t
 }
 // The real clock drives everything. Add ?hour=21 to the address to preview another time.
-const lit={lights:[],sky:[],ceiling:null,sunPatch:null,strip:new THREE.MeshBasicMaterial({color:0xfffbee}),bulb:new THREE.MeshBasicMaterial({color:0xffe6bd}),pool:new THREE.MeshBasicMaterial({map:paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,1,w/2,w/2,w/2);r.addColorStop(0,'rgba(255,214,160,.8)');r.addColorStop(1,'rgba(255,214,160,0)');g.fillStyle=r;g.fillRect(0,0,w,w)}),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,opacity:0})}
+const lit={selfLit:[],lights:[],sky:[],ceiling:null,sunPatch:null,strip:new THREE.MeshBasicMaterial({color:0xfffbee}),bulb:new THREE.MeshBasicMaterial({color:0xffe6bd}),pool:new THREE.MeshBasicMaterial({map:paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,1,w/2,w/2,w/2);r.addColorStop(0,'rgba(255,214,160,.8)');r.addColorStop(1,'rgba(255,214,160,0)');g.fillStyle=r;g.fillRect(0,0,w,w)}),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,opacity:0})}
 const previewHour=parseFloat(new URLSearchParams(location.search).get('hour'))
 const smooth=(from,to,x)=>{const t=Math.min(1,Math.max(0,(x-from)/(to-from)));return t*t*(3-2*t)}
+// Models also light themselves from a daytime photo of a room, which ignores the room's own lights, so that has to dim as well.
+function dimReflections(){
+  const hour=currentHour(),day=smooth(5.5,8,hour)*(1-smooth(17,19.5,hour)),strength=lightsOut?SLEEP_REFLECTIONS:NIGHT_REFLECTIONS+(1-NIGHT_REFLECTIONS)*day
+  scene.traverse(o=>{
+    const material=o.material
+    if(!material||!material.isMeshStandardMaterial)return
+    if(material.userData.fullReflections===undefined)material.userData.fullReflections=material.envMapIntensity
+    material.envMapIntensity=material.userData.fullReflections*strength
+  })
+}
+function currentHour(){const now=new Date();return Number.isNaN(previewHour)?now.getHours()+now.getMinutes()/60:previewHour}
 function applyTimeOfDay(){
-  const now=new Date(),hour=Number.isNaN(previewHour)?now.getHours()+now.getMinutes()/60:previewHour
+  dimReflections()
+  const hour=currentHour()
   const day=smooth(5.5,8,hour)*(1-smooth(17,19.5,hour)),night=1-day,dusk=Math.max(0,1-Math.abs(hour-6.6)/1.3,1-Math.abs(hour-18.3)/1.3)
   lit.sky.forEach(({m,type})=>{m.opacity=type==='night'?night:dusk*.8})
-  hemi.intensity=.28+.36*day;hemi.color.setHex(0xffd9b0).lerp(HEMI_DAY,day)
+  hemi.intensity=(lightsOut?LIGHTS_OUT_DIM:1)*(.28+.36*day);hemi.color.setHex(0xffd9b0).lerp(HEMI_DAY,day)
   sun.intensity=.68*day;sun.color.setHex(0xff9d5c).lerp(SUN_DAY,1-dusk)
   // Morning from the left-hand windows, high at midday, and low through the back ones by evening.
   const arc=Math.PI*Math.min(1,Math.max(0,(hour-6)/13)),R=Math.max(floorSize.W||30,floorSize.D||30)
   sun.position.set(-Math.cos(arc)*R,Math.max(.25,Math.sin(arc))*R*.95,-R*.55)
   sun.shadow.needsUpdate=true
-  lit.lights.forEach(light=>{light.intensity=.12+1.18*night})
+  // Shut down turns off the big screens and hides the name tags too.
+  boards.forEach(board=>{board.panel.material.color.setScalar(lightsOut?SCREEN_OFF:1);board.spill.visible=!lightsOut})
+  if(directory)directory.panel.material.color.setScalar(lightsOut?SCREEN_OFF:1)
+  tagsEl.style.display=lightsOut?'none':''
+  if(usageScreen)usageScreen.material.color.setScalar(lightsOut?SCREEN_OFF:1)
+  // Painted things don't respond to light by themselves, so art follows the room, and a lamp goes off with it.
+  lit.selfLit.forEach(({material,base,isLamp})=>material.color.setHex(base).multiplyScalar(lightsOut?SLEEP_REFLECTIONS:isLamp?1:.45+.55*day))
+  lit.lights.forEach(light=>{light.intensity=lightsOut?0:.12+1.18*night})
   lit.bulb.color.setHex(0x8d7f6a).lerp(BULB_ON,Math.max(.3,night))
-  lit.pool.opacity=.04+.44*night
+  if(lightsOut)lit.bulb.color.setHex(0x2a2622)
+  lit.pool.opacity=lightsOut?0:.04+.44*night
   if(lit.sunPatch)lit.sunPatch.opacity=.11*day
-  if(lit.ceiling)lit.ceiling.color.setScalar(.42+.58*day)
-  lit.strip.color.setScalar(.5+.5*Math.max(day,night*.75))
+  if(lit.ceiling)lit.ceiling.color.setScalar(lightsOut?.16+.5*day:.42+.58*day)
+  lit.strip.color.setScalar(lightsOut?.12:.5+.5*Math.max(day,night*.75))
   scene.background.setHex(0x0d1420).lerp(SKY_DAY,day)
 }
 function build(){
   const buildStart=performance.now()
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
   scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; boards=[]
-  scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[]
+  scene.remove(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
   const spaces=planSpaces(),perRow=Math.max(2,Math.ceil(Math.sqrt(spaces.length)))
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
   const rowW=row=>row.reduce((n,z,i)=>n+z.W+(i?(z.kind==='office'?OFFICE_GAP:AISLE_GAP):0),0), rowD=row=>Math.max(...row.map(z=>z.D))
@@ -1260,7 +1306,7 @@ function projector(team,x0,cz){
   const reflection=glassReflection();
   const glassFront=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:reflection,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glassFront.rotation.y=Math.PI/2;glassFront.position.set(x+.036,y,cz);world.add(glassFront)
   const g=canvas.getContext('2d');g.scale(2,2)
-  const board={g,reflection,team,faces:new Map(),texture,live:m=>people.find(x=>x.id===m.id)||m,nextDraw:0}
+  const board={g,reflection,team,faces:new Map(),texture,live:m=>people.find(x=>x.id===m.id)||m,nextDraw:0,panel,spill}
   boards.push(board)
   team.members.slice(0,12).forEach(m=>portrait(m).then(url=>{const image=new Image();image.onload=()=>{board.faces.set(m.id,image);drawBoard(board)};image.src=url},()=>{}))
   drawBoard(board)
@@ -1291,7 +1337,6 @@ function drawSpace(space,x0,z0){
     box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
     box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
     if(isTeam){projector(team,x0,cz);spots[key].hasBoard=true}
-    label(team.isIndependent?team.name:`${team.name} · Led by ${team.lead.name}`)
     const columns=Math.ceil(team.members.length/2),isShared=team.members.length>1
     rubberMat(world,cx,cz,columns*2.5+1.1,isShared?4.1:3)
     tableTop(world,cx,cz,columns*2.5+.15,isShared?2.24:1.16)
@@ -1356,15 +1401,17 @@ function drawSpace(space,x0,z0){
   }
 }
 function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);camera.updateProjectionMatrix();fitDirty=true}
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 let drag=null,moved=false
+// Each person has an invisible box around them, so the whole body can be clicked, not just the name.
+const personUnder=ray=>ray.intersectObjects(actors.map(a=>a.g.children[0]))[0]
 canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
-canvas.addEventListener('pointermove',e=>{if(!drag&&directory){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;if(over!==directory.hover){directory.hover=over;canvas.style.cursor=over?'pointer':'';drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
-canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=ray.intersectObjects(actors.map(a=>a.g),true)[0];const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
+canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
@@ -1372,6 +1419,8 @@ let shadowTick=0
 function loop(){const t=clock.getElapsedTime()
   if(fitDirty)fitCamera()
   if(t-lastDaylight>60){lastDaylight=t;applyTimeOfDay()}
+  // Models keep arriving after the room is built.
+  if(t-lastReflections>REFLECTION_CHECK_S){lastReflections=t;dimReflections()}
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
@@ -1412,7 +1461,7 @@ function loop(){const t=clock.getElapsedTime()
   if(PERF)notePerf(drawStart,t)
   const w=stage.clientWidth,h=stage.clientHeight
   let thoughtRoom=3
-  tags.forEach(({el,a,key,isZone})=>{if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.95),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(.72,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
+  tags.forEach(({el,a,key,isZone})=>{if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
 }
 const timer=setInterval(loop,33)
 let signature=''
@@ -1427,6 +1476,10 @@ return {
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory()
+  },
+  setLightsOut(isOut){
+    if(isOut===lightsOut)return
+    lightsOut=isOut;applyTimeOfDay()
   },
   setBoardFont(family){
     boardFont=`"${family}",sans-serif`

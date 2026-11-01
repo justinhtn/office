@@ -27,6 +27,7 @@ async function audioFrom(path, body) {
 }
 
 export const speak = (id, kind = 'words', playOnMac = false) => audioFrom('/api/speak', { id, kind, playOnMac })
+export const listenToEdition = () => audioFrom('/api/newsroom/listen', {})
 export const announce = (ids, isWelcome, playOnMac = false) => audioFrom('/api/announce', { ids, isWelcome, playOnMac })
 
 export const withId = (path, id, extra = {}) =>

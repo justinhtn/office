@@ -56,6 +56,8 @@ else
 fi
 echo "Open a new Claude Code session so it starts feeding the office."
 
+"$(dirname "$0")/make-app.sh" || echo "Could not make the app icon. You can still open http://localhost:8794."
+
 # Her session starts once you confirm the folder and press Enter in the app.
 LINK="$(python3 -c 'import os,urllib.parse as u;print("claude://code/new?"+u.urlencode({"folder":os.path.expanduser("~/.agent-office/front-desk"),"q":"Say hello in one short sentence and tell me who you are."}))')"
 open "$LINK" 2>/dev/null || echo "To add your assistant, click Your office in Agent Office."

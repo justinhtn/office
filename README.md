@@ -33,6 +33,10 @@ Session data needs at least one Claude Code session open. Without one, the offic
 
 A project is a team, named after its sidebar group or folder. The session that started the others leads it. Sessions with no project stay together if one started another, and anyone left is an independent developer. Open someone in the office to move them to another team or rename theirs. The plugin files each team's sessions under a sidebar group of the same name, trying each move once.
 
+## Opening the office
+
+Installing makes **Agent Office** in your Applications folder, which opens the office in its own Chrome window. Drag it to your Dock to keep it handy. It needs Google Chrome.
+
 ## Your assistant
 
 Installing opens one more session in the Claude app, in `~/.agent-office/front-desk`. Confirm it, and she sits at the front desk in your office. Ask her who needs what. If you skip it, click **Your office** to set her up later.
@@ -51,7 +55,7 @@ She has a read-only tool list, so she can read what sessions are doing and add t
 - The page loads its fonts from Google Fonts. Everything else is local, unless you turn on voices.
 - A session with others reporting to it is asked to act as their lead, and gets a `team_status` tool that reads the office's data. This adds a short instruction to those sessions.
 - With an ElevenLabs key added, the plugin also asks agents to write a short line before longer work, which uses a few extra tokens per request.
-- Voices are off by default. When on, an agent's recap or request is sent to ElevenLabs using your key, stored in `~/.agent-office/elevenlabs.key`. Agents on this Mac can read that file, so use a key limited to text to speech. ElevenLabs charges for each new line spoken.
+- Voice mode is off by default, and the Voice button at the top turns it on or off for every window. When it's off, nobody speaks and nothing is sent to ElevenLabs. When on, an agent's recap or request is sent to ElevenLabs using your key, stored in `~/.agent-office/elevenlabs.key`. Agents on this Mac can read that file, so use a key limited to text to speech. ElevenLabs charges for each new line spoken.
 
 ## Limits
 

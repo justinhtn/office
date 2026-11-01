@@ -12,6 +12,7 @@ const SESSION_TOOLS = 'ccd_session_mgmt'
 const WINDOW_TOOLS = 'ccd_window'
 const SIDEBAR_TOOLS = 'ccd_sidebar'
 const SIDEBAR_MOVES_PER_PASS = 5
+const TITLE_CHANGES_PER_PASS = 5
 const FOCUS_MS = 2_000
 const USAGE_MS = 60_000
 const TEAM_TOOL = 'mcp__agent-office__team_status'
@@ -171,6 +172,36 @@ async function syncSidebar($: EngineInterface, rows: { id: string; group?: strin
   }
 }
 
+// Titles in the app read "Elsa · topic", so people are known by name there too. Each new title is
+// only tried once, because the app can ask before replacing a title the person chose.
+async function syncTitles($: EngineInterface, rows: { id: string; title: string }[]): Promise<void> {
+  try {
+    const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
+    const path = `${dataFolder}/titles.json`
+    const tried = (await $.fs.exists(path)) ? (JSON.parse(await $.fs.read(path)) as Record<string, string>) : {}
+    const names = new Map(people.map(person => [person.id, person.name]))
+    const allNames = people.map(person => person.name)
+    const due = rows
+      .map(row => {
+        const name = names.get(row.id)
+        const oldName = allNames.find(one => row.title.startsWith(`${one} · `))
+        const topic = oldName ? row.title.slice(oldName.length + 3) : row.title
+
+        return { id: row.id, current: row.title, wanted: name ? `${name} · ${topic}` : row.title }
+      })
+      .filter(row => row.wanted !== row.current && tried[row.id] !== row.wanted)
+      .slice(0, TITLE_CHANGES_PER_PASS)
+    if (!due.length) return
+    for (const row of due) {
+      tried[row.id] = row.wanted
+      await $.mcp.call(SESSION_TOOLS, 'set_session_title', { session_id: row.id === selfId ? 'self' : row.id, title: row.wanted })
+    }
+    await $.fs.write(path, JSON.stringify(tried))
+  } catch {
+    // The office shows names whether or not the app's titles match.
+  }
+}
+
 async function publish($: EngineInterface): Promise<void> {
   try {
     await ensureSelf($)
@@ -183,6 +214,7 @@ async function publish($: EngineInterface): Promise<void> {
     const own = await $.mcp.call(SESSION_TOOLS, 'get_session', { session_id: 'self' })
     if (!own.isError) people.push(toRow(JSON.parse(textOf(own)) as Listed))
     await syncSidebar($, people)
+    await syncTitles($, people)
     await $.fs.write(
       `${dataFolder}/sessions.raw.json`,
       JSON.stringify({ updatedAt: new Date().toISOString(), people }),

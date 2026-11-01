@@ -4,10 +4,11 @@ import { DiffEditor, Editor } from '@monaco-editor/react'
 import { Tree } from 'react-arborist'
 import {
   Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Armchair, Check, ChevronUp, Circle, Gauge, Users, Presentation, CircleDot, Dices, DoorOpen, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Search, Volume2, VolumeX, SkipForward, X,
+  Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Sofa, Tv, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
-import { CAST, createScene, helperCast, portrait } from './scene.js'
-import { age, announce, api, speak, teamsOf, withId } from './api.js'
+import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
+import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
+import ReactMarkdown from 'react-markdown'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
@@ -23,7 +24,7 @@ async function loadBoardFont(family) {
   await Promise.all(['400', '500', '600'].map(weight => document.fonts.load(`${weight} 20px "${family}"`))).catch(() => {})
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSpace }) {
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, onPick, onSpace }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -36,6 +37,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, onPick, onSp
   useEffect(() => {
     scene.current.update(people, selected, focus, speaker, usage)
   }, [people, selected, focus, speaker, usage])
+  useEffect(() => {
+    scene.current.setLightsOut(lightsOut)
+  }, [lightsOut])
 
   useEffect(() => {
     let isCurrent = true
@@ -68,8 +72,49 @@ function teamStatus(team) {
   return `${team.members.length} ${team.members.length === 1 ? 'person' : 'people'}, idle`
 }
 
-function TeamMenu({ teams, hasLounge, focus, isOpen, onToggle, onTeam, onPlace }) {
-  const asking = teams.reduce((count, team) => count + team.members.filter(member => member.request).length, 0)
+const OWNER = { name: 'You', avatar: OWNER_AVATAR, project: 'Your office' }
+
+// The morning's ten topics to choose from, and then the finished piece to read or listen to.
+function Newsroom({ day, onClose }) {
+  const [chosen, setChosen] = useState([])
+  const [custom, setCustom] = useState('')
+  const [problem, setProblem] = useState('')
+  const [audio, setAudio] = useState(null)
+  const toggle = index => setChosen(current => (current.includes(index) ? current.filter(one => one !== index) : [...current, index].slice(-2)))
+  const send = () => api('/api/newsroom/pick', { choices: chosen, custom }).catch(failure => setProblem(failure.message))
+  const listen = async () => {
+    setProblem('')
+    try { setAudio(await listenToEdition()) } catch (failure) { setProblem(failure.message) }
+  }
+
+  return (
+    <section className="session newsroom">
+      <header className="session-head">
+        <div className="session-who"><b className="name">Newsroom</b><small>{day.date}</small></div>
+        <button className="icon" aria-label="Close" title="Close" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="scroll pad newsroom-body">
+        {problem && <p className="error">{problem}</p>}
+        {day.edition ? <>
+          {audio ? <audio src={audio} controls autoPlay /> : <button className="voice-mode" onClick={listen}><Volume2 size={14} /> Listen, using ElevenLabs credits</button>}
+          <article className="newsroom-piece"><ReactMarkdown components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{day.edition}</ReactMarkdown></article>
+        </> : day.pick ? <p>Your pick is in. Nell is writing it now.</p> : day.topics.length ? <>
+          <p>Pick one or two for today, or type your own.</p>
+          {day.topics.map((topic, index) => (
+            <label key={index} className={`newsroom-topic ${chosen.includes(index) ? 'on' : ''}`}>
+              <input type="checkbox" checked={chosen.includes(index)} onChange={() => toggle(index)} />
+              <span><b>{topic.title}</b><small>{[topic.area, topic.minutes && `${topic.minutes} min`].filter(Boolean).join(' · ')}</small><span>{topic.why}</span></span>
+            </label>
+          ))}
+          <input className="newsroom-custom" placeholder="Or something else you're curious about" value={custom} onChange={event => setCustom(event.target.value)} />
+          <button className="primary" disabled={!chosen.length && !custom.trim()} onClick={send}>Write today's piece</button>
+        </> : <p>Nothing yet today. Nell looks for topics each morning.</p>}
+      </div>
+    </section>
+  )
+}
+
+function TeamMenu({ teams, hasLounge, focus, onTeam, onPlace, onNews, children }) {
   const place = (key, label, Icon) => (
     <button key={key} className={`team-button ${focus === key ? 'on' : ''}`} onClick={() => onPlace(key)}>
       <span className="place-icon"><Icon size={17} /></span><b>{label}</b>
@@ -77,32 +122,28 @@ function TeamMenu({ teams, hasLounge, focus, isOpen, onToggle, onTeam, onPlace }
   )
 
   return (
-    <div className="team-menu">
-      {isOpen && (
-        <nav className="team-list" aria-label="Go to a team">
-          <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
-            <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
-          </button>
-          <span className="team-divider" />
-          {teams.map((team, index) => (
-            <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
-              <Avatar person={team.lead} size={28} />
-              {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
-              <span className="team-text"><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
-            </button>
-          ))}
-          <span className="team-divider" />
-          {place('meeting', 'Meeting room', Presentation)}
-          {hasLounge && place('lounge', 'Lounge', Armchair)}
-          {place('office', 'Your office', DoorOpen)}
-        </nav>
-      )}
-      <button className="team-toggle" aria-expanded={isOpen} onClick={onToggle}>
-        <Users size={15} /><b>Teams</b>
-        {asking > 0 && <span className="team-count" aria-label={`${asking} asking for you`}>{asking}</span>}
-        <ChevronUp size={14} className={isOpen ? 'flipped' : ''} />
+    <nav className="team-menu team-list" aria-label="Go to a team">
+      {children}
+      <span className="team-divider" />
+      <button className={`team-button ${focus ? '' : 'on'}`} onClick={() => onPlace(null)}>
+        <span className="place-icon"><LayoutGrid size={17} /></span><b>Overview</b>
       </button>
-    </div>
+      <button className={`team-button ${focus === 'office' ? 'on' : ''}`} onClick={() => onPlace('office')}>
+        <Avatar person={OWNER} size={28} /><span className="team-text"><b>Your office</b><small>Usage, Mia and everyone</small></span>
+      </button>
+      <span className="team-divider" />
+      {teams.map((team, index) => (
+        <button key={team.lead.id} className={`team-button ${focus === team.lead.id ? 'on' : ''}`} title={index < 9 ? `Press ${index + 1}` : undefined} onClick={() => onTeam(team)}>
+          <Avatar person={team.lead} size={28} />
+          {team.members.some(member => member.request) && <span className="alert" aria-label="Someone is asking for you" />}
+          <span className="team-text"><b>{team.name}</b><small>{team.isIndependent ? 'Independent' : `Led by ${team.lead.name}`} · {teamStatus(team)}</small></span>
+        </button>
+      ))}
+      <span className="team-divider" />
+      <button className="team-button" onClick={onNews}><span className="place-icon"><Newspaper size={17} /></span><b>Today's reading</b></button>
+      {place('meeting', 'Meeting room', Tv)}
+      {hasLounge && place('lounge', 'Lounge', Sofa)}
+    </nav>
   )
 }
 
@@ -178,11 +219,11 @@ function Avatar({ person, size = 24 }) {
     : <span className="avatar blank" style={{ width: size, height: size }}>{person.name[0]}</span>
 }
 
-const VOICE_SETTING = 'office-voices'
 const FONT_SETTING = 'office-board-font'
 const BOARD_FONTS = ['Inter', 'Geist', 'IBM Plex Sans', 'DM Sans', 'Manrope', 'Space Grotesk']
 const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
+const NEWS_READ_SETTING = 'office-news-read'
 const USAGE_CHECK_MS = 15000
 const COMPACTED_NOTE_S = 3600
 const PRESENCE_CHECK_MS = 5000
@@ -192,10 +233,7 @@ const ANNOUNCED_SETTING = 'office-announced'
 const ANNOUNCED_KEPT = 200
 
 // One voice at a time: agents you have open, and anyone asking for you. The rest stay quiet.
-function useVoices(everyone, listening, isAway) {
-  const [isOn, setIsOn] = useState(() => {
-    try { return localStorage.getItem(VOICE_SETTING) === 'on' } catch { return false }
-  })
+function useVoices(everyone, listening, isAway, isOn, setIsOn) {
   const [speaksWhileWorking, setSpeaksWhileWorking] = useState(() => {
     try { return localStorage.getItem(LINES_SETTING) !== 'off' } catch { return true }
   })
@@ -249,7 +287,7 @@ function useVoices(everyone, listening, isAway) {
       // Lines written mid-turn replace any still waiting, so you never hear a backlog.
       const wasLine = heardLines.current.get(person.id)
       heardLines.current.set(person.id, person.lineKey)
-      if (isOn && speaksWhileWorking && isListening && person.isActing && wasLine !== undefined && wasLine !== person.lineKey) {
+      if (isOn && !isAway && speaksWhileWorking && isListening && person.isActing && wasLine !== undefined && wasLine !== person.lineKey) {
         queue.current = [...queue.current.filter(item => item.ids || item.id !== person.id || item.kind !== 'line'), { id: person.id, kind: 'line' }]
         spokenLines.current.set(person.id, person.lineKey)
       }
@@ -257,7 +295,7 @@ function useVoices(everyone, listening, isAway) {
       if (person.isActing && !person.request) continue
       heard.current.set(person.id, person.wordsKey)
       const isNew = wasHeard !== undefined && wasHeard !== person.wordsKey
-      if (!isOn || !isNew || !isListening) continue
+      if (!isOn || isAway || !isNew || !isListening) continue
       if (person.wordsAreLine && spokenLines.current.get(person.id) === person.lineKey) continue
       queue.current = [...queue.current.filter(item => item.ids || item.id !== person.id), { id: person.id, kind: 'words' }]
     }
@@ -287,16 +325,22 @@ function useVoices(everyone, listening, isAway) {
   function toggle() {
     const on = !isOn
     setIsOn(on)
-    try { localStorage.setItem(VOICE_SETTING, on ? 'on' : 'off') } catch {}
-    if (!on) {
-      queue.current = []
-      skip()
-    }
+    api('/api/voice-mode', { isOn: on }).catch(failure => setProblem(failure.message))
     // Hearing someone straight away shows it works, and the click lets the browser play sound.
     if (on) hear(listening[0] || [...everyone].sort((one, other) => Date.parse(other.lastActivityAt || 0) - Date.parse(one.lastActivityAt || 0))[0]?.id)
   }
+  // Also covers voice mode being turned off in another window, and anyone stepping away.
+  useEffect(() => {
+    if (isOn && !isAway) return
+    queue.current = []
+    skip()
+  }, [isOn, isAway])
   function hear(id) {
     if (!id) return
+    if (!isOn) {
+      setProblem('Voice mode is off')
+      return
+    }
     queue.current = [{ id, kind: 'words' }, ...queue.current.filter(item => item.ids || item.id !== id)]
     next.current()
   }
@@ -719,7 +763,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isAssistant || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
+  person.isAssistant || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },
@@ -895,7 +939,6 @@ export default function App() {
   const [selected, setSelected] = useState(null)
   const [tab, setTab] = useState('outputs')
   const [isDetailOpen, setIsDetailOpen] = useState(false)
-  const [isTeamsOpen, setIsTeamsOpen] = useState(false)
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
@@ -925,6 +968,23 @@ export default function App() {
   const [onScreen, setOnScreen] = useState('')
   // Whoever is open in the Claude app speaks, and whoever you clicked here.
   const [usage, setUsage] = useState(null)
+  const [newsDay, setNewsDay] = useState(null)
+  const [isNewsOpen, setIsNewsOpen] = useState(false)
+  const [newsRead, setNewsRead] = useState(() => {
+    try { return localStorage.getItem(NEWS_READ_SETTING) } catch { return null }
+  })
+  const newsReadOn = newsRead === newsDay?.date
+  function markNewsRead(date) {
+    setNewsRead(date)
+    try { localStorage.setItem(NEWS_READ_SETTING, date) } catch {}
+  }
+  useEffect(() => {
+    const poll = () => api('/api/newsroom').then(setNewsDay, () => {})
+    poll()
+    const timer = setInterval(poll, USAGE_CHECK_MS)
+
+    return () => clearInterval(timer)
+  }, [])
   const [boardFont, setBoardFont] = useState(() => {
     try { return BOARD_FONTS.find(font => font === localStorage.getItem(FONT_SETTING)) || 'Inter' } catch { return 'Inter' }
   })
@@ -940,9 +1000,26 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
   const [isAway, setIsAway] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
+  const [awayMode, setAwayMode] = useState(false)
+  const [shutDown, setShutDown] = useState(false)
+  function toggleShutDown() {
+    const on = !shutDown
+    setShutDown(on)
+    setIsAway(on || awayMode)
+    // Waking up lands on the morning's topics, if they're waiting for a pick.
+    if (!on && newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) setIsNewsOpen(true)
+    api('/api/shut-down', { isOn: on }).catch(failure => setProblem(failure.message))
+  }
+  function toggleAway() {
+    const on = !awayMode
+    setAwayMode(on)
+    setIsAway(on || shutDown)
+    api('/api/away-mode', { isOn: on }).catch(failure => setProblem(failure.message))
+  }
   // Step away and the view settles on your desk, where anyone who needs you waits.
   useEffect(() => {
-    const poll = () => api('/api/presence').then(data => setIsAway(Boolean(data.isAway)), () => {})
+    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)) }, () => {})
     poll()
     const timer = setInterval(poll, PRESENCE_CHECK_MS)
 
@@ -953,7 +1030,7 @@ export default function App() {
     setSelected(null)
     setPlace('office')
   }, [isAway])
-  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway)
+  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
   // A window left open picks up new builds by itself.
   useEffect(() => {
     const own = document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src')
@@ -1004,7 +1081,6 @@ export default function App() {
     setSelected(null)
     setPlace(key)
     setIsDetailOpen(false)
-    setIsTeamsOpen(false)
   }
   function goToSpace(key) {
     const team = teams.find(one => one.lead.id === key)
@@ -1017,7 +1093,6 @@ export default function App() {
     setPlace(null)
     setTab('outputs')
     setIsDetailOpen(false)
-    setIsTeamsOpen(false)
     // The left side of the Claude app follows whoever is clicked here.
     api('/api/open', { id }).catch(failure => setProblem(failure.message))
     setIsAwayOpen(false)
@@ -1029,7 +1104,6 @@ export default function App() {
     // Closes the nearest thing first, so Escape only leaves a team once nothing is open over it.
     escape: () => {
       if (isDetailOpen) setIsDetailOpen(false)
-      else if (isTeamsOpen) setIsTeamsOpen(false)
       else goToPlace(null)
     },
     team: index => { if (teams[index]) pick(teams[index].lead.id) },
@@ -1037,24 +1111,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <span className="brand">AGENT OFFICE</span>
-        <button className="search" onClick={() => setIsPaletteOpen(true)}>
-          <Search size={14} /><span>Search agents and rooms</span><kbd>⌘</kbd><kbd>K</kbd>
-        </button>
-        <span className="voices">
-          {voices.speaker && <small>{everyone.find(other => other.id === voices.speaker)?.name} is speaking</small>}
-          {voices.speaker && <button className="icon" title="Skip" aria-label="Skip" onClick={voices.skip}><SkipForward size={14} /></button>}
-          {voices.problem && <small className="error">{voices.problem}</small>}
-          {voices.isOn && <button className={`icon ${voices.speaksWhileWorking ? 'on' : ''}`} title={voices.speaksWhileWorking ? 'Speaking while working. Turn off for end-of-turn only' : 'Speak while working'} aria-label="Speak while working" aria-pressed={voices.speaksWhileWorking} onClick={voices.toggleWhileWorking}><MessageCircle size={14} /></button>}
-          <button className="icon" title={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-label={voices.isOn ? 'Turn voices off' : 'Turn voices on'} aria-pressed={voices.isOn} onClick={voices.toggle}>{voices.isOn ? <Volume2 size={15} /> : <VolumeX size={15} />}</button>
-        </span>
-        <span className="counts"><span className="dot working" />{working.filter(other => !other.isWaiting).length} working{working.some(other => other.isWaiting) ? ` · ${working.filter(other => other.isWaiting).length} waiting` : ''}</span>
-      </header>
 
+      {(needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
       <div className="needs" aria-label="Needs you">
         <b>Needs you</b>
-        {needsYou.length === 0 && <small>Nothing right now</small>}
+        {newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition && <button className="need" onClick={() => setIsNewsOpen(true)}><Newspaper size={14} /><b>Nell</b> has today's topics</button>}
+        {newsDay?.edition && !newsReadOn && <button className="need" onClick={() => { setIsNewsOpen(true); markNewsRead(newsDay.date) }}><Newspaper size={14} /><b>Nell</b> finished today's piece</button>}
         {needsYou.map(target => (
           <button key={target.id} className="need" onClick={() => pick(target.id)}>
             <Avatar person={target} everyone={everyone} size={20} /><span className={`dot ${target.request ? 'asks' : 'finished'}`} /><b>{target.name}</b>
@@ -1062,14 +1124,15 @@ export default function App() {
           </button>
         ))}
       </div>
+      )}
 
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} onPick={pick} onSpace={goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown} onPick={pick} onSpace={goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
-        <div className={`corner ${isTeamsOpen ? 'menu-open' : ''}`}>
-          {!person && place === 'office' && (
+        <div className="corner">
+          {!person && !shutDown && place === 'office' && (
             <>
               <section className="person-card" aria-label="Your office">
                 <header className="card-head"><b className="name">Your office</b></header>
@@ -1089,7 +1152,21 @@ export default function App() {
               onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)}
             />
           )}
-          <TeamMenu teams={teams} hasLounge={loungers.length > 0} focus={focus} isOpen={isTeamsOpen} onToggle={() => setIsTeamsOpen(open => !open)} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
+          {isNewsOpen && newsDay && <Drawer onClose={() => setIsNewsOpen(false)}><Newsroom day={newsDay} onClose={() => setIsNewsOpen(false)} /></Drawer>}
+          <TeamMenu onNews={() => setIsNewsOpen(true)} teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace}>
+            <span className="voices">
+            <button className={`voice-mode shut-down ${shutDown ? 'on' : ''}`} title={shutDown ? "Turn the lights back on, and hear what's waiting" : 'Put the office to sleep: lights, TVs and name tags go off, and nobody alerts you. Agents keep working'} aria-pressed={shutDown} onClick={toggleShutDown}><Power size={14} /> {shutDown ? 'Wake up' : 'Sleep'}</button>
+            <button className={`voice-mode away-mode ${awayMode ? 'on' : ''}`} title={awayMode ? "You're away. Click when you're back to hear what's waiting" : 'Nobody alerts you until you come back. Mia keeps everything waiting'} aria-pressed={awayMode} onClick={toggleAway}>{awayMode ? <><Moon size={14} /> I'm back</> : <><Moon size={14} /> Set away</>}</button>
+          {voices.speaker && <small>{everyone.find(other => other.id === voices.speaker)?.name} is speaking</small>}
+          {voices.speaker && <button className="icon" title="Skip" aria-label="Skip" onClick={voices.skip}><SkipForward size={14} /></button>}
+          {voices.problem && <small className="error">{voices.problem}</small>}
+          {voices.isOn && <button className={`icon ${voices.speaksWhileWorking ? 'on' : ''}`} title={voices.speaksWhileWorking ? 'Speaking while working. Turn off for end-of-turn only' : 'Speak while working'} aria-label="Speak while working" aria-pressed={voices.speaksWhileWorking} onClick={voices.toggleWhileWorking}><MessageCircle size={14} /></button>}
+          <button className={`voice-mode ${voices.isOn ? 'on' : ''}`} title={voices.isOn ? 'Turn voice mode off: nobody speaks and no ElevenLabs credits are used' : 'Turn voice mode on'} aria-pressed={voices.isOn} onClick={voices.toggle}>{voices.isOn ? <Volume2 size={14} /> : <VolumeX size={14} />} Voice {voices.isOn ? 'on' : 'off'}</button>
+        </span>
+            <button className="search" onClick={() => setIsPaletteOpen(true)}>
+          <Search size={14} /><span>Search agents and rooms</span><kbd>⌘</kbd><kbd>K</kbd>
+        </button>
+          </TeamMenu>
         </div>
       </div>
 
