@@ -286,3 +286,5 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .usage-row b { font-weight: 500; }
 .usage-row small { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .assistant-setup { align-self: flex-start; }
+.memory { display: flex; flex-direction: column; gap: 3px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.memory small { color: var(--muted); }

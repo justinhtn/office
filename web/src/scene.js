@@ -103,7 +103,7 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.72,el:.38}
-let speaker=null,usage=null,usageScreen=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+let speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -147,6 +147,70 @@ function attachUsageScreen(mesh){
   const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
   mesh.material=new THREE.MeshBasicMaterial({map:texture})
   usageScreen={canvas,texture};drawUsage()
+}
+// A wall display in your office listing every team and independent developer. Rows can be clicked.
+function directoryBoard(x0,cz){
+  const width=4.8,height=2.4,y=3.45,x=x0+.14
+  const body=new THREE.Mesh(roundedPanel(width+.09,height+.09,.055,.045),new THREE.MeshPhongMaterial({color:0x08090b,specular:0x6a7078,shininess:90}));body.rotation.y=Math.PI/2;body.position.set(x,y,cz);body.castShadow=true;world.add(body)
+  ;[-1,1].forEach(side=>box(world,.08,y,.1,0x3a3e46,x-.06,y/2,cz+side*1.7))
+  const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=960
+  const texture=crispTexture(canvas)
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
+  const glass=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:glassReflection(),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glass.rotation.y=Math.PI/2;glass.position.set(x+.036,y,cz);world.add(glass)
+  const g=canvas.getContext('2d');g.scale(2,2)
+  directory={g,texture,panel,hits:[],hover:null};drawDirectory()
+}
+function directoryRow(ray){
+  if(!directory)return null
+  const hit=ray.intersectObject(directory.panel)[0]
+  if(!hit||!hit.uv)return null
+  const x=hit.uv.x*960,y=(1-hit.uv.y)*480,row=directory.hits.find(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h)
+
+  return row?{...row,distance:hit.distance}:null
+}
+function drawDirectory(){
+  if(!directory)return
+  const {g,texture}=directory,W=960,H=480,rows=usage?.directory||[]
+  const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+  const back=g.createLinearGradient(0,0,0,H);back.addColorStop(0,'#10141b');back.addColorStop(1,'#0a0d12');g.fillStyle=back;g.fillRect(0,0,W,H)
+  g.textBaseline='middle';g.textAlign='left'
+  g.fillStyle=UI.text;g.font='600 24px Inter,sans-serif';g.fillText('Everyone',28,34)
+  const teams=rows.filter(r=>r.kind==='team'),solo=rows.filter(r=>r.kind!=='team')
+  g.fillStyle=UI.muted;g.font='14px Inter,sans-serif';g.fillText(`${teams.length} teams · ${solo.length} independent`,W-28-g.measureText(`${teams.length} teams · ${solo.length} independent`).width,35)
+  const statusOf=row=>{
+    const here=row.memberIds.map(id=>people.find(p=>p.id===id)).filter(Boolean)
+    if(here.some(p=>p.request))return{label:'Asking',fg:UI.asks,bg:UI.asksWash}
+    if(here.some(p=>p.isActing))return{label:'Working',fg:UI.working,bg:UI.workingWash}
+    if(here.some(p=>p.isRunning))return{label:'Waiting',fg:UI.waiting,bg:UI.waitingWash}
+    if(!row.stillInOffice)return{label:'Archived',fg:UI.faint,bg:null}
+    return{label:shortAge(row.lastActive),fg:UI.muted,bg:null}
+  }
+  const hits=[]
+  const card=(title,list,x,w,MAX)=>{
+    g.fillStyle=UI.soft;roundRect(g,x,60,w,H-76,12);g.fill()
+    g.fillStyle=UI.muted;g.font='600 13px Inter,sans-serif';g.textAlign='left';g.fillText(title.toUpperCase(),x+16,82)
+    const ROW=34
+    list.slice(0,MAX).forEach((row,i)=>{
+      const top=98+i*ROW,y=top+ROW/2,status=statusOf(row),canOpen=row.stillInOffice
+      if(canOpen)hits.push({x,y:top,w,h:ROW,id:row.id})
+      if(directory.hover===row.id){g.fillStyle=UI.hover;roundRect(g,x+6,top+1,w-12,ROW-2,8);g.fill()}
+      g.textAlign='left';g.fillStyle=canOpen?UI.text:UI.faint;g.font='500 17px Inter,sans-serif'
+      g.fillText(fit(row.kind==='team'?`${row.lead}'s team`:row.lead,w*.46),x+16,y)
+      g.fillStyle=UI.muted;g.font='14px Inter,sans-serif';g.fillText(fit(row.project,w*.24),x+w*.5,y)
+      g.font='500 13px Inter,sans-serif';g.textAlign='right'
+      if(status.bg){const pill=g.measureText(status.label).width+20;g.fillStyle=status.bg;roundRect(g,x+w-14-pill,y-11,pill,22,11);g.fill();g.fillStyle=status.fg;g.fillText(status.label,x+w-24,y+.5)}
+      else{g.fillStyle=status.fg;g.fillText(status.label,x+w-16,y+.5)}
+    })
+    if(list.length>MAX){g.textAlign='left';g.fillStyle=UI.faint;g.font='13px Inter,sans-serif';g.fillText(`${list.length-MAX} more on the Away list`,x+16,H-30)}
+  }
+  card('Teams',teams,20,440,9)
+  card('Independent developers',solo,480,460,9)
+  directory.hits=hits
+  texture.needsUpdate=true
+}
+function crispTexture(canvas){
+  const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=renderer.capabilities.getMaxAnisotropy();texture.generateMipmaps=false;texture.minFilter=THREE.LinearFilter
+  return texture
 }
 function drawUsage(){
   if(!usageScreen)return
@@ -850,6 +914,7 @@ const UI={page:'#0b0e13',soft:'#141922',hover:'#2a303a',line:'#222833',text:'#ff
 function shortAge(iso){const then=Date.parse(iso||'');if(Number.isNaN(then))return'';const m=Math.max(0,Math.round((Date.now()-then)/6e4));return m<60?`${m}m`:m<1440?`${Math.round(m/60)}h`:`${Math.round(m/1440)}d`}
 function statusOfRow(p){
   if(p.request)return{label:'Asking for you',fg:UI.asks,bg:UI.asksWash,rank:0}
+  if(p.isCompacting)return{label:'Compacting',fg:UI.waiting,bg:UI.waitingWash,rank:1}
   if(p.meetingWith?.length)return{label:'In a meeting',fg:UI.meeting,bg:UI.meetingWash,rank:1}
   if(p.isWaiting)return{label:'Waiting on job',fg:UI.waiting,bg:UI.waitingWash,rank:2}
   if(p.isFinished)return{label:'Finished',fg:UI.waiting,bg:UI.waitingWash,rank:3}
@@ -861,7 +926,7 @@ function drawBoard(board){
   const {g,team,faces,texture,live}=board,W=960,H=480,lead=team.lead
   const members=team.members.map(m=>people.find(x=>x.id===m.id)||m)
   const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
-  g.fillStyle=UI.page;g.fillRect(0,0,W,H)
+  const back=g.createLinearGradient(0,0,0,H);back.addColorStop(0,'#10141b');back.addColorStop(1,'#0a0d12');g.fillStyle=back;g.fillRect(0,0,W,H)
   // The team's own header, with the time and task progress on the right.
   const isTeam=team.members.length>1
   g.textBaseline='middle';g.textAlign='left';g.fillStyle=UI.text;g.font='600 28px Inter,sans-serif';g.fillText(fit(isTeam?`${lead.name}'s team`:lead.name,520),24,36)
@@ -922,7 +987,7 @@ function projector(team,x0,cz){
   box(world,.09,.05,2.2,0x3a3e46,x-.06,.11,cz)
   ;[-1,1].forEach(side=>{box(world,1,.05,.09,0x3a3e46,x-.06,.11,cz+side*1.05);[-.42,.42].forEach(dx=>{const wheel=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.04,10),mat(0x17181b));wheel.rotation.x=Math.PI/2;wheel.position.set(x-.06+dx,.05,cz+side*1.05);world.add(wheel)})})
   const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=960
-  const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=8
+  const texture=crispTexture(canvas)
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
   // Light from the screen, falling on the floor in front of it.
   const glowMap=paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,2,w/2,w/2,w/2);r.addColorStop(0,'rgba(150,185,255,.28)');r.addColorStop(1,'rgba(150,185,255,0)');g.fillStyle=r;g.fillRect(0,0,w,w)})
@@ -1016,6 +1081,7 @@ function drawSpace(space,x0,z0){
     officeRug(world,cx-.3,cz-.45)
     credenza(world,x0+1.5,z0+.3)
     bookcase(world,x0+.24,cz-1.3)
+    directoryBoard(x0,cz-.9)
     floorLamp(world,x0+W-.55,z0+1.9)
     wallArt(world,cx+1.75,z0+.1)
   }
@@ -1028,8 +1094,8 @@ function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSiz
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 let drag=null,moved=false
 canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
-canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.14,drag.el+dy*.004))})
-canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=ray.intersectObjects(actors.map(a=>a.g),true)[0];if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
+canvas.addEventListener('pointermove',e=>{if(!drag&&directory){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const row=directoryRow(ray),over=row?row.id:null;if(over!==directory.hover){directory.hover=over;canvas.style.cursor=over?'pointer':'';drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.14,drag.el+dy*.004))})
+canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=ray.intersectObjects(actors.map(a=>a.g),true)[0];const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
@@ -1085,7 +1151,7 @@ return {
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
-    usage=nextUsage;drawUsage()
+    usage=nextUsage;drawUsage();drawDirectory()
   },
   dispose(){clearInterval(timer);observer.disconnect();renderer.dispose()},
 }

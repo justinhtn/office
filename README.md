@@ -33,7 +33,9 @@ Session data needs at least one Claude Code session open. Without one, the offic
 
 Installing opens one more session in the Claude app, in `~/.agent-office/front-desk`. Confirm it, and she sits at the front desk in your office. Ask her who needs what. If you skip it, click **Your office** to set her up later.
 
-She has a read-only tool list, so she can read what sessions are doing but can't edit files, run commands or message agents. The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
+She keeps a notebook in `~/.agent-office/notebook` of every team and independent developer (a session with no team), including ones since archived. It holds session titles and latest updates, plus any notes she adds.
+
+She has a read-only tool list, so she can read what sessions are doing and add to her notebook, but can't otherwise edit files, run commands or message agents. The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
 
 ## Privacy and security
 

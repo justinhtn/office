@@ -113,6 +113,7 @@ const VOICE_SETTING = 'office-voices'
 const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
 const USAGE_CHECK_MS = 15000
+const COMPACTED_NOTE_S = 3600
 const PRESENCE_CHECK_MS = 5000
 const DESK_QUIET_MS = 180000
 const DESK_CHECK_MS = 30000
@@ -273,7 +274,7 @@ function Usage({ usage, people, onPick, onClose }) {
         <h3>Claude Code{claude?.plan ? ` · ${claude.plan}` : ''}</h3>
         {claude?.windows?.map(window => <Meter key={window.label} label={window.label} percent={window.percentUsed} detail={`${window.percentUsed}% · resets in ${window.resetsIn}`} />)}
         {claude?.extraUsage?.enabled && <Meter label="Extra usage" percent={100 * Number(claude.extraUsage.spent) / Number(claude.extraUsage.monthlyLimit || 1)} detail={`$${claude.extraUsage.spent} of $${claude.extraUsage.monthlyLimit}`} />}
-        {!claude && <small>Not available yet. It appears once a session running the latest plugin reports it.</small>}
+        {!claude?.windows?.length && <small>Not available yet. It appears once a session running the latest plugin reports it.</small>}
 
         <h3>ElevenLabs</h3>
         {speech?.isOn ? <>
@@ -673,6 +674,21 @@ function EditableText({ value, label, className, onSave }) {
   )
 }
 
+// A session works from a summary after compacting, so details may be gone.
+function Memory({ person }) {
+  const percent = person.contextPercent
+  const isRecent = person.compactedAt && Date.now() / 1000 - person.compactedAt < COMPACTED_NOTE_S
+  if (!person.isCompacting && !isRecent && percent == null) return null
+
+  return (
+    <div className="memory">
+      {percent != null && <Meter label="Memory" percent={100 * percent / (person.compactsAt || 100)} detail={`${percent}% full`} />}
+      {person.isCompacting && <small>{person.name} is compacting and will carry on from a summary.</small>}
+      {!person.isCompacting && isRecent && <small>{person.name} compacted at {new Date(person.compactedAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Check anything important made it through.</small>}
+    </div>
+  )
+}
+
 function RequestBanner({ person, onShow }) {
   const [problem, setProblem] = useState('')
   const dismiss = () => api('/api/dismiss', { id: person.id }).catch(failure => setProblem(failure.message))
@@ -733,6 +749,7 @@ function Session({ person, everyone, teams, tab, onTab, onClose, onPick, onHear 
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => onTab(id)}><Icon size={14} /> {label}</button>
         ))}
       </nav>
+      <Memory person={person} />
       {person.request && <RequestBanner person={person} onShow={show} />}
       {stage && <Stage files={stage.files} caption={stage.caption} onClose={() => setStage(null)} />}
       {tab === 'outputs' && <Outputs person={person} onExpand={(files, caption) => setStage({ files, caption })} />}
