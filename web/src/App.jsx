@@ -742,7 +742,7 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
 
 const ACTIVE_DAYS = 7
 const isActive = person =>
-  person.isAssistant || person.isNamedTeam || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
+  person.isAssistant || (person.isNamedTeam && person.id === person.teamLeadId) || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
   Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },

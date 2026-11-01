@@ -1389,7 +1389,7 @@ function projector(team,x0,cz){
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
   // Light from the screen, falling on the floor in front of it.
   const glowMap=paintTex(128,128,(g,w)=>{const r=g.createRadialGradient(w/2,w/2,2,w/2,w/2,w/2);r.addColorStop(0,'rgba(150,185,255,.28)');r.addColorStop(1,'rgba(150,185,255,0)');g.fillStyle=r;g.fillRect(0,0,w,w)})
-  const spill=new THREE.Mesh(new THREE.PlaneGeometry(3,6.2),new THREE.MeshBasicMaterial({map:glowMap,transparent:true,depthWrite:false}));spill.rotation.x=-Math.PI/2;spill.position.set(x+1.2,.035,cz);world.add(spill)
+  const spill=new THREE.Mesh(new THREE.PlaneGeometry(3*size,6.2*size),new THREE.MeshBasicMaterial({map:glowMap,transparent:true,depthWrite:false}));spill.rotation.x=-Math.PI/2;spill.position.set(x+1.2*size,.035,cz);world.add(spill)
   // A glass front that reflects the windows and shifts as the camera moves.
   const reflection=glassReflection();
   const glassFront=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:reflection,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glassFront.rotation.y=Math.PI/2;glassFront.position.set(x+.036,y,cz);world.add(glassFront)
@@ -1767,7 +1767,7 @@ return {
     if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
     speaker=nextSpeaker
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
-    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
+    const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.isNamedTeam,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
