@@ -364,6 +364,8 @@ def organize_teams(rows, names):
 def team_name_problem(people, team_id, name):
     if not TEAM_NAME.match(name):
         return "Use letters and numbers, up to 40 characters."
+    if name.lower() == "independent":
+        return "That word is reserved for people with no team."
     teams = [person for person in people if not person.get("isIndependent")]
     if not any(person.get("teamId") == team_id for person in teams):
         return "That team isn't in the office."
@@ -371,6 +373,14 @@ def team_name_problem(people, team_id, name):
         return "Another team already has that name."
 
     return ""
+
+
+def with_team_name(choices, people, team_id, name):
+    """People moved to a team are remembered by its name, so they follow it to the new one."""
+    old = next((person["teamName"] for person in people if person.get("teamId") == team_id), None)
+    moved = {session: name if team == old else team for session, team in choices.get("moved", {}).items()}
+
+    return {**choices, "moved": moved, "names": {**choices.get("names", {}), team_id: name}}
 
 
 class Office:
@@ -1566,11 +1576,11 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(body.get("name", "")).strip()
                 team_id = str(body.get("teamId", ""))
                 with OFFICE.lock:
-                    problem = team_name_problem(OFFICE.snapshot.get("people", []), team_id, name)
+                    people = list(OFFICE.snapshot.get("people", []))
+                problem = team_name_problem(people, team_id, name)
                 if problem:
                     raise Refused(400, problem)
-                choices = read_json(TEAMS, {})
-                write_json(TEAMS, {**choices, "names": {**choices.get("names", {}), team_id: name}})
+                write_json(TEAMS, with_team_name(read_json(TEAMS, {}), people, team_id, name))
                 OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
                 return

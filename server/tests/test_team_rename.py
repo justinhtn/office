@@ -51,6 +51,16 @@ class TeamRenameTest(unittest.TestCase):
         self.assertEqual(placed["c"]["teamId"], "project:SuperPup")
         self.assertEqual(placed["c"]["teamGroup"], "SuperPup")
 
+    def test_someone_moved_to_a_team_stays_through_another_rename(self):
+        rows = [row("a", "SuperPup"), row("c", "Clancy")]
+        self.choose(names={"project:SuperPup": "Kennel"}, moved={"c": "Kennel"})
+        people = list(self.organize(rows).values())
+        choices = server.with_team_name(server.read_json(server.TEAMS, {}), people, "project:SuperPup", "Den")
+        self.choose(**choices)
+        placed = self.organize(rows)
+        self.assertEqual(placed["c"]["teamId"], "project:SuperPup")
+        self.assertEqual(placed["c"]["teamName"], "Den")
+
     def test_names_must_be_valid_unused_and_for_a_team_in_the_office(self):
         people = [
             {"teamId": "project:A", "teamName": "A"},
@@ -62,6 +72,7 @@ class TeamRenameTest(unittest.TestCase):
         self.assertIn("already", server.team_name_problem(people, "project:A", "b"))
         self.assertIn("isn't", server.team_name_problem(people, "solo:c", "Cleo2"))
         self.assertIn("isn't", server.team_name_problem(people, "project:Z", "Z"))
+        self.assertIn("reserved", server.team_name_problem(people, "project:A", "Independent"))
         self.assertIn("letters", server.team_name_problem(people, "project:A", "<b>"))
 
 
