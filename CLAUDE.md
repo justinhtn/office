@@ -10,14 +10,22 @@ Use the `dev-workflow` skill for any change to this repo. `main` is protected, s
 
 ## Review
 
-Quinn is the code reviewer, a session whose memory is cleared after each PR, so every review starts blank.
+Quinn reviews every PR, and the person gives the final yes. Quinn's memory is cleared after each PR, so every review starts blank. Anyone can open a PR.
 
-- Quinn gets only the PR link at first, and posts findings on the PR before talking to the author. Run `/code-review` without `--comment` once `check` has passed, then post the findings yourself, so they appear under Quinn's name.
-- Quinn posts as the `quinn-office-review` GitHub App: use `~/.agent-office/quinn/quinn-gh` in place of `gh`. Never post as the person, and never print its token or read its key.
-- All discussion of the code happens on the PR, as comments on the relevant lines. The author replies in the same threads and pushes fixes. Sessions only send each other one-line nudges, such as "replied on PR 6".
+1. **Open:** the author tells the lead, who sends Quinn only the PR link.
+2. **Review:** once `check` has passed, Quinn runs `/code-review` without `--comment`, posts findings on the relevant lines with an overall verdict, then nudges the author.
+3. **Respond:** the author either fixes each finding or replies saying why not, pushes, then nudges Quinn.
+4. **Look again:** Quinn checks the new commit, replies in the threads and updates the verdict. Repeat from step 3 until both are satisfied. After three rounds without agreement, stop and tell the lead, who brings it to the person.
+5. **Ask:** when Quinn says it's ready, the lead checks that `check` passed and the verdict covers the latest commit, then asks for the person's attention with a summary and any disagreements.
+6. **Merge:** only when the person says so. Then the lead clears Quinn.
+
+Rules for this:
+
+- Quinn posts as the `quinn-office-review` GitHub App: use `~/.agent-office/quinn/quinn-gh` in place of `gh`. Never post as the person, and never print its token or read its key. Quinn doesn't set required checks or approve PRs on GitHub; the verdict is a comment.
+- All discussion of the code happens on the PR. Sessions only send each other one-line nudges, such as "replied on PR 6".
+- Only blocking findings hold a PR back. Fix smaller ones if they're easy; otherwise they stay on the PR for the person to see.
 - If Quinn drops a finding after discussion, the reason goes on the PR.
-- Quinn's verdict covers one commit. After new pushes, Quinn looks again and updates it. A GitHub approval stays in place after a push and isn't required by branch protection, so check the verdict covers the latest commit before merging.
-- Quinn's approval doesn't merge anything. The person decides on merging, then the lead clears Quinn.
+- If the permission check blocks a comment, don't retry or find another way. Tell the lead, who brings it to the person.
 - Comments may become public one day, so keep secrets and real transcript text out of them.
 
 ## Checks
