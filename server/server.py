@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Local server for Agent Office. Binds to loopback and requires a per-start token.
 
-Files, git, names and status are answered here. Transcripts and messages go through
-a folder of request files that the agent-office plugin answers from any running
-Claude Code session.
+Files, git, names and status are answered here, from what the agent-office plugin
+publishes and from Claude Code's transcript files.
 """
 import glob
 import hashlib
@@ -30,7 +29,6 @@ from urllib.parse import parse_qs, urlencode, urlparse
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
 DATA = Path(os.environ.get("AGENT_OFFICE_HOME", Path.home() / ".agent-office"))
-BRIDGE = DATA / "bridge"
 RAW_SESSIONS = DATA / "sessions.raw.json"
 PEOPLE = DATA / "people.json"
 NAMES = DATA / "names.json"
@@ -115,8 +113,6 @@ MEDIA_TYPES = {
     ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
 }
-PAGE_SIZE = 300
-MAX_TOOL_OUTPUT = 6000
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 HIDDEN_TOOLS = re.compile(r"^(mcp__ccd_turn__|mcp__ccd_session__mark_chapter|ToolSearch$|mcp__visualize__read_me)")
 ASSET_TYPES = {
@@ -131,9 +127,7 @@ ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 ALLOWED_ORIGINS = {f"http://{host}" for host in ALLOWED_HOSTS}
 MAX_OUTPUT = 200_000
 MAX_MESSAGE = 20_000
-BRIDGE_TIMEOUT_S = 30
 SESSION_ID = re.compile(r"^local_[0-9a-f-]{36}$")
-CURSOR = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 JOB_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 '&/.+-]{0,31}$")
 FILLER_WORDS = {"a", "an", "and", "at", "for", "from", "in", "of", "on", "the", "to", "with", "btw:", "her", "his", "their", "my", "our"}
 AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
@@ -715,16 +709,6 @@ def git(cwd, *args):
     return done.stdout[:MAX_OUTPUT], done.returncode
 
 
-def changes(session_id):
-    cwd = session_cwd(session_id)
-    status, code = git(cwd, "status", "--short", "--branch")
-    if code != 0:
-        return {"status": "This folder isn't a git repository.", "diff": ""}
-    diff, _ = git(cwd, "diff", "HEAD", "--no-color")
-
-    return {"status": status, "diff": diff}
-
-
 def file_list(session_id):
     cwd = session_cwd(session_id)
     listed, code = git(cwd, "ls-files")
@@ -855,25 +839,23 @@ class Transcripts:
 
     @staticmethod
     def describe_tool(tool, tool_input):
-        """A plain label for a tool call, plus the detail behind it."""
-        path = str(tool_input.get("file_path", ""))
-        name = Path(path).name
+        """A plain label for a tool call."""
+        name = Path(str(tool_input.get("file_path", ""))).name
         if tool == "Bash":
-            command = str(tool_input.get("command", ""))
-            return str(tool_input.get("description") or command[:80]), command
+            return str(tool_input.get("description") or str(tool_input.get("command", ""))[:80])
         if tool in ("Read", "Edit", "Write"):
             verb = {"Read": "Read", "Edit": "Edited", "Write": "Wrote"}[tool]
-            return f"{verb} {name}", path
+            return f"{verb} {name}"
         if tool == "Agent":
-            return f"Started a helper: {tool_input.get('description', '')}".strip(), str(tool_input.get("prompt", ""))[:MAX_TOOL_OUTPUT]
+            return f"Started a helper: {tool_input.get('description', '')}".strip()
         if tool == "WebSearch":
-            return f"Searched: {tool_input.get('query', '')}", ""
+            return f"Searched: {tool_input.get('query', '')}"
         if tool == "WebFetch":
-            return f"Read a web page: {tool_input.get('url', '')}", ""
+            return f"Read a web page: {tool_input.get('url', '')}"
         if "Claude_Browser" in tool or "claude-in-chrome" in tool:
-            return "Used the browser", json.dumps(tool_input)[:MAX_TOOL_OUTPUT]
+            return "Used the browser"
         words = tool.split("__")[-1].replace("_", " ")
-        return words[:1].upper() + words[1:], json.dumps(tool_input)[:MAX_TOOL_OUTPUT]
+        return words[:1].upper() + words[1:]
 
     @staticmethod
     def apply_plan(plan, tool_input):
@@ -898,7 +880,7 @@ class Transcripts:
         return plan
 
     def parse(self, session_id, path):
-        messages, seen_tools, activity, artifacts = [], set(), {}, {}
+        messages, seen_tools, artifacts = [], set(), {}
         last_reply = ""
         plan, turn_started, last_peer = [], "", None
         helpers, jobs = {}, {}
@@ -968,13 +950,6 @@ class Transcripts:
                         address = published and not block.get("is_error") and ARTIFACT_URL.search(json.dumps(block.get("content")))
                         if address:
                             messages.append({"role": "artifact", "title": published, "url": address.group(0)})
-                        item = activity.get(block.get("tool_use_id"))
-                        if item is not None:
-                            result = block.get("content")
-                            if isinstance(result, list):
-                                result = "\n".join(str(r.get("text", "")) for r in result if isinstance(r, dict))
-                            item["output"] = str(result or "")[:MAX_TOOL_OUTPUT]
-                            item["isError"] = bool(block.get("is_error"))
                     elif kind == "tool_use":
                         if block.get("id") in seen_tools:
                             continue
@@ -999,11 +974,8 @@ class Transcripts:
                                 artifacts[block.get("id")] = str(tool_input.get("title") or Path(str(tool_input.get("file_path") or "Artifact")).stem)[:80]
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
-                            label, detail = self.describe_tool(tool, tool_input)
+                            label = self.describe_tool(tool, tool_input)
                             recent.append("Running a command" if tool == "Bash" and not tool_input.get("description") else label[:70])
-                            item = {"role": "activity", "body": label, "detail": detail, "output": "", "isError": False}
-                            activity[block.get("id")] = item
-                            messages.append(item)
 
         return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastReply": last_reply, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
 
@@ -1045,20 +1017,6 @@ class Transcripts:
             return talking, helpers, jobs, max(ages, default=0), step, progress, plan[:12], parsed["recent"]
         except (Refused, OSError, ValueError, KeyError):
             return None, [], [], 0, "", [0, 0], [], []
-
-    def page(self, session_id, before):
-        cached = self.load(session_id)
-        messages = cached[1]["messages"]
-        end = len(messages) if before is None else max(0, min(before, len(messages)))
-        start = max(0, end - PAGE_SIZE)
-
-        return {
-            "messages": messages[start:end],
-            "total": len(messages),
-            "cursor": start if start > 0 else None,
-            "plan": cached[1]["plan"],
-            "turnStartedAt": cached[1]["turnStartedAt"],
-        }
 
     def outputs(self, session_id):
         parsed = self.load(session_id)[1]
@@ -1341,34 +1299,6 @@ def known_session(session_id):
         raise Refused(404, "Unknown session.")
 
 
-def bridge_call(request):
-    """Writes a request file and waits for the mod's answer."""
-    request_id = uuid.uuid4().hex
-    pending = BRIDGE / f"req-{request_id}.json"
-    answer = BRIDGE / f"res-{request_id}.json"
-    temporary = BRIDGE / f"tmp-{request_id}"
-    temporary.write_text(json.dumps({"id": request_id, **request}))
-    temporary.rename(pending)
-    try:
-        deadline = time.time() + BRIDGE_TIMEOUT_S
-        while time.time() < deadline:
-            time.sleep(0.25)
-            try:
-                result = json.loads(answer.read_text())
-            except (OSError, ValueError):
-                continue
-            if result.get("status") != "working":
-                return result
-        raise Refused(504, "No Claude session answered. Open any Claude Code session and try again.")
-    finally:
-        pending.unlink(missing_ok=True)
-        answer.unlink(missing_ok=True)
-        try:
-            (BRIDGE / f"claim-{request_id}").rmdir()
-        except OSError:
-            pass
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentOffice"
     sys_version = ""
@@ -1469,19 +1399,6 @@ class Handler(BaseHTTPRequestHandler):
             session_id = query.get("id", "")
             if url.path == "/api/sessions":
                 self.reply(200, {**sessions(), "onScreen": sessions_on_screen()})
-            elif url.path == "/api/transcript":
-                known_session(session_id)
-                before = query.get("before", "")
-                if before and not CURSOR.match(before):
-                    raise Refused(400, "Bad cursor.")
-                self.reply(200, bridge_call({"action": "transcript", "session": session_id, "before": before}))
-            elif url.path == "/api/changes":
-                known_session(session_id)
-                self.reply(200, changes(session_id))
-            elif url.path == "/api/messages":
-                known_session(session_id)
-                before = query.get("before")
-                self.reply(200, TRANSCRIPTS.page(session_id, int(before) if before else None))
             elif url.path == "/api/newsroom":
                 self.reply(200, newsroom_day())
             elif url.path == "/api/presence":
@@ -1491,8 +1408,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on()})
             elif url.path == "/api/usage":
                 self.reply(200, usage_report())
-            elif url.path == "/api/voice":
-                self.reply(200, {"isReady": VOICE_KEY.exists()})
             elif url.path == "/api/outputs":
                 known_session(session_id)
                 self.reply(200, TRANSCRIPTS.outputs(session_id))
@@ -1645,7 +1560,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     os.umask(0o077)
     DATA.mkdir(mode=0o700, exist_ok=True)
-    BRIDGE.mkdir(mode=0o700, exist_ok=True)
     REQUESTS.mkdir(mode=0o700, exist_ok=True)
     SPEECH.mkdir(mode=0o700, exist_ok=True)
     NEWSROOM.mkdir(mode=0o700, exist_ok=True)
@@ -1653,11 +1567,6 @@ if __name__ == "__main__":
     CONTEXT.mkdir(mode=0o700, exist_ok=True)
     COMPACTION.mkdir(mode=0o700, exist_ok=True)
     ensure_front_desk()
-    for stale in BRIDGE.iterdir():
-        if stale.is_dir():
-            stale.rmdir()
-        else:
-            stale.unlink(missing_ok=True)
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

@@ -115,6 +115,11 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("people", json.loads(body))
 
+    def test_removed_routes_stay_gone(self):
+        for path in ("/api/changes", "/api/transcript", "/api/messages", "/api/voice"):
+            with self.subTest(path):
+                self.assertEqual(self.send("GET", path, token=server.TOKEN)[0], 404)
+
     def test_data_needs_a_token(self):
         for token in (None, "", "wrong"):
             with self.subTest(token):

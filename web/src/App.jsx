@@ -403,8 +403,6 @@ function Empty({ text }) {
   return <div className="empty">{text}</div>
 }
 
-const EMPTY_PAGE_RETRIES = 8
-
 function MediaItem({ file, ...props }) {
   const [failed, setFailed] = useState(false)
   if (failed) return <div className="media-missing">{file.name} is no longer available.</div>

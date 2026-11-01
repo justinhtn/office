@@ -1,10 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-// Runs in every Claude Code session. One session at a time publishes the session
-// list. Any session can answer a request, and an atomic mkdir decides which one does,
-// so a request is never answered twice.
+// Runs in every Claude Code session. One session at a time publishes the session list.
 const PUBLISH_MS = 10_000
-const BRIDGE_MS = 1_000
 const LEASE_MS = 30_000
 const ROSTER_MS = 30_000
 const ROSTER_LIMIT = 40
@@ -45,7 +42,6 @@ type Listed = {
   parentSessionId?: string
   group?: { name?: string } | null
 }
-type BridgeRequest = { action?: string; session?: string; before?: string }
 type Person = {
   id: string
   name: string
@@ -70,7 +66,6 @@ type Person = {
 
 let selfId = ''
 let dataFolder = ''
-let isBridging = false
 let roster = ''
 let hasVoices = false
 let leadsTeam = false
@@ -222,55 +217,6 @@ async function publish($: EngineInterface): Promise<void> {
     )
   } catch {
     // The page shows how old its data is, so it's visible if this keeps failing.
-  }
-}
-
-async function answer(
-  $: EngineInterface,
-  request: BridgeRequest,
-): Promise<{ status: string; text?: string; error?: string }> {
-  try {
-    const result =
-      request.action === 'transcript'
-        ? await $.mcp.call(SESSION_TOOLS, 'list_events', {
-            session_id: request.session,
-            limit: 300,
-            ...(request.before ? { before_uuid: request.before } : {}),
-          })
-        : undefined
-    if (!result) return { status: 'error', error: 'Unknown request.' }
-    const text = textOf(result)
-
-    return result.isError ? { status: 'error', error: text } : { status: 'ok', text }
-  } catch (error) {
-    return { status: 'error', error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-async function answerBridge($: EngineInterface): Promise<void> {
-  if (isBridging) return
-  isBridging = true
-  try {
-    await ensureSelf($)
-    const folder = `${dataFolder}/bridge`
-    if (!(await $.fs.exists(folder))) return
-    for (const entry of await $.fs.list(folder)) {
-      const match = /^req-([0-9a-f]{32})\.json$/.exec(entry.name)
-      if (!match) continue
-      const request = JSON.parse(await $.fs.read(`${folder}/${entry.name}`)) as BridgeRequest
-      // The app's tools can't target the session calling them, so leave it to another.
-      if (request.session === selfId) continue
-      const claim = await $.process.run(['mkdir', `${folder}/claim-${match[1]}`])
-      if (claim.exitCode !== 0) continue
-      await $.fs.write(
-        `${folder}/res-${match[1]}.json`,
-        JSON.stringify(await answer($, request)),
-      )
-    }
-  } catch {
-    // The server times the request out and tells the person.
-  } finally {
-    isBridging = false
   }
 }
 
@@ -510,11 +456,10 @@ export const register: Register = on => {
       isDeferred: false,
     })
     hasVoices = await $.fs.exists(`${dataFolder}/elevenlabs.key`)
-    if (await $.fs.exists(`${dataFolder}/bridge`)) {
+    if (await $.fs.exists(dataFolder)) {
       void publish($)
       void loadRoster($)
       $.clock.every(PUBLISH_MS, () => void publish($))
-      $.clock.every(BRIDGE_MS, () => void answerBridge($))
       $.clock.every(ROSTER_MS, () => void loadRoster($))
       $.clock.every(FOCUS_MS, () => void publishFocus($))
       void publishContext($)
