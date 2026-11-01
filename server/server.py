@@ -97,8 +97,6 @@ MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
 JOB_MAX_AGE_S = 6 * 3600
 COFFEE_BREAK_S = 180
-# Marks a relayed message as typed in the office. A label for the page, not proof of who wrote it.
-OFFICE_MARK = "[Typed by the person in Agent Office]"
 CAST = {
     "f": ["Female_Adult_01", "Female_Adult_03", "Female_Adult_04", "Female_Adult_07", "Female_Adult_08",
           "Female_Adult_12", "Female_Adult_13", "Female_Adult_17", "Female_Party_02", "Business_Female_01"],
@@ -821,8 +819,6 @@ class Transcripts:
         text = re.sub(r"<system-reminder>.*?</system-reminder>", "", text, flags=re.S)
         text = re.sub(r"^\[Image: [^\]]*\]\s*", "", text, flags=re.M).strip()
         peer = re.search(r'<cross-session-message[^>]*from-name="([^"]*)"[^>]*>(.*?)</cross-session-message>', text, re.S)
-        if peer and peer.group(2).strip().startswith(OFFICE_MARK):
-            return {"role": "user", "body": peer.group(2).strip()[len(OFFICE_MARK):].strip()}
         if peer:
             source = re.search(r'<cross-session-message[^>]*\bfrom="(local_[0-9a-f-]+)"', text)
             return {"role": "peer", "from": peer.group(1), "fromId": source.group(1) if source else "", "body": peer.group(2).strip()}
@@ -1424,7 +1420,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def authorized(self):
         supplied = self.headers.get("X-Office-Token", "")
-        if not secrets.compare_digest(supplied, TOKEN):
+        # Compared as bytes, because compare_digest raises on text that isn't ASCII.
+        if not secrets.compare_digest(supplied.encode(), TOKEN.encode()):
             raise Refused(403, "Bad token.")
 
     def do_GET(self):
