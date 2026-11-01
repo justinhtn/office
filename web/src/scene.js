@@ -11,6 +11,11 @@ const nameHash = s => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0))
 const uniformOf = project => UNIFORMS[nameHash(project) % UNIFORMS.length]
 export const helperCast=(label,index)=>(nameHash(label)+index*5)%CAST.length
 const MODEL_SCALE = .0122
+const JAW_OPEN = .22
+const SPEAKER_ANGLES = [.7, -.7, .35, -.35, 1.05, -1.05, 0]
+const SPEAKER_DISTANCE = 4.6
+const SPEAKER_HEIGHT = 1.35
+const SPEAKER_RISE = .1
 const CLIPS = { sit: 'sit_chair_idle_neutral_01', work: 'sit_chair_idle_neutral_01', stand: 'idle_neutral_01', wave: 'wave_01', walk: 'walk_neutral' }
 const castOf = p => p.avatar || CAST[0]
 const sexOf = id => (/Female/.test(id) ? 'f' : 'm')
@@ -92,7 +97,7 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.1,0),dist:30,az:.72,el:.38}
-let focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
+let speaker=null,speakerView=null,focusKey=null,spots={},floors=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -202,6 +207,82 @@ function typeOnKeyboard(a,t){
     if(arm.finger)aimBone(arm.hand,arm.finger,forward.clone().multiplyScalar(.97).add(new THREE.Vector3(0,-.2-tap*.22,0)).normalize())
   })
 }
+// Rocketbox has no talking animation either, so speaking is layered over whatever pose they're in.
+function reachArm(arm,target,right,weight){
+  const before=[arm.upper.quaternion.clone(),arm.fore.quaternion.clone()]
+  const shoulder=arm.upper.getWorldPosition(new THREE.Vector3()),elbow=arm.fore.getWorldPosition(new THREE.Vector3()),wrist=arm.hand.getWorldPosition(new THREE.Vector3())
+  const upperLength=shoulder.distanceTo(elbow),foreLength=elbow.distanceTo(wrist)
+  const toTarget=target.clone().sub(shoulder),reach=Math.min(toTarget.length(),(upperLength+foreLength)*.995)
+  toTarget.normalize()
+  const along=(upperLength*upperLength+reach*reach-foreLength*foreLength)/(2*reach),lift=Math.sqrt(Math.max(0,upperLength*upperLength-along*along))
+  const bend=new THREE.Vector3(0,-1,0).addScaledVector(right,-arm.side*.35)
+  bend.addScaledVector(toTarget,-bend.dot(toTarget)).normalize()
+  aimBone(arm.upper,arm.fore,shoulder.clone().addScaledVector(toTarget,along).addScaledVector(bend,lift).sub(shoulder).normalize())
+  aimBone(arm.fore,arm.hand,target.clone().sub(arm.fore.getWorldPosition(new THREE.Vector3())).normalize())
+  arm.upper.quaternion.slerp(before[0],1-weight)
+  arm.fore.quaternion.slerp(before[1],1-weight)
+  arm.upper.updateMatrixWorld(true)
+}
+// The first angle in front of them with nothing like a plant or monitor in the way.
+function clearViewOf(a){
+  const people_=new Set(),blockers=[]
+  actors.forEach(other=>other.g.traverse(o=>people_.add(o)))
+  scene.traverse(o=>{if(o.isMesh&&!people_.has(o)&&o!==marker&&!(o.material?.transparent))blockers.push(o)})
+  const head=a.g.position.clone();head.y+=SPEAKER_HEIGHT
+  const front=a.baseTurn??a.g.rotation.y,ray=new THREE.Raycaster()
+  const isClear=az=>{
+    const way=new THREE.Vector3(Math.sin(az)*Math.cos(SPEAKER_RISE),Math.sin(SPEAKER_RISE),Math.cos(az)*Math.cos(SPEAKER_RISE))
+    ray.set(head,way);ray.near=.3;ray.far=SPEAKER_DISTANCE+.4
+    return ray.intersectObjects(blockers,false).length===0
+  }
+  return front+(SPEAKER_ANGLES.find(angle=>isClear(front+angle))??SPEAKER_ANGLES[0])
+}
+function speak(a,t,dt){
+  const life=a.life,isSpeaking=a.p.id===speaker
+  life.talk=(life.talk||0)+((isSpeaking?1:0)-(life.talk||0))*Math.min(1,dt*4)
+  const weight=life.talk
+  if(weight<.01){
+    if(a.baseTurn!==undefined){a.g.rotation.y=a.baseTurn;a.baseTurn=undefined}
+    if(life.jaw&&life.jawRest)life.jaw.quaternion.copy(life.jawRest)
+    return
+  }
+  const camera_=camera.position,canTurnBody=(a.pose==='stand'||a.pose==='wave')&&!a.route
+  if(canTurnBody&&a.baseTurn===undefined)a.baseTurn=a.g.rotation.y
+  const baseY=a.baseTurn??a.g.rotation.y
+  const forward=new THREE.Vector3(Math.sin(baseY),0,Math.cos(baseY))
+  const toCamera=new THREE.Vector3(camera_.x-a.g.position.x,0,camera_.z-a.g.position.z).normalize()
+  const angle=Math.atan2(forward.z*toCamera.x-forward.x*toCamera.z,forward.x*toCamera.x+forward.z*toCamera.z)
+  let left=angle
+  if(canTurnBody){a.g.rotation.y=baseY+angle*weight;left=0}
+  const turn=(bone,amount)=>{if(!bone)return;bone.getWorldQuaternion(tempWorld);tempAxis.copy(WORLD_UP).applyQuaternion(tempWorld.invert());bone.quaternion.multiply(tempTurn.setFromAxisAngle(tempAxis,amount*weight))}
+  const twist=Math.max(-.55,Math.min(.55,left*.45))
+  turn(life.spine,twist)
+  life.model.updateMatrixWorld(true)
+  const nod=Math.sin(t*2.3+nameHash(a.p.id))*.035+Math.sin(t*5.1)*.015
+  turn(life.head,Math.max(-.85,Math.min(.85,left-twist))+Math.sin(t*1.1)*.05)
+  const right=new THREE.Vector3(-toCamera.z,0,toCamera.x)
+  life.head.getWorldQuaternion(tempWorld)
+  tempAxis.copy(right).applyQuaternion(tempWorld.invert())
+  life.head.quaternion.multiply(tempTurn.setFromAxisAngle(tempAxis,nod*weight))
+  // Sentences have pauses, so the mouth and hands rest now and then.
+  const phrase=Math.sin(t*.9)*.5+.5>.14?1:.15
+  if(life.jaw){
+    const syllables=Math.max(0,Math.sin(t*13)*.6+Math.sin(t*8.3+1)*.4)
+    life.jaw.parent.getWorldQuaternion(tempWorld)
+    tempAxis.copy(right).applyQuaternion(tempWorld.invert())
+    life.jaw.quaternion.copy(life.jawRest).premultiply(tempTurn.setFromAxisAngle(tempAxis,JAW_OPEN*syllables*phrase*weight))
+  }
+  life.model.updateMatrixWorld(true)
+  const facing=forward.clone().add(toCamera).normalize(),across=new THREE.Vector3(facing.z,0,-facing.x)
+  const chest=life.spine.getWorldPosition(new THREE.Vector3())
+  life.arms.forEach((arm,i)=>{
+    if(!arm.upper||!arm.fore||!arm.hand)return
+    const beat=Math.sin(t*2.1+i*2.2+nameHash(a.p.id)%5)*phrase,sweep=Math.sin(t*1.3+i*1.4)*phrase
+    const target=chest.clone().addScaledVector(facing,.36+beat*.05).addScaledVector(across,-arm.side*(.2+sweep*.07))
+    target.y+=.04+beat*.07
+    reachArm(arm,target,across,weight)
+  })
+}
 function liven(a,t,dt){
   const life=a.life
   if(!life||!life.head)return
@@ -225,6 +306,7 @@ function liven(a,t,dt){
     life.lower.forEach(bone=>shift(bone,.2))
     life.undo=()=>{life.lids.forEach(bone=>shift(bone,.75));life.lower.forEach(bone=>shift(bone,-.2));life.undo=null}
   }
+  speak(a,t,dt)
 }
 function character(p){
   const g=new THREE.Group(), hit=new THREE.Mesh(new THREE.BoxGeometry(1,2.3,1),new THREE.MeshBasicMaterial({visible:false}))
@@ -237,7 +319,8 @@ async function dress(a){
   const model=cloneSkinned(source);model.scale.setScalar(MODEL_SCALE);a.g.add(model)
   a.mixer=new THREE.AnimationMixer(model);a.sex=sex
   a.mixer.timeScale=.88+Math.random()*.24
-  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),arms:['L','R'].map(side=>({side:side==='L'?-1:1,upper:model.getObjectByName(`Bip01_${side}_UpperArm`),fore:model.getObjectByName(`Bip01_${side}_Forearm`),hand:model.getObjectByName(`Bip01_${side}_Hand`),finger:model.getObjectByName(`Bip01_${side}_Finger2`)})),model,spine:model.getObjectByName('Bip01_Spine1'),yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
+  a.life={head:model.getObjectByName('Bip01_Head'),lids:['LEyeBlinkTop','REyeBlinkTop'].map(n=>model.getObjectByName(n)).filter(Boolean),lower:['LEyeBlinkBottom','REyeBlinkBottom'].map(n=>model.getObjectByName(n)).filter(Boolean),arms:['L','R'].map(side=>({side:side==='L'?-1:1,upper:model.getObjectByName(`Bip01_${side}_UpperArm`),fore:model.getObjectByName(`Bip01_${side}_Forearm`),hand:model.getObjectByName(`Bip01_${side}_Hand`),finger:model.getObjectByName(`Bip01_${side}_Finger2`)})),model,spine:model.getObjectByName('Bip01_Spine1'),jaw:model.getObjectByName('Bip01_MJaw'),yaw:0,goal:0,nextGlance:1+Math.random()*4,nextBlink:1+Math.random()*4,blink:0}
+  if(a.life.jaw)a.life.jawRest=a.life.jaw.quaternion.clone()
   setPose(a,a.pose)
   if(a.holdsMug)giveMug(a)
 }
@@ -637,6 +720,9 @@ function loop(){const t=clock.getElapsedTime()
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
     const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    const talker=speaker&&actors.find(a=>a.p.id===speaker)
+    // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
+    if(talker){if(speakerView===null)speakerView=clearViewOf(talker);const offset=speakerView-view.az;goal.x=talker.g.position.x;goal.y=talker.g.position.y+SPEAKER_HEIGHT;goal.z=talker.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=SPEAKER_DISTANCE}
     view.center.x+=(goal.x-view.center.x)*ease;view.center.y+=(goal.y-view.center.y)*ease;view.center.z+=(goal.z-view.center.z)*ease
     view.az+=(goal.az-view.az)*ease;view.el+=(goal.el-view.el)*ease;view.dist+=(goal.d-view.dist)*ease
     view.zoom+=(0-view.zoom)*ease
@@ -662,8 +748,11 @@ function loop(){const t=clock.getElapsedTime()
 const timer=setInterval(loop,33)
 let signature=''
 return {
-  update(nextPeople,nextSelected,nextFocus){
+  update(nextPeople,nextSelected,nextFocus,nextSpeaker=null){
     selected=nextSelected
+    if(nextSpeaker!==speaker)speakerView=null
+    if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
+    speaker=nextSpeaker
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id]))
     people=nextPeople

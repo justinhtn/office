@@ -37,11 +37,13 @@ AVATARS = DATA / "avatars.json"
 LABELS = DATA / "labels.json"
 REQUESTS = DATA / "requests"
 SPEECH = DATA / "speech"
+FOCUS = DATA / "focus.json"
+FOCUS_MAX_AGE_S = 10
 VOICE_KEY = DATA / "elevenlabs.key"
 VOICE_API = "https://api.elevenlabs.io/v1"
 VOICE_MODEL = "eleven_flash_v2_5"
-MAX_SPOKEN = 400
-WATCH_S = 2
+MAX_SPOKEN = 240
+WATCH_S = 1
 CALL_S = 60
 MEETING_S = 45
 HELPER_MAX_AGE_S = 3600
@@ -232,7 +234,7 @@ class Office:
                 # Between turns with a job still going, the agent is only waiting for it.
                 "isWaiting": bool(jobs[row["id"]]) and not row.get("isRunning"),
                 "isOnBreak": bool(jobs[row["id"]]) and not row.get("isRunning") and job_age[row["id"]] > COFFEE_BREAK_S,
-                "jobStartedAt": now - job_age[row["id"]] if jobs[row["id"]] else None,
+                "jobStartedAt": round(now - job_age[row["id"]]) if jobs[row["id"]] else None,
                 # The app calls a session idle once its turn ends, even with work still going.
                 "isRunning": bool(row.get("isRunning") or jobs[row["id"]] or helpers[row["id"]]),
                 "name": self.names[row["id"]],
@@ -739,6 +741,15 @@ class Transcripts:
 TRANSCRIPTS = Transcripts()
 
 
+def sessions_on_screen():
+    """The sessions open in the Claude app, if the plugin has said so recently."""
+    focus = read_json(FOCUS, {})
+    if not isinstance(focus, dict) or time.time() - focus.get("at", 0) / 1000 > FOCUS_MAX_AGE_S:
+        return []
+
+    return focus.get("sessions", [])
+
+
 def speakable(text):
     """Plain sentences, without the code, links and markdown nobody wants read out."""
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
@@ -942,7 +953,7 @@ class Handler(BaseHTTPRequestHandler):
             query = {key: values[0] for key, values in parse_qs(url.query).items()}
             session_id = query.get("id", "")
             if url.path == "/api/sessions":
-                self.reply(200, sessions())
+                self.reply(200, {**sessions(), "onScreen": sessions_on_screen()})
             elif url.path == "/api/transcript":
                 known_session(session_id)
                 before = query.get("before", "")

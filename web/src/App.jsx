@@ -13,7 +13,7 @@ import { age, api, speak, teamsOf, withId } from './api.js'
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
 const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
-function Room({ people, selected, focus, onPick, onSpace, children }) {
+function Room({ people, selected, focus, speaker, onPick, onSpace, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -24,8 +24,8 @@ function Room({ people, selected, focus, onPick, onSpace, children }) {
     return () => scene.current.dispose()
   }, [])
   useEffect(() => {
-    scene.current.update(people, selected, focus)
-  }, [people, selected, focus])
+    scene.current.update(people, selected, focus, speaker)
+  }, [people, selected, focus, speaker])
 
   return (
     <div className="room" ref={stage}>
@@ -110,9 +110,10 @@ function Avatar({ person, size = 24 }) {
 }
 
 const VOICE_SETTING = 'office-voices'
+const BUILD_CHECK_MS = 15000
 
-// Reads out people as they finish, one at a time: whoever is open, and anyone who needs you.
-function useVoices(everyone, selected) {
+// One voice at a time: agents you have open, and anyone asking for you. The rest stay quiet.
+function useVoices(everyone, listening) {
   const [isOn, setIsOn] = useState(() => {
     try { return localStorage.getItem(VOICE_SETTING) === 'on' } catch { return false }
   })
@@ -152,10 +153,10 @@ function useVoices(everyone, selected) {
       if (person.isActing && !person.request) continue
       heard.current.set(person.id, person.wordsKey)
       const isNew = wasHeard !== undefined && wasHeard !== person.wordsKey
-      if (isOn && isNew && (person.id === selected || person.isFinished || person.request) && !queue.current.includes(person.id)) queue.current.push(person.id)
+      if (isOn && isNew && (listening.includes(person.id) || person.request) && !queue.current.includes(person.id)) queue.current.push(person.id)
     }
     next.current()
-  }, [everyone, selected, isOn])
+  }, [everyone, listening.join(), isOn])
   function toggle() {
     const on = !isOn
     setIsOn(on)
@@ -165,7 +166,7 @@ function useVoices(everyone, selected) {
       skip()
     }
     // Hearing someone straight away shows it works, and the click lets the browser play sound.
-    if (on) hear(selected || [...everyone].sort((one, other) => Date.parse(other.lastActivityAt || 0) - Date.parse(one.lastActivityAt || 0))[0]?.id)
+    if (on) hear(listening[0] || [...everyone].sort((one, other) => Date.parse(other.lastActivityAt || 0) - Date.parse(one.lastActivityAt || 0))[0]?.id)
   }
   function hear(id) {
     if (!id) return
@@ -664,19 +665,43 @@ export default function App() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
+  const lastPeople = useRef('')
 
   useEffect(() => {
     const poll = () =>
       api('/api/sessions').then(
-        data => { setEveryone(data.people || []); setUpdatedAt(data.updatedAt || ''); setProblem('') },
+        data => {
+          // Checked often for quick voices, so only redraw the room when something changed.
+          const latest = JSON.stringify(data.people || [])
+          if (latest !== lastPeople.current) {
+            lastPeople.current = latest
+            setEveryone(data.people || [])
+          }
+          setUpdatedAt(data.updatedAt || '')
+          setOnScreen((data.onScreen || []).join(','))
+          setProblem('')
+        },
         failure => setProblem(failure.message),
       )
     poll()
-    const timer = setInterval(poll, 3000)
+    const timer = setInterval(poll, 1000)
 
     return () => clearInterval(timer)
   }, [])
-  const voices = useVoices(everyone, selected)
+  const [onScreen, setOnScreen] = useState('')
+  // Whoever is open in the Claude app speaks, and whoever you clicked here.
+  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean))
+  // A window left open picks up new builds by itself.
+  useEffect(() => {
+    const own = document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src')
+    const timer = setInterval(() => {
+      fetch('/', { cache: 'no-store' }).then(response => response.text()).then(page => {
+        if (own && !page.includes(own)) window.location.reload()
+      }).catch(() => {})
+    }, BUILD_CHECK_MS)
+
+    return () => clearInterval(timer)
+  }, [])
   const keyActions = useRef({ overview() {}, team() {} })
   useEffect(() => {
     const onKey = event => {
@@ -768,7 +793,7 @@ export default function App() {
         <Panel id="floor" order={1} minSize={25} defaultSize={person ? 60 : 100}>
           {active.length > 0
             ? (
-              <Room people={active} selected={selected} focus={focus} onPick={pick} onSpace={goToSpace}>
+              <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} onPick={pick} onSpace={goToSpace}>
                 <TeamBar teams={teams} hasLounge={loungers.length > 0} focus={focus} onTeam={team => pick(team.lead.id)} onPlace={goToPlace} />
               </Room>
             )

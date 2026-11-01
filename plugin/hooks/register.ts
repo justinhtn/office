@@ -9,6 +9,8 @@ const LEASE_MS = 30_000
 const ROSTER_MS = 30_000
 const ROSTER_LIMIT = 40
 const SESSION_TOOLS = 'ccd_session_mgmt'
+const WINDOW_TOOLS = 'ccd_window'
+const FOCUS_MS = 2_000
 const ATTENTION_TOOL = 'mcp__agent-office__ask_for_attention'
 const MAX_MESSAGE = 2000
 const MAX_FILES = 10
@@ -164,6 +166,30 @@ async function answerBridge($: EngineInterface): Promise<void> {
   }
 }
 
+// Tells the office which sessions are on screen, so those can speak to the person.
+async function publishFocus($: EngineInterface): Promise<void> {
+  try {
+    const path = `${dataFolder}/focus.json`
+    if (await $.fs.exists(path)) {
+      const { at } = JSON.parse(await $.fs.read(path)) as { at: number }
+      if (Date.now() - at < FOCUS_MS - 500) return
+    }
+    const layout = await $.mcp.call(WINDOW_TOOLS, 'get_window_layout', {})
+    if (layout.isError) return
+    const { main_window: main, popout_windows: popouts } = JSON.parse(textOf(layout)) as {
+      main_window?: { panes?: { kind?: string; session_id?: string }[] }
+      popout_windows?: { sessions?: { session_id?: string }[] }
+    }
+    const sessions = [
+      ...(main?.panes ?? []).filter(pane => pane.kind === 'session').map(pane => pane.session_id),
+      ...(popouts?.sessions ?? []).map(popout => popout.session_id),
+    ]
+    await $.fs.write(path, JSON.stringify({ sessions: [...new Set(sessions)], at: Date.now() }))
+  } catch {
+    // Without this the office falls back to whoever was last clicked there.
+  }
+}
+
 // Holds no statuses, so it only changes when people do and keeps the prompt cache warm.
 async function loadRoster($: EngineInterface): Promise<void> {
   try {
@@ -234,6 +260,7 @@ export const register: Register = on => {
       $.clock.every(PUBLISH_MS, () => void publish($))
       $.clock.every(BRIDGE_MS, () => void answerBridge($))
       $.clock.every(ROSTER_MS, () => void loadRoster($))
+      $.clock.every(FOCUS_MS, () => void publishFocus($))
     }
 
     return next(e)
