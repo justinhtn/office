@@ -80,6 +80,7 @@ TELEGRAM_STATE = Path.home() / ".claude" / "channels" / "telegram"
 TELEGRAM_LOG = DATA / "logs" / "mia-telegram.log"
 TELEGRAM_QUIET_S = 10
 TELEGRAM_WAIT_S = 60
+TELEGRAM_CONNECT_S = 3
 TELEGRAM_NOTE = "The person has set themselves away and may text you on Telegram. Answer those texts with the Telegram reply tool. Reply to this note with only the word ready, without using any tools."
 SPEECH_DAILY_CAP = 20_000
 MODAL_CHECK_S = 60
@@ -246,6 +247,12 @@ def start_telegram_mia(transcript):
     with open(TELEGRAM_LOG, "ab") as log:
         # The login shell finds claude and bun, which aren't on the background server's PATH.
         process = subprocess.Popen([os.environ.get("SHELL", "/bin/zsh"), "-lic", command], cwd=FRONT_DESK.resolve(), stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+    # Texts only arrive if Telegram connected before her first message, so hold that message until it has.
+    started = time.time()
+    pid_file = TELEGRAM_STATE / "bot.pid"
+    while time.time() - started < TELEGRAM_WAIT_S and not (pid_file.exists() and pid_file.stat().st_mtime >= started - 2):
+        time.sleep(0.5)
+    time.sleep(TELEGRAM_CONNECT_S)
     process.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": TELEGRAM_NOTE}}).encode() + b"\n")
     process.stdin.flush()
     telegram_mia["process"] = process
