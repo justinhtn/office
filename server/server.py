@@ -85,6 +85,9 @@ TELEGRAM_CONNECT_S = 3
 TELEGRAM_NOTE = "The person has set themselves away and may text you on Telegram. Answer those texts with the Telegram reply tool. Reply to this note with only the word ready, without using any tools."
 SPEECH_DAILY_CAP = 20_000
 MODAL_CHECK_S = 60
+MODAL_RECENT_S = 24 * 60 * 60
+MODAL_ROWS = 6
+MODAL_NAME_LENGTH = 60
 ANNOUNCED_PEOPLE = 3
 PLAY_TIMEOUT_S = 120
 USAGE_MAX_AGE_S = 600
@@ -1202,27 +1205,71 @@ def speech_used():
     return used, today
 
 
-modal_state = {"at": 0, "value": None}
+modal_state = {"at": 0, "value": None, "isChecked": False, "isChecking": False}
+modal_lock = threading.Lock()
 
 
-def modal_apps():
-    """Apps from the Modal command, if it's installed. Spend isn't available from it."""
-    if time.time() - modal_state["at"] < MODAL_CHECK_S:
-        return modal_state["value"]
-    modal_state["at"] = time.time()
-    modal_state["value"] = None
+def modal_field(app, name):
+    """The command's JSON uses snake_case, and older versions used the table's headings."""
+    return app.get(name.lower().replace(" ", "_"), app.get(name))
+
+
+def modal_time(text):
+    try:
+        return datetime.datetime.fromisoformat(str(text)).timestamp()
+    except ValueError:
+        return None
+
+
+def modal_summary(apps, now):
+    """What the office shows from the command's list. App IDs stay out of it, and it has no spend to show."""
+    running, stopped, idle = [], [], 0
+    for app in apps:
+        if not isinstance(app, dict):
+            continue
+        name = str(modal_field(app, "Description") or "Modal app")[:MODAL_NAME_LENGTH]
+        state = str(modal_field(app, "State") or "")
+        try:
+            tasks = int(modal_field(app, "Tasks") or 0)
+        except (TypeError, ValueError):
+            tasks = 0
+        if re.search(r"stop", state, re.I):
+            ended = modal_time(modal_field(app, "Stopped at"))
+            if ended is not None and now - ended < MODAL_RECENT_S:
+                stopped.append({"name": name, "stoppedAt": ended})
+        elif tasks or not re.search(r"deployed", state, re.I):
+            running.append({"name": name, "tasks": tasks, "startedAt": modal_time(modal_field(app, "Created at"))})
+        else:
+            idle += 1
+    running.sort(key=lambda app: app["startedAt"] or 0, reverse=True)
+    stopped.sort(key=lambda app: app["stoppedAt"], reverse=True)
+
+    return {"running": [app["name"] for app in running[:10]], "count": len(running), "apps": running[:MODAL_ROWS], "stopped": stopped[:MODAL_ROWS], "stoppedCount": len(stopped), "idle": idle}
+
+
+def check_modal():
+    value = None
     command = shutil.which("modal") or next((str(p) for p in (Path.home() / ".local/bin/modal", Path("/opt/homebrew/bin/modal"), Path("/usr/local/bin/modal")) if p.exists()), None)
     if command:
         try:
             done = subprocess.run([command, "app", "list", "--json"], capture_output=True, text=True, timeout=20)
             apps = json.loads(done.stdout) if done.returncode == 0 else None
             if isinstance(apps, list):
-                running = [str(app.get("Description") or app.get("App ID") or "App") for app in apps if not re.search(r"stopped", str(app.get("State", "")), re.I)]
-                modal_state["value"] = {"running": running[:10], "count": len(running)}
-        except (OSError, ValueError, subprocess.TimeoutExpired):
+                value = modal_summary(apps, time.time())
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
+    with modal_lock:
+        modal_state.update(value=value, isChecked=True, isChecking=False)
 
-    return modal_state["value"]
+
+def modal_apps():
+    """The last answer from the Modal command, checked in the background so a slow one can't hold up a request."""
+    with modal_lock:
+        if not modal_state["isChecking"] and time.time() - modal_state["at"] >= MODAL_CHECK_S:
+            modal_state.update(at=time.time(), isChecking=True)
+            threading.Thread(target=check_modal, daemon=True).start()
+
+        return modal_state["value"]
 
 
 def directory():
@@ -1255,6 +1302,7 @@ def usage_report():
             "isOn": VOICE_KEY.exists(),
         },
         "modal": modal_apps(),
+        "modalChecked": modal_state["isChecked"],
         "directory": directory(),
     }
 

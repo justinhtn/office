@@ -115,7 +115,7 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
-let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
+let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,modalTv=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
@@ -257,6 +257,61 @@ function drawDirectory(){
 function crispTexture(canvas){
   const texture=new THREE.CanvasTexture(canvas);texture.anisotropy=renderer.capabilities.getMaxAnisotropy();texture.generateMipmaps=false;texture.minFilter=THREE.LinearFilter
   return texture
+}
+// A wall TV in your office listing Modal's apps. It only redraws when its text changes.
+function modalBoard(x,z){
+  // High enough to clear Mia's monitor, so it stands on posts like the directory beside it.
+  const width=1.9,height=1.07,y=2.15,group=new THREE.Group();group.position.set(x,y,z);group.rotation.y=Math.PI/2;world.add(group)
+  ;[-1,1].forEach(side=>box(group,.08,y,.06,0x3a3e46,side*.7,-y/2,-.05))
+  const body=new THREE.Mesh(roundedPanel(width+.07,height+.07,.05,.035),new THREE.MeshPhongMaterial({color:0x08090b,specular:0x6a7078,shininess:90}));body.castShadow=true;group.add(body)
+  const canvas=document.createElement('canvas');canvas.width=1280;canvas.height=720
+  const texture=crispTexture(canvas)
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.position.z=.028;group.add(panel)
+  const glass=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:glassReflection(),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glass.position.z=.032;group.add(glass)
+  const g=canvas.getContext('2d');g.scale(2,2)
+  modalTv={g,texture,panel,drawn:''};drawModal();applyTimeOfDay()
+}
+function modalSpan(seconds){
+  const minutes=Math.max(0,Math.floor(seconds/60))
+  if(minutes<60)return `${minutes}m`
+  if(minutes<2880)return `${Math.floor(minutes/60)}h ${minutes%60}m`
+  return `${Math.floor(minutes/1440)}d`
+}
+function modalLines(modal,isChecked){
+  if(!modal)return {title:isChecked?"Modal isn't connected":'Checking Modal…',note:isChecked?'Install the modal command and log in to see jobs here.':'',rows:[]}
+  const now=Date.now()/1000,rows=[],apps=modal.apps||[],stopped=modal.stopped||[]
+  if(apps.length){
+    rows.push({heading:`Running · ${modal.count}`})
+    apps.forEach(app=>rows.push({name:app.name,isLive:true,detail:`${app.tasks} task${app.tasks===1?'':'s'}${app.startedAt?` · ${modalSpan(now-app.startedAt)}`:''}`}))
+    if(modal.count>apps.length)rows.push({name:`and ${modal.count-apps.length} more`,detail:''})
+  }
+  const room=Math.max(0,MODAL_TV_ROWS-rows.length-1)
+  if(stopped.length&&room){
+    rows.push({heading:'Stopped today'})
+    stopped.slice(0,room).forEach(app=>rows.push({name:app.name,detail:`${modalSpan(now-app.stoppedAt)} ago`}))
+  }
+  return {title:'Modal',note:apps.length||stopped.length?'':'No apps running',rows,idle:modal.idle?`${modal.idle} deployed app${modal.idle===1?'':'s'} with no tasks`:''}
+}
+function drawModal(){
+  if(!modalTv)return
+  const lines=modalLines(usage?.modal,usage?.modalChecked),key=JSON.stringify([lines,boardFont])
+  if(key===modalTv.drawn)return
+  modalTv.drawn=key
+  const {g,texture}=modalTv,W=640,H=360
+  const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+  const back=g.createLinearGradient(0,0,0,H);back.addColorStop(0,'#10141b');back.addColorStop(1,'#0a0d12');g.fillStyle=back;g.fillRect(0,0,W,H)
+  g.textBaseline='middle';g.textAlign='left';g.fillStyle=UI.text;g.font='600 28px '+boardFont;g.fillText(lines.title,24,36)
+  if(lines.note){g.fillStyle=UI.muted;g.font='18px '+boardFont;g.fillText(lines.note,24,lines.rows.length?72:96)}
+  let y=76
+  lines.rows.forEach(row=>{
+    if(row.heading){g.textAlign='left';g.fillStyle=UI.muted;g.font='600 14px '+boardFont;g.fillText(row.heading.toUpperCase(),24,y);y+=28;return}
+    if(row.isLive){g.fillStyle=UI.working;g.beginPath();g.arc(30,y,5,0,7);g.fill()}
+    g.textAlign='right';g.fillStyle=UI.muted;g.font='17px '+boardFont;g.fillText(row.detail,W-24,y)
+    const room=W-72-g.measureText(row.detail).width-16
+    g.textAlign='left';g.fillStyle=row.isLive?UI.text:UI.muted;g.font=`${row.isLive?500:400} 19px ${boardFont}`;g.fillText(fit(row.name,room),44,y);y+=30
+  })
+  if(lines.idle){g.textAlign='left';g.fillStyle=UI.muted;g.font='15px '+boardFont;g.fillText(lines.idle,24,H-24)}
+  texture.needsUpdate=true
 }
 function drawUsage(){
   if(!usageScreen)return
@@ -871,7 +926,7 @@ const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
 const LIGHTS_OUT_DIM=.45
-const SCREEN_OFF=.03
+const SCREEN_OFF=.03,MODAL_TV_ROWS=8
 const SLEEP_REFLECTIONS=.06
 const NIGHT_REFLECTIONS=.45
 const REFLECTION_CHECK_S=2
@@ -1077,6 +1132,7 @@ function applyTimeOfDay(){
   // Shut down turns off the big screens and hides the name tags too.
   boards.forEach(board=>{board.panel.material.color.setScalar(lightsOut?SCREEN_OFF:1);board.spill.visible=!lightsOut})
   if(directory)directory.panel.material.color.setScalar(lightsOut?SCREEN_OFF:1)
+  if(modalTv)modalTv.panel.material.color.setScalar(lightsOut?SCREEN_OFF:1)
   tagsEl.style.display=lightsOut?'none':''
   if(usageScreen)usageScreen.material.color.setScalar(lightsOut?SCREEN_OFF:1)
   // Painted things don't respond to light by themselves, so art follows the room, and a lamp goes off with it.
@@ -1425,6 +1481,7 @@ function drawSpace(space,x0,z0){
     credenza(world,x0+1.5,z0+.3)
     bookcase(world,x0+.24,cz-1.3)
     directoryBoard(x0,cz-.9)
+    modalBoard(x0+.14,z0+D-1)
     floorLamp(world,x0+W-.55,z0+1.9)
     wallArt(world,cx+1.75,z0+.1)
   }
@@ -1704,7 +1761,7 @@ return {
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
-    usage=nextUsage;drawUsage();drawDirectory()
+    usage=nextUsage;drawUsage();drawDirectory();drawModal()
   },
   setLightsOut(isOut){
     if(isOut===lightsOut)return
@@ -1712,7 +1769,7 @@ return {
   },
   setBoardFont(family){
     boardFont=`"${family}",sans-serif`
-    boards.forEach(drawBoard);drawDirectory();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
+    boards.forEach(drawBoard);drawDirectory();drawModal();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
   map,
   dispose(){clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
