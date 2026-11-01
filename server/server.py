@@ -98,6 +98,7 @@ ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
     ".svg": "image/svg+xml", ".woff2": "font/woff2",
     ".fbx": "application/octet-stream", ".jpg": "image/jpeg", ".png": "image/png", ".md": "text/plain",
+    ".gltf": "model/gltf+json", ".glb": "model/gltf-binary", ".bin": "application/octet-stream", ".hdr": "application/octet-stream",
 }
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8794
 TOKEN = secrets.token_urlsafe(32)

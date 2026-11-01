@@ -66,3 +66,5 @@ Add `--purge` to also delete `~/.agent-office`.
 MIT. See [LICENSE](LICENSE).
 
 The people and animations in `web/public/assets/avatars` are from [Microsoft Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox), also MIT, with textures resized. Its license is in that folder.
+
+The furniture in `web/public/assets/furniture/abo` is from [Amazon Berkeley Objects](https://amazon-berkeley-objects.s3.amazonaws.com/index.html), by Amazon.com, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), with textures resized and meshes simplified. The plant, coffee table, fabric and lighting are from [Poly Haven](https://polyhaven.com), CC0. Book titles on the shelves belong to their authors and publishers.

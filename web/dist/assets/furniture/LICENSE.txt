@@ -1,0 +1,3 @@
+The plant, round coffee table, fabric and lighting environment in this folder are from Poly Haven (polyhaven.com) and licensed CC0.
+
+The models in abo/ are from Amazon Berkeley Objects (https://amazon-berkeley-objects.s3.amazonaws.com/index.html), by Amazon.com, licensed CC BY 4.0. See abo/LICENSE-CC-BY-4.0.txt. They were changed: textures resized and meshes simplified. Files are named by their ABO item ID.
