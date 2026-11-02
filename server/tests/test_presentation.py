@@ -30,14 +30,19 @@ class CheckClaimTest(unittest.TestCase):
     def test_a_row_can_pass_fail_or_be_missing(self):
         self.assertEqual(marks({"type": "row_level", "tools": ["D"], "level": 3}, {"type": "row_level", "tools": ["D"], "level": 4}, {"type": "row_level", "tools": ["Z"], "level": 3}), ["checked", "flagged", "unconfirmed"])
 
-    def test_a_row_that_doubts_itself_is_flagged(self):
-        self.assertEqual(marks({"type": "rows_confirmed", "tools": ["A", "C"], "phrase": "not confirmed"}, {"type": "rows_confirmed", "tools": ["A", "B"], "phrase": "not confirmed"}), ["flagged", "checked"])
+    def test_rows_must_support_the_claim_and_not_doubt_themselves(self):
+        check = {"type": "rows_confirmed", "phrase": "not confirmed", "terms": ["sidebar", "panes"]}
+        self.assertEqual(marks({**check, "tools": ["A", "C"]}, {**check, "tools": ["A", "B"]}, {**check, "tools": ["A", "D"]}), ["flagged", "checked", "flagged"])
+
+    def test_an_uncertain_level_isnt_checked(self):
+        self.assertEqual(marks({"type": "row_level", "tools": ["C"], "level": 1}), ["unconfirmed"])
+        self.assertIn("1 of them uncertain", server.presentation(document({"type": "most_at_most", "level": 2}))["claims"][0]["checked"])
 
     def test_stars_match_differ_or_are_missing(self):
         self.assertEqual(marks({"type": "row_stars", "tool": "C", "stars": "2.0k"}, {"type": "row_stars", "tool": "C", "stars": "9k"}, {"type": "row_stars", "tool": "A", "stars": "1k"}), ["checked", "flagged", "unconfirmed"])
 
     def test_anything_without_a_working_check_is_unconfirmed(self):
-        self.assertEqual(marks({"type": "none", "why": "no source"}, {"type": "new"}, {}, {"type": "row_level"}), ["unconfirmed"] * 4)
+        self.assertEqual(marks({"type": "none", "why": "no source"}, {"type": "new"}, {}, {"type": "row_level"}, {"type": "row_level", "tools": [], "level": 1}, {"type": "rows_confirmed", "tools": [], "phrase": "x", "terms": ["y"]}, {"type": "rows_confirmed", "tools": ["A"], "phrase": "x", "terms": []}, "broken"), ["unconfirmed"] * 8)
 
     def test_a_broken_source_row_cant_pass(self):
         broken = document({"type": "most_at_most", "level": 2})

@@ -186,7 +186,11 @@
      "Google Antigravity",
      "GitHub Agent HQ"
     ],
-    "phrase": "not confirmed"
+    "phrase": "not confirmed",
+    "terms": [
+     "sidebar",
+     "list"
+    ]
    }
   },
   {

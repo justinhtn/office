@@ -57,6 +57,7 @@ function useRoomPace() {
 const CLAIM_MARKS = { checked: 'Checked', flagged: 'Flagged', unconfirmed: "Couldn't confirm" }
 const PRESENTATION_CHOICE = 'office-presentation-choice'
 const PRESENTATION_SHIFT = .29
+const ignoreRoomClick = () => {}
 
 // A teammate walks the person through finished work, claim by claim. Marks come from the server's code checks.
 function Presentation({ person, everyone, onClose }) {
@@ -161,7 +162,7 @@ function Presentation({ person, everyone, onClose }) {
           <div className="presentation-step">
             {open.length > 0 && <>
               <p className="presentation-line"><b>Not confirmed as fact:</b></p>
-              <ul className="presentation-open">{open.map(claim => <li key={claim.id}><span className={`claim-mark ${claim.mark}`}>{CLAIM_MARKS[claim.mark]}</span> {claim.checked}.</li>)}</ul>
+              <ul className="presentation-open">{open.map(claim => <li key={claim.id}><span className={`claim-mark ${claim.mark}`}>{CLAIM_MARKS[claim.mark]}</span> <q>{claim.text}</q> {claim.checked}.</li>)}</ul>
             </>}
             <div className="presentation-controls">
               <button className={choice === 'looks-good' ? 'chosen' : 'primary'} onClick={() => decide('looks-good')}>Looks good</button>
@@ -1167,10 +1168,14 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!isAway) return
+    setIsPresenting(false)
     setSelected(null)
     setPlace('office')
   }, [isAway])
-  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
+  const [presenterId, setPresenterId] = useState(null)
+  const [isPresenting, setIsPresenting] = useState(false)
+  // The demo presenter's real session isn't read aloud while they present.
+  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), isPresenting && selected === presenterId ? null : selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
   const [idlePace, wakeRoom] = useRoomPace()
   // Someone asking for you, or speaking, lights the room back up, and it stays lit while anyone waits.
   const requestIds = everyone.filter(person => person.request).map(person => person.request.id).sort().join()
@@ -1221,19 +1226,20 @@ export default function App() {
   const realActive = useMemo(() => cast.filter(isActive), [cast])
   // ?present is the demo: one teammate has finished work ready. ?present=Name picks who.
   const presentAs = useMemo(() => new URLSearchParams(window.location.search).get('present'), [])
-  const [presenterId, setPresenterId] = useState(null)
-  const [isPresenting, setIsPresenting] = useState(false)
   useEffect(() => {
     if (presentAs === null || presenterId) return
     const floorNow = realActive.filter(other => !other.isAssistant)
     const team = officeTeams(floorNow).find(one => one.members.length > 1) ?? officeTeams(floorNow)[0]
-    const chosen = realActive.find(other => other.name === presentAs) ?? team?.members.find(other => other.id !== team.lead.id) ?? team?.lead
+    // Left alone by default: anyone working or asking for the person.
+    const isFree = other => !other.isRunning && !other.request
+    const chosen = realActive.find(other => other.name === presentAs) ?? team?.members.find(other => other.id !== team.lead.id && isFree(other)) ?? officeTeams(floorNow).flatMap(one => one.members).find(isFree) ?? team?.lead
     if (chosen) setPresenterId(chosen.id)
   }, [presentAs, presenterId, realActive])
-  const active = useMemo(() => realActive.map(other => (other.id === presenterId ? { ...other, isRunning: false, isActing: false, isFinished: true, plan: null, request: null, label: isPresenting ? 'Presenting' : 'Ready for you', readyLine: isPresenting ? 'Showing you their work' : 'Ready for you' } : other)), [realActive, presenterId, isPresenting])
+  const active = useMemo(() => realActive.map(other => (other.id === presenterId ? { ...other, isRunning: false, isActing: false, isFinished: true, plan: null, label: isPresenting ? 'Presenting' : 'Ready for you', readyLine: isPresenting ? 'Showing you their work' : 'Ready for you' } : other)), [realActive, presenterId, isPresenting])
   const presenter = active.find(other => other.id === presenterId)
+  const isShowing = isPresenting && Boolean(presenter)
   const away = useMemo(() => cast.filter(person => !isActive(person)), [cast])
-  const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId)
+  const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId || person.request)
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
 
@@ -1243,6 +1249,7 @@ export default function App() {
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
   function goToPlace(key) {
+    setIsPresenting(false)
     setSelected(null)
     setPlace(key)
     setIsDetailOpen(false)
@@ -1284,9 +1291,9 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${isPresenting ? 'presenting' : ''}`}>
+    <div className={`app ${isShowing ? 'presenting' : ''}`}>
 
-      {(presenter || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
+      {((presenter && !isPresenting) || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
       <div className="needs" aria-label="Needs you">
         <b>Needs you</b>
         {presenter && !isPresenting && <button className="need" onClick={() => pick(presenter.id)}><Avatar person={presenter} everyone={everyone} size={20} /><span className="dot finished" /><b>{presenter.name}</b> ready for you <small>Demo: a finished report</small></button>}
@@ -1304,10 +1311,10 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isPresenting ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pick} onSpace={isShowing ? ignoreRoomClick : goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
         {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
-        {isPresenting && presenter && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
+        {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
         <div className="corner">
           {!person && !shutDown && place === 'office' && (
             <>
