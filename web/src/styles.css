@@ -150,7 +150,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .request-main { flex: 1; min-width: 0; }
 .request-main b { font-weight: 600; }
 .request-main p { margin: 2px 0 6px; overflow-wrap: anywhere; }
-.request-file { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px 2px 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font: 11px ui-monospace, Menlo, monospace; color: var(--accent-text); }
+.request-file { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px 2px 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font: 11px ui-monospace, Menlo, monospace; color: var(--accent-text); overflow-wrap: anywhere; text-align: left; }
 .dismiss { flex: none; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
 .dismiss:hover { background: var(--bg-hover); }
 .media-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
@@ -325,7 +325,6 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 /* A person or the office, opened inside the list. The shared controls take their colours from here. */
 .list-section { flex: none; width: 100%; display: flex; flex-direction: column; padding-bottom: 5px; margin-bottom: 3px; background: rgba(14, 17, 24, .42); border-radius: 7px; color-scheme: dark; --text: var(--glass-text); --muted: var(--glass-muted); --faint: var(--glass-muted); --line: rgba(255, 255, 255, .16); --bg: rgba(255, 255, 255, .08); --bg-soft: rgba(255, 255, 255, .1); --bg-hover: rgba(255, 255, 255, .14); --accent-wash: rgba(99, 102, 241, .4); --accent-text: #c7c8ff; --working: #9cc4ff; --finished: #fcd34d; --danger: #ffb4a8; }
 .list-section.person-section { flex: 0 1 auto; min-height: 160px; }
-.list-section > .team-button { flex: none; }
 .list-section > .team-button b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .list-section-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; padding: 7px 6px 2px; }
 .section-head { display: flex; align-items: center; gap: 9px; }

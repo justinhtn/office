@@ -1751,7 +1751,7 @@ map.addEventListener('pointermove',e=>{
   if(spaceKey!==mapHover){mapHover=spaceKey;drawMap()}
 })
 map.addEventListener('pointerleave',()=>{mapHover=null;drawMap()})
-map.addEventListener('click',e=>{const {person,spaceKey}=mapTarget(e);if(person)onPick(person.id);else if(spaceKey)onSpace(spaceKey)})
+map.addEventListener('click',e=>{const {person,spaceKey}=mapTarget(e);if(person)onPick(person.id,true);else if(spaceKey)onSpace(spaceKey,true)})
 canvas.addEventListener('pointerleave',e=>{if(!stage.contains(e.relatedTarget))checkInKey=null})
 canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
 canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})

@@ -184,7 +184,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   pick.current = onPick
   space.current = onSpace
   useEffect(() => {
-    scene.current = createScene(stage.current, canvas.current, tags.current, id => pick.current(id), key => space.current(key))
+    scene.current = createScene(stage.current, canvas.current, tags.current, (id, isMap) => pick.current(id, isMap), (key, isMap) => space.current(key, isMap))
     mapHost.current?.appendChild(scene.current.map)
 
     return () => scene.current.dispose()
@@ -300,8 +300,8 @@ function Drawer({ onClose, children }) {
 function ListSection({ icon: Icon, title, label, className = '', onClose, children }) {
   return (
     <section className={`list-section ${className}`} aria-label={label}>
-      <button className="team-button on" aria-expanded="true" title="Back to the floor" onClick={onClose}>
-        <span className="place-icon"><Icon size={17} /></span><b>{title}</b><ChevronDown className="list-section-fold" size={14} />
+      <button className="team-button on" aria-expanded="true" aria-label={`${title}. Back to the floor`} title="Back to the floor" onClick={onClose}>
+        <span className="place-icon"><Icon size={17} /></span><b>{title}</b><ChevronDown size={14} />
       </button>
       <div className="list-section-body">{children}</div>
     </section>
@@ -1264,15 +1264,15 @@ export default function App() {
     setPlace(key)
     setIsDetailOpen(false)
   }
-  function goToSpace(key) {
+  // On the map, clicking what's already open folds its section away.
+  function goToSpace(key, isMap) {
     const team = teams.find(one => one.lead.id === key)
     const isOpen = team ? selected === team.lead.id : key === 'office' && place === 'office' && !selected
-    if (isOpen) goToPlace(null)
+    if (isMap && isOpen) goToPlace(null)
     else if (team) pick(team.lead.id)
     else goToPlace(key)
   }
-  // Clicking whoever is already open folds their section away.
-  const pickInRoom = id => (id === selected ? goToPlace(null) : pick(id))
+  const pickInRoom = (id, isMap) => (isMap && id === selected ? goToPlace(null) : pick(id))
   function pick(id) {
     // The demo opens the work, and doesn't switch the Claude app's session.
     if (id === presenterId) {
