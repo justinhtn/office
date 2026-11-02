@@ -31,9 +31,9 @@ Rules for this:
 
 ## Checks
 
-- Run `scripts/check.sh` before pushing. It compiles the server, runs any tests in `server/tests`, and builds the interface.
+- Run `scripts/check.sh` before pushing. It compiles the server, runs the tests in `server/tests`, runs the plugin tests with `claude plugin test plugin`, and builds the interface. CI fails without the `claude` command; locally the plugin tests are skipped with a note.
 - One clone only needs this once, and worktrees share it: `git config core.hooksPath .githooks`. The pre-push hook then runs the checks.
-- There are few automated tests. A new test goes in `server/tests`, using `unittest`. Interface changes also need checking in the running app; say so if you couldn't.
+- There are few automated tests. A new server test goes in `server/tests`, using `unittest`. A new plugin test goes in `plugin/hooks` as a `*.test.ts` file, using `claude-code/testing`. Interface changes also need checking in the running app; say so if you couldn't.
 
 ## Limits
 
