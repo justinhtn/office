@@ -199,6 +199,33 @@ const REFUSED: [string, string][] = [
   ['a launcher running xargs', 'arch -arm64 xargs rm -rf'],
   ['npm exec', 'npm exec -- rm -rf ~/.claude'],
   ['conda run', 'conda run rm -rf ~/.claude'],
+  ['a relative path', 'rm -rf build'],
+  ['a relative path after a literal cd', 'cd /tmp/guard-test && rm -rf build'],
+  ['a project .claude folder by relative path', 'rm -rf .claude/worktrees/w'],
+  ['a tilde path', 'rm -rf ~/.claude-old'],
+  ['a pattern in a project', 'rm -rf /Users/me/code/app/build/*'],
+  ['a plain pattern', 'rm *.log'],
+  ['force with a pattern in a temp folder', 'rm -f /tmp/*.log'],
+  ['plain rm of a variable', 'rm "$f"'],
+  ['find -delete on a relative root', `find . -name '*.pyc' -delete`],
+  ['find -exec rm on a literal root', 'find /tmp/guard-test/build -exec rm -f {} +'],
+  ['find -exec running another program beside a delete', 'find /tmp/guard-test -exec sed -i s/rm/x/ {} +'],
+  ['a pattern naming rm with -r alone', '/bin/r? -r ~/.claude'],
+  ['a brace naming rm with -r alone', '/bin/r{m,} -r ~/.claude'],
+  ['a program from a substitution with -r alone', '$(printf r; printf m) -r ~/.claude'],
+  ['rmtree in another language', `python3 -c "import shutil; shutil.rmtree('/x')"`],
+  ['rsync --delete', 'rsync -a --delete /tmp/a/ /tmp/b/'],
+  ['a variable program with a recursive flag', '$GREP -rn foo "$DIR"'],
+  ['a variable program with a force flag', '"$TAR" -xf a.tar -C "$D"'],
+  ['an unknown program beside a delete', 'rm -rf /tmp/guard-test/build && make'],
+  ['a test beside a delete in control flow', 'if [ -d /tmp/x/y ]; then rm -rf /tmp/x/y; fi'],
+  ['docker run with --rm', 'docker run --rm img'],
+  ['git -c with a delete in an alias', "git -c alias.x='!rm -rf ~/.claude' x"],
+  ['awk running a delete', `awk 'BEGIN { system("rm -rf x") }'`],
+  ['python running a delete', `python3 -c "import os; os.system('rm -rf x')"`],
+  ['an assignment beside a delete', 'X=1; rm -rf /tmp/guard-test/build'],
+  ['a variable assembled into rm with -r', 'x=r; y=m; $x$y -r ~/.claude'],
+  ['variables assembled without an assignment here', '$x$y -r ~/.claude'],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
@@ -211,60 +238,41 @@ for (const [why, command] of REFUSED) {
 }
 
 const ALLOWED: [string, string][] = [
-  ['a literal path in a worktree', `rm -rf ${PROJECT}/.claude/worktrees/w/build`],
-  ['a relative literal path', 'rm -rf build dist'],
-  ['a literal path with spaces', 'rm -rf "old build"'],
-  ['a project .claude folder', 'rm -rf .claude/worktrees/w'],
-  ['a pattern in a project', 'rm -rf build/*'],
-  ['a pattern in this folder', 'rm -rf *.egg-info'],
-  ['force with a literal file', 'rm -f notes.txt'],
-  ['a temp folder', 'rm -rf /tmp/guard-test/build'],
-  ['a literal path after cd', 'cd /tmp/guard-test && rm -rf build'],
-  ['a literal name with a similar folder', 'rm -rf ~/.claude-old'],
+  ['a full literal path in a worktree', `rm -rf ${PROJECT}/.claude/worktrees/w/build`],
+  ['several full literal paths', '/bin/rm -rf /tmp/guard-test/a /tmp/guard-test/b'],
+  ['a full literal path with spaces', 'rm -rf "/tmp/guard test/old build"'],
+  ['a full path with a similar name', `rm -rf ${HOME}/.claude-old`],
+  ['a full path beside plain programs', 'ls /tmp/guard-test && rm -rf /tmp/guard-test/build && git status'],
+  ['a test before a delete', '[ -d /tmp/guard-test/b ] && rm -rf /tmp/guard-test/b'],
+  ['a redirect target', 'rm -rf /tmp/guard-test/build > "$log" 2>&1'],
+  ['plain rm of a relative file', 'rm notes.txt'],
+  ['force with a relative file', 'rm -f notes.txt'],
   ['one file in ~/.claude without recursion', 'rm -f ~/.claude/old.json'],
-  ['plain rm of a variable', 'rm "$f"'],
-  ['single quotes that keep $ literal', "rm -rf 'cost$D'"],
-  ['find -delete with a literal root', `find . -name '*.pyc' -delete`],
-  ['find -delete with a variable name', 'find build -name "$pattern" -delete'],
-  ['find -exec on a literal root', 'find build -name x -exec rm -f {} +'],
-  ['find reading ~/.claude', 'find ~/.claude -name "*.jsonl" -exec cat {} \\;'],
+  ['single quotes that keep $ literal', "rm -f 'cost$D'"],
+  ['find -delete on a full literal root', `find /tmp/guard-test -name '*.pyc' -delete`],
+  ['find -delete with a variable name', 'find /tmp/guard-test -name "$pattern" -delete'],
+  ['find searching for the word rm', `find ~/.claude -name '*.jsonl' -exec grep -l 'rm -rf' {} +`],
   ['find that deletes nothing', 'find "$D" -name x'],
+  ['find reading ~/.claude', 'find ~/.claude -name "*.jsonl" -exec cat {} \\;'],
   ['listing ~/.claude', 'ls -la ~/.claude "$D"'],
-  ['other programs with an rm command', 'docker rm -f "$c"; git rm -rf "$f"; npm run rm'],
+  ['other programs with an rm command', 'docker rm -f "$c"; git rm -rf "$f"; npm run rm; npm rm -f left-pad'],
   ['a command that only mentions rm', `grep -rn 'rm -rf "$D"' .; echo 'rm -rf ~/.claude'`],
   ['a double-quoted mention', 'echo "rm -rf ~/.claude"'],
   ['a comment', 'ls # rm -rf "$D"'],
   ['a commit message', `git commit -m "$(cat <<'EOF'\nStop rm -rf "$D" and don't touch ~/.claude\nEOF\n)"`],
+  ['a pull request body about deletes', `gh pr create --body "$(cat <<'EOF'\nUse \`rm -rf "$D"\` and ((x)) with <(y) in {a,b}\nEOF\n)"`],
   ['an unquoted heredoc without substitutions', 'cat <<EOF\nrm -rf ~/.claude\nEOF'],
-  ['a redirect target', 'rm -rf build > "$log" 2>&1'],
-  ['an unrelated variable earlier', 'D=build; echo "$D"; rm -rf dist'],
+  ['ansi quotes elsewhere', "printf $'a\\n'"],
   ['an unrelated broken quote', "echo don't"],
   ['an ordinary command', 'npm test && git status'],
-  ['a plain pattern in a project', 'rm *.log'],
-  ['a descending pattern in a temp folder', 'rm -f /tmp/*/x.log'],
-  ['a descending pattern in a project', 'rm code/*/x.log'],
-  ['a variable program after a docker --rm', 'docker run -e A=1 --rm img && "$PY" x.py'],
-  ['a launcher with an unrelated path', 'arch -arm64 rm -r build'],
-  ['words that only name programs', 'touch rm find sh'],
-  ['npm removing a package', 'npm rm -f left-pad'],
-  ['a recursive copy in unreadable syntax', '((1)); cp -r a b'],
-  ['a HOME read by value', 'ls "$HOME/code"; rm -rf build'],
-  ['force with a pattern in a temp folder', 'rm -f /tmp/*.log'],
-  ['a variable program that extracts', '"$TAR" -xf a.tar -C "$D"'],
-  ['a variable program that searches', '$GREP -rn foo "$DIR"'],
-  ['a variable program with a config', '"$HOME/bin/tool" -f "$CFG"'],
-  ['a variable program after a delete', 'rm -rf build && "$VENV/bin/python" x.py'],
-  ['find searching for the word rm', `find ~/.claude -name '*.jsonl' -exec grep -l 'rm -rf' {} +`],
-  ['an unrelated assignment beside a delete', 'X=1; rm -rf build'],
-  ['a brace of literal paths', 'rm -rf build/{a,b}'],
-  ['a brace in a temp folder', 'rm -rf /tmp/{a,b}'],
-  ['ansi quotes elsewhere', "printf $'a\\n'"],
   ['arithmetic without a delete', 'echo $((1+2))'],
   ['a case without a delete', 'case x in x) echo y;; esac'],
   ['a pipe into a shell without a delete', 'cat setup.sh | sh'],
   ['a variable program with other flags', '"$PY" -m pytest'],
-  ['two literal cds', 'cd /tmp/guard-test && cd build && rm -rf out'],
-  ['a pull request body about deletes', `gh pr create --body "$(cat <<'EOF'\nUse \`rm -rf "$D"\` and ((x)) with <(y) in {a,b}\nEOF\n)"`],
+  ['a variable program with no flags', '"$VENV/bin/python" x.py'],
+  ['a recursive copy in unreadable syntax', '((1)); cp -r a b'],
+  ['a variable program with a config', '"$HOME/bin/tool" -f "$CFG"'],
+  ['a program with an unrelated assignment', 'FOO=1 npm test'],
 ]
 
 for (const [why, command] of ALLOWED) {
@@ -286,6 +294,12 @@ test('a delete that cannot be read is refused', async ($, on) => {
   expect(deny).toMatch(/couldn't read/)
 })
 
+test('relative deletes are refused whatever an earlier call did to the folder', async ($, on) => {
+  await bash($, on, 'cd ~/.claude && echo $((1+1))')
+  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf projects' })
+  expect(rm.deny).toMatch(/plain literal path/)
+})
+
 function recordRuns(on: any) {
   const ran: string[] = []
   on('tool.call', (_: unknown, e: { command: string }) => {
@@ -299,9 +313,8 @@ function recordRuns(on: any) {
 
 test('a delete is refused when the home folder is unknown', async ($, on) => {
   on('env.get', () => ({ value: undefined }))
-  on('session.cwd', () => ({ value: PROJECT }))
   const ran = recordRuns(on)
-  const answer = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+  const answer = await $.tool.call({ tool: 'Bash', command: 'rm -rf /tmp/guard-test/build' })
   expect(ran).toEqual([])
   expect(answer.deny).toMatch(/couldn't read/)
 })
@@ -311,48 +324,16 @@ test('a delete is refused when the check itself fails', async ($, on) => {
     throw new Error('no environment')
   })
   const ran = recordRuns(on)
-  const answer = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+  const answer = await $.tool.call({ tool: 'Bash', command: 'rm -rf /tmp/guard-test/build' })
   expect(ran).toEqual([])
   expect(answer.deny).toMatch(/couldn't read/)
 })
 
-test('other commands still run when the check fails', async ($, on) => {
+test('other commands never reach the check', async ($, on) => {
   on('env.get', () => {
     throw new Error('no environment')
   })
   const ran = recordRuns(on)
   await $.tool.call({ tool: 'Bash', command: 'git status' })
   expect(ran).toEqual(['git status'])
-})
-
-test('a cd in an earlier call still counts', async ($, on) => {
-  const cd = await bash($, on, 'cd ~/.agent-office')
-  expect(cd.deny).toBeUndefined()
-  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf front-desk' })
-  expect(rm.deny).toMatch(/agent-office/)
-})
-
-test('a cd that cannot be read in an earlier call still counts', async ($, on) => {
-  await bash($, on, 'cd "$D"')
-  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-  expect(rm.deny).toMatch(/isn't a literal path/)
-  const full = await $.tool.call({ tool: 'Bash', command: `rm -rf ${PROJECT}/build` })
-  expect(full.deny).toBeUndefined()
-})
-
-test('a cd in an earlier command that could not be read still counts', async ($, on) => {
-  await bash($, on, 'cd ~/.claude && echo $((1+1))')
-  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf projects' })
-  expect(rm.deny).toMatch(/isn't a literal path/)
-})
-
-test('unreadable syntax with no cd leaves later deletes alone', async ($, on) => {
-  await bash($, on, 'echo $((1+1))')
-  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-  expect(rm.deny).toBeUndefined()
-})
-
-test('a pattern without -r is not called recursive', async ($, on) => {
-  const { deny } = await bash($, on, 'rm -f ~/.claude/*.tmp')
-  expect(deny).toMatch(/blocked this delete/)
 })

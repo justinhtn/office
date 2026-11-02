@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { mentionsDelete, noteUnreadCommand, refuseDelete, REFUSED_UNCHECKED } from './delete-guard.ts'
+import { mentionsDelete, refuseDelete, REFUSED_UNCHECKED } from './delete-guard.ts'
 
 // Runs in every Claude Code session. One session at a time publishes the session list.
 const PUBLISH_MS = 10_000
@@ -578,13 +578,7 @@ export const register: Register = on => {
     const refusal = await refuseDelete($, e.command)
 
     return refusal ? { deny: refusal } : next(e)
-  }).catch(($, e, next) => {
-    if (next.called) return next(e)
-    if (mentionsDelete(e.command)) return { deny: REFUSED_UNCHECKED }
-    noteUnreadCommand(e.command)
-
-    return next(e)
-  })
+  }).catch(($, e, next) => (next.called || !mentionsDelete(e.command) ? next(e) : { deny: REFUSED_UNCHECKED }))
 
   on('tool.call', { tool: ATTENTION_TOOL }, async ($, e) => {
     const input = e as unknown as { message?: unknown; show?: unknown }

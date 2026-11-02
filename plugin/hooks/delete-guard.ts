@@ -1,59 +1,26 @@
 import type { EngineInterface } from 'claude-code'
 
 // A safety net for Bash commands, not a guarantee: a script file or another language can still delete anything.
-type Word = { text: string; isDynamic: boolean; isSplit: boolean; hasBrace: boolean; globAt: number }
-type Target = { path: string; shown: string; isRecursive: boolean; isDescending: boolean }
-type Judged = { refusal?: string; place: Place }
-type Place = { home: string; cwds: string[]; isCwdKnown: boolean; isHomeKnown: boolean; hasNewLink: boolean; holdsDelete: boolean; namesData: boolean; targets: Target[] }
+// It's an allow-list. A command that mentions a delete runs only if every part of it is something this can vouch for.
+type Word = { text: string; isDynamic: boolean; globAt: number }
+type Target = { path: string; shown: string }
 
 const MAX_NESTING = 8
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish'])
-const KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', '{'])
-// Each wrapper runs the command after it, and these of its short flags take a value.
-const WRAPPERS: Record<string, string> = {
-  sudo: 'ugrpCDhTRt',
-  doas: 'uC',
-  command: '',
-  builtin: '',
-  exec: 'a',
-  env: 'uCS',
-  nohup: '',
-  nice: 'n',
-  ionice: 'cnp',
-  timeout: 'ks',
-  stdbuf: 'ioe',
-  caffeinate: 'tw',
-  xargs: 'IEJLPRSdnsa',
-  time: '',
-  coproc: '',
-  noglob: '',
-  nocorrect: '',
-  watch: 'dn',
-  parallel: 'jnS',
-}
-const POSITIONAL_FIRST = new Set(['timeout'])
-// Finding these after a wrapper beats parsing every wrapper's flags, which differ between systems.
-const RUNS_OTHERS = new Set(['rm', 'grm', 'find', 'gfind', 'eval', ...SHELLS])
-const MAX_BRACE_WORDS = 256
-// Programs with their own rm command or that only print the word. For any other, rm and delete flags among its arguments count as a delete.
-const NOT_LAUNCHERS = new Set(['git', 'docker', 'podman', 'kubectl', 'helm', 'gh', 'npm', 'yarn', 'pnpm', 'cargo', 'brew', 'conda', 'pip', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'cat', 'ls', 'echo', 'printf', 'man', 'which', 'type', 'test', '['])
-// An assignment or set that stores rm, for a variable to run later.
-const STORES_DELETE = /(=|\bset\s+--)[^;&|\n]*(?<![-\w])g?rm\b/i
-// These run whatever follows their exec or run word, unlike the rest of that list.
-const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'conda'])
-// Text that points at the session data, or a pattern that could, for a loop to hand to rm "$f".
-const NAMES_DATA = /\.claude\b|\.agent-office\b|Application Support\/Claude|~\/?[*?[{]|~\/\.[\w-]*[*?[{]|(^|\s)\/[^/\s]+\/[*?[{]/i
-const withoutQuotes = (command: string) => command.replace(/['"\\]/g, '')
+// Programs that may share a command with a delete, because they don't run their arguments.
+const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'sleep', 'test', '[', 'mkdir', 'touch', 'cp', 'mv', 'cd', 'pushd', 'popd', 'git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'])
+// What these subcommands do with their arguments decides whether they can be vouched for.
+const RUNS_ARGUMENTS = /^(exec|x|dlx|explore)$/
+const PLAIN_DOCKER = /^(rm|rmi|ps|images|logs|stop)$/
+const READERS = new Set(['cat', 'ls', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'stat', 'file'])
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
-const ADVICE = 'Write the literal path, check it with ls, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
+const ADVICE = 'Run the delete as its own command with the full literal path, starting with /. Check it with ls first, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
 
-// The shell keeps its folder between Bash calls, so folders from earlier commands count too.
-const earlierFolders = new Set<string>()
-let isEarlierFolderKnown = true
+// Anything that could be a delete, once quotes are out of the way, including rm pieced together from variables.
+const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|-delete\b|\S*[?*[{]\S*\s+-[A-Za-z]*[rRf]|(^|\s)-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|(\$\w+|\$\{[^}]*\}|\$[@*]|\))\s+-[A-Za-z]*[rRf]/i
 
 const isBlank = (c: string) => c === ' ' || c === '\t'
-const newWord = (text = ''): Word => ({ text, isDynamic: false, isSplit: false, hasBrace: false, globAt: -1 })
-// Syntax this reader doesn't model. A command that also mentions a delete is refused, and any other runs.
+const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
+// Syntax this reader doesn't model, which makes a command it was checking a refusal.
 const unsure = (what: string) => new Error(`can't read ${what}`)
 
 function decodeAnsi(raw: string) {
@@ -65,26 +32,17 @@ function decodeAnsi(raw: string) {
   })
 }
 
-function expandBraces(text: string): string[] {
-  const match = /^(.*?)\{([^{}]*,[^{}]*)\}(.*)$/s.exec(text)
-  if (!match) return [text]
-  const words = match[2].split(',').flatMap(part => expandBraces(match[1] + part + match[3]))
-  if (words.length > MAX_BRACE_WORDS) throw unsure('a large brace expansion')
-
-  return words
-}
-
-// Reads a command the way a shell splits it, so quoted text, heredocs and comments don't count as commands.
+// Splits a command the way a shell does, so quoted text, heredocs and comments don't count as commands.
 function lex(src: string, nesting = 0, isText = false): Word[][] {
-  if (nesting > MAX_NESTING) throw new Error('nested too deeply')
+  if (nesting > MAX_NESTING) throw unsure('deep nesting')
   const out: Word[][] = []
   let i = 0
 
-  const readBacktick = (word: Word, isQuoted: boolean) => {
+  const readBacktick = (word: Word) => {
     const start = i++
     let inner = ''
     while (src[i] !== '`') {
-      if (i >= src.length) throw new Error('unclosed backtick')
+      if (i >= src.length) throw unsure('an unclosed backtick')
       if (src[i] === '\\' && i + 1 < src.length) {
         if (!'$`\\'.includes(src[i + 1])) throw unsure('a backslash in backticks')
         inner += src[++i]
@@ -95,7 +53,6 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
     out.push(...lex(inner, nesting + 1))
     word.text += src.slice(start, i)
     word.isDynamic = true
-    if (!isQuoted) word.isSplit = true
   }
 
   const readDollar = (word: Word, isQuoted: boolean) => {
@@ -109,7 +66,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
       let open = 1
       i += 2
       while (open > 0) {
-        if (i >= src.length) throw new Error('unclosed ${')
+        if (i >= src.length) throw unsure('an unclosed ${')
         if (src[i] === '\\') i++
         else if (src[i] === '{') open++
         else if (src[i] === '}') open--
@@ -121,7 +78,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
     } else if (after === "'" && !isQuoted) {
       i += 2
       while (src[i] !== "'") {
-        if (i >= src.length) throw new Error('unclosed quote')
+        if (i >= src.length) throw unsure('an unclosed quote')
         i += src[i] === '\\' ? 2 : 1
       }
       word.text += decodeAnsi(src.slice(start + 2, i))
@@ -142,13 +99,12 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
     }
     word.text += src.slice(start, i)
     word.isDynamic = true
-    if (!isQuoted) word.isSplit = true
   }
 
   const readDouble = (word: Word, stopsAtQuote: boolean) => {
     while (true) {
       if (i >= src.length) {
-        if (stopsAtQuote) throw new Error('unclosed quote')
+        if (stopsAtQuote) throw unsure('an unclosed quote')
         return
       }
       const c = src[i]
@@ -161,7 +117,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
         if (after !== '\n') word.text += after && '$`"\\'.includes(after) ? after : `\\${after}`
         i += 2
       } else if (c === '$') readDollar(word, true)
-      else if (c === '`') readBacktick(word, true)
+      else if (c === '`') readBacktick(word)
       else {
         word.text += c
         i++
@@ -174,23 +130,17 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
     let word: Word | undefined
     let skipsWord = false
     let parens = 0
-    let isPiped = false
-    let heredocs: { end: string; stripsTabs: boolean; isQuoted: boolean; cmd: Word[] }[] = []
+    let heredocs: { end: string; stripsTabs: boolean; isQuoted: boolean }[] = []
     const endWord = () => {
       if (word && !skipsWord) cmd.push(word)
       if (word) skipsWord = false
       word = undefined
     }
-    const readsScript = (words: Word[]) =>
-      words.some(w => SHELLS.has(nameOf(w))) && !words.some(w => /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text))
     const endCommand = () => {
       endWord()
       skipsWord = false
-      if (cmd[0]?.text === 'case') throw unsure('a case statement')
-      if (isPiped && readsScript(cmd)) throw unsure('a script piped into a shell')
       if (cmd.length) out.push(cmd)
       cmd = []
-      isPiped = false
     }
     const current = () => (word ??= newWord())
     const readBodies = () => {
@@ -211,8 +161,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
         const body = lines.join('\n')
         if (!doc.isQuoted && body.includes('\\\n')) throw unsure('a continued line in a heredoc')
         // Text in an unquoted heredoc is a document, but its substitutions still run.
-        if (doc.cmd.some(w => SHELLS.has(nameOf(w)))) out.push(...lex(body, nesting + 1))
-        else if (!doc.isQuoted) out.push(...lex(body, nesting + 1, true))
+        if (!doc.isQuoted) out.push(...lex(body, nesting + 1, true))
       }
       heredocs = []
     }
@@ -244,7 +193,6 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
         endWord()
         if (src[i + 1] === '(') throw unsure('process substitution')
         if (src.startsWith('<<<', i)) {
-          if (readsScript(cmd)) throw unsure('a script given to a shell')
           i += 3
           skipsWord = true
         } else if (src.startsWith('<<', i)) {
@@ -260,7 +208,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
             else end += src[i]
             i++
           }
-          heredocs.push({ end, stripsTabs, isQuoted, cmd })
+          heredocs.push({ end, stripsTabs, isQuoted })
         } else {
           i += c === '&' ? 2 : 1
           while (src[i] === '>' || src[i] === '&' || src[i] === '|') i++
@@ -268,14 +216,13 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
         }
       } else if (c === ';' || c === '&' || c === '|') {
         endCommand()
-        if (c === '|' && src[i + 1] !== '|') isPiped = true
-        i += c === '|' && src[i + 1] === '|' ? 2 : 1
+        i++
       } else if (c === '\\') {
         if (src[i + 1] !== '\n' && i + 1 < src.length) current().text += src[i + 1]
         i += 2
       } else if (c === "'") {
         const stop = src.indexOf("'", i + 1)
-        if (stop < 0) throw new Error('unclosed quote')
+        if (stop < 0) throw unsure('an unclosed quote')
         current().text += src.slice(i + 1, stop)
         i = stop + 1
       } else if (c === '"') {
@@ -284,16 +231,15 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
       } else if (c === '$') {
         readDollar(current(), false)
       } else if (c === '`') {
-        readBacktick(current(), false)
+        readBacktick(current())
       } else {
         const w = current()
         if ('*?[{'.includes(c) && w.globAt < 0) w.globAt = w.text.length
-        if (c === '{') w.hasBrace = true
         w.text += c
         i++
       }
     }
-    if (closer) throw new Error('unclosed substitution')
+    if (closer) throw unsure('an unclosed substitution')
     endCommand()
     readBodies()
   }
@@ -304,20 +250,10 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
   return out
 }
 
-function nameOf(word: Word) {
-  if (word.isDynamic && /\b(g?rm)\b/i.test(word.text)) return 'rm'
-
-  return (word.text.replace(/^=/, '').split('/').pop() ?? '').toLowerCase()
-}
+const nameOf = (word: Word) => (word.text.split('/').pop() ?? '').toLowerCase()
 
 function normalize(path: string) {
-  const parts: string[] = []
-  for (const part of path.split('/')) {
-    if (part === '..') parts.pop()
-    else if (part && part !== '.') parts.push(part)
-  }
-
-  return `/${parts.join('/')}`
+  return `/${path.split('/').filter(part => part && part !== '.').join('/')}`
 }
 
 // macOS treats differently cased and composed spellings as the same file.
@@ -336,89 +272,50 @@ function protectedAs(path: string, home: string) {
   return undefined
 }
 
-function isAboveHome(path: string, home: string) {
-  const p = fold(path)
-  const h = fold(normalize(home))
-
-  return p === '/' || p === h || h.startsWith(`${p}/`)
-}
-
-// Without -r a pattern can't take a folder tree, but it can empty the session data, by starting there or by descending from above it.
-function mattersFor(what: string | undefined, path: string, home: string, target: { isRecursive: boolean; isDescending: boolean }) {
-  return target.isRecursive || what?.startsWith('~/') || (target.isDescending && isAboveHome(path, home)) ? what : undefined
-}
-
 const notLiteral = (shown: string) =>
-  `Agent Office blocked this delete because \`${shown}\` isn't a literal path. A variable or command that comes back empty can delete a whole parent folder. ${ADVICE}`
+  `Agent Office blocked this delete because \`${shown}\` isn't a plain literal path. A variable, pattern or relative path can reach a folder nobody meant to delete. ${ADVICE}`
 
-const tooBroad = (shown: string, what: string, isRecursive: boolean) =>
-  `Agent Office blocked this ${isRecursive ? 'recursive ' : ''}delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
+const tooBroad = (shown: string, what: string) =>
+  `Agent Office blocked this recursive delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
 
-// Every place a path might mean. A cd can fail or sit in a subshell, so each folder seen so far counts.
-function absolutes(path: string, place: Place) {
-  if (path === '~' || path.startsWith('~/')) return place.isHomeKnown ? [place.home + path.slice(1)] : undefined
-  if (path.startsWith('~')) return undefined
-  if (path.startsWith('/')) return [path]
-  if (!place.isCwdKnown) return undefined
+const notVouched = (shown: string) =>
+  `Agent Office blocked this command because it mentions a delete and also uses \`${shown}\`, which the safety check can't vouch for. ${ADVICE}`
 
-  return place.cwds.map(cwd => `${cwd}/${path}`)
-}
-
-function checkTarget(word: Word, place: Place, isRecursive = true) {
-  const hasGlob = word.globAt >= 0
-  // What a pattern matches decides where a .. after it lands.
-  if (hasGlob && /(^|\/)\.\.(\/|$)/.test(word.text.slice(word.globAt))) return notLiteral(word.text)
-  // A pattern can match anything beside it, so judge the folder it starts from.
-  const literal = hasGlob ? word.text.slice(0, word.text.lastIndexOf('/', word.globAt) + 1) : word.text
-  const fulls = absolutes(literal, place)
-  if (!fulls || place.hasNewLink) return notLiteral(word.text)
-  for (const full of fulls) {
-    const shape = { isRecursive, isDescending: hasGlob && word.text.slice(word.globAt).includes('/') }
-    const what = mattersFor(protectedAs(normalize(full), place.home), normalize(full), place.home, shape)
-    if (what) return tooBroad(word.text, what, isRecursive)
-    place.targets.push({ path: full, shown: word.text, ...shape })
-  }
+function checkTarget(word: Word, home: string, targets: Target[]) {
+  if (!word.text.startsWith('/') || /(^|\/)\.\.?(\/|$)/.test(word.text)) return notLiteral(word.text)
+  const what = protectedAs(normalize(word.text), home)
+  if (what) return tooBroad(word.text, what)
+  targets.push({ path: word.text, shown: word.text })
 
   return undefined
 }
 
-function checkRm(args: Word[], isFromPipe: boolean, place: Place) {
+function checkRm(args: Word[], home: string, targets: Target[]) {
+  const unclear = args.find(arg => arg.isDynamic || arg.globAt >= 0)
+  if (unclear) return notLiteral(unclear.text)
   const paths: Word[] = []
   let isRecursive = false
-  let isForced = false
   let isPastFlags = false
-  const split = args.find(arg => arg.isSplit)
-  if (split) return notLiteral(split.text)
   for (const arg of args) {
     if (isPastFlags || !arg.text.startsWith('-') || arg.text === '-') paths.push(arg)
     else if (arg.text === '--') isPastFlags = true
-    else if (arg.text.startsWith('--')) {
-      if ('--recursive'.startsWith(arg.text)) isRecursive = true
-      if ('--force'.startsWith(arg.text)) isForced = true
-    } else {
-      if (/[rR]/.test(arg.text)) isRecursive = true
-      if (arg.text.includes('f')) isForced = true
-    }
+    else if (arg.text.startsWith('--')) isRecursive ||= '--recursive'.startsWith(arg.text)
+    else isRecursive ||= /[rR]/.test(arg.text)
   }
-  if (isFromPipe) return notLiteral('xargs rm')
-  const dynamic = paths.find(path => path.isDynamic && (isRecursive || isForced || path.globAt >= 0 || place.namesData))
-  if (dynamic) return notLiteral(dynamic.text)
-  for (const path of isRecursive ? paths : paths.filter(path => path.globAt >= 0)) {
-    const refusal = checkTarget(path, place, isRecursive)
+  // Without recursion, literal names can only remove the files they name.
+  if (!isRecursive) return undefined
+  for (const path of paths) {
+    const refusal = checkTarget(path, home, targets)
     if (refusal) return refusal
   }
 
   return undefined
 }
 
-function checkFind(args: Word[], place: Place, nesting: number) {
-  const roots: Word[] = []
+function checkFind(args: Word[], home: string, targets: Target[]) {
   let at = 0
-  for (; at < args.length; at++) {
-    const text = args[at].text
-    if (text === '-f' && args[at + 1]) roots.push(args[++at])
-    else if (!/^-[HLPEXdsx]+$/.test(text)) break
-  }
+  while (at < args.length && /^-[HLPEXdsx]+$/.test(args[at].text)) at++
+  const roots: Word[] = []
   for (; at < args.length && !/^(-|\(|!)/.test(args[at].text); at++) roots.push(args[at])
 
   let isDeleting = false
@@ -426,189 +323,70 @@ function checkFind(args: Word[], place: Place, nesting: number) {
     const text = args[at].text
     if (text === '-delete') isDeleting = true
     else if (/^-(exec|execdir|ok|okdir)$/.test(text)) {
-      let stop = at + 1
-      while (stop < args.length && args[stop].text !== ';' && args[stop].text !== '+') stop++
-      const inner = args.slice(at + 1, stop).filter(w => w.text !== '{}')
-      const hasShell = inner.some(w => SHELLS.has(nameOf(w)))
-      if (inner.some(w => /^g?rm$/.test(nameOf(w)) || (hasShell && mentionsDelete(w.text)))) isDeleting = true
-      const refusal = checkCommand(inner, place, nesting)
-      if (refusal) return refusal
-      at = stop
-    }
+      const program = args[at + 1]
+      if (!program || program.isDynamic || !READERS.has(nameOf(program))) return notVouched(`find ${text}`)
+    } else if (args[at].isDynamic && text.startsWith('-')) return notVouched(text)
   }
   if (!isDeleting) return undefined
-  if (!roots.length) roots.push(newWord('.'))
-  const dynamic = roots.find(root => root.isDynamic)
-  if (dynamic) return notLiteral(dynamic.text)
+  if (!roots.length) return notLiteral('.')
   for (const root of roots) {
-    const refusal = checkTarget(root, place)
+    if (root.isDynamic || root.globAt >= 0) return notLiteral(root.text)
+    const refusal = checkTarget(root, home, targets)
     if (refusal) return refusal
   }
 
   return undefined
 }
 
-function followCd(args: Word[], place: Place) {
-  const to = args.find(arg => !/^(-[LPe@]+|--)$/.test(arg.text))
-  const fulls = !to ? absolutes('~', place) : to.isDynamic || to.globAt >= 0 || to.text === '-' ? undefined : absolutes(to.text, place)
-  if (fulls) place.cwds.push(...fulls.map(normalize))
-  else place.isCwdKnown = false
-}
-
-function checkScriptWord(word: Word | undefined, place: Place, nesting: number) {
-  if (!word) return undefined
-  if (word.isDynamic) throw unsure('a script held in a variable')
-
-  return checkScript(word.text, place, nesting + 1)
-}
-
-const hasRecursiveFlag = (word: Word) => /^-[A-Za-z]*[rR]|^--rec/.test(word.text)
-
-function checkCommand(given: Word[], place: Place, nesting: number): string | undefined {
-  let words = given.flatMap(word =>
-    word.hasBrace && !word.isDynamic
-      ? expandBraces(word.text).map(text => ({ ...word, text, globAt: text.search(/[*?[{]/) }))
-      : [word],
-  )
-  let isFromPipe = false
-  // These change where a ~ or a relative path leads.
-  if (words.some(word => /^(HOME|CDPATH|cdpath)(\+?=.*)?$/s.test(word.text))) {
-    place.isHomeKnown = false
-    place.isCwdKnown = false
-  }
-  while (words.length) {
-    const first = nameOf(words[0])
-    if (ASSIGNMENT.test(words[0].text) || KEYWORDS.has(first)) {
-      words = words.slice(1)
-      continue
-    }
-    if (first === 'function') {
-      words = words.slice(2)
-      continue
-    }
-    const valueFlags = WRAPPERS[first]
-    if (valueFlags === undefined) break
-    if (first === 'xargs') isFromPipe = true
-    if ((first === 'env' || first === 'sudo') && words.some(w => /^(-C|-D|--chdir)/.test(w.text))) place.isCwdKnown = false
-    const split = first === 'env' ? words.findIndex(w => /^(-S|--split-string)/.test(w.text)) : -1
-    if (split > 0) {
-      const inline = words[split].text.replace(/^(-S|--split-string=?)/, '')
-      return checkScriptWord(inline ? { ...words[split], text: inline } : words[split + 1], place, nesting)
-    }
-    const inner = words.findIndex((w, k) => k > 0 && RUNS_OTHERS.has(nameOf(w)))
-    if (inner > 0) {
-      words = words.slice(inner)
-      continue
-    }
-    let at = 1
-    while (at < words.length && words[at].text.startsWith('-') && words[at].text.length > 1) {
-      const flag = words[at].text
-      if (flag === '--') {
-        at++
-        break
-      }
-      at += flag.length === 2 && valueFlags.includes(flag[1]) ? 2 : 1
-    }
-    if (POSITIONAL_FIRST.has(first)) at++
-    words = words.slice(at)
-  }
-  if (!words.length) return undefined
-
-  const name = nameOf(words[0])
-  const args = words.slice(1)
-  if (name === 'rm' || name === 'grm') return checkRm(args, isFromPipe, place)
-  if (name === 'find' || name === 'gfind') return checkFind(args, place, nesting)
-  // A program named by a variable can be rm, if rm was stored earlier or it's given rm's flags.
-  if (words[0].isDynamic && (place.holdsDelete || args.some(hasRecursiveFlag))) throw unsure('a program named by a variable')
-  if (name === 'cd' || name === 'pushd' || name === 'chdir') followCd(args, place)
-  else if (name === 'popd') place.isCwdKnown = false
-  else if (name === 'ln') place.hasNewLink = true
-  else if (name === 'trap') return checkScriptWord(args.find(arg => !arg.text.startsWith('-')), place, nesting)
-  else if (name === 'eval') {
-    const parts = args.filter(arg => arg.text !== '--')
-    if (parts.some(arg => arg.isDynamic)) throw unsure('a script held in a variable')
-
-    return checkScript(parts.map(arg => arg.text).join(' '), place, nesting + 1)
-  } else if ((name === 'source' || name === '.') && args.some(arg => /^\/dev\/(stdin|fd)/.test(arg.text))) {
-    throw unsure('a script read from stdin')
-  }
-  else if (SHELLS.has(name)) {
-    const at = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg.text))
-    if (at >= 0) return checkScriptWord(args.slice(at + 1).find(arg => arg.text !== '--'), place, nesting)
-
-    return undefined
-  }
-
-  // Any other program may be launching what follows, so read its arguments from the first word that can delete.
-  const runs = PACKAGE_RUNNERS.has(name) && /^(exec|run|x|dlx)$/.test(args[0]?.text ?? '')
-  if (runs || !NOT_LAUNCHERS.has(name)) {
-    const inner = args.findIndex(arg => RUNS_OTHERS.has(nameOf(arg)) || nameOf(arg) === 'xargs')
-    if (inner >= 0) return checkCommand(args.slice(inner), place, nesting)
-  }
+function checkCommand(words: Word[], home: string, targets: Target[]) {
+  const [program, ...args] = words
+  if (ASSIGNMENT.test(program.text)) return notVouched(program.text)
+  if (program.isDynamic || (program.globAt >= 0 && program.text !== '[')) return notVouched(program.text)
+  const name = nameOf(program)
+  if (name === 'rm' || name === 'grm' || name === 'unlink') return checkRm(args, home, targets)
+  if (name === 'find' || name === 'gfind') return checkFind(args, home, targets)
+  if (!PLAIN_PROGRAMS.has(name)) return notVouched(program.text)
+  const first = args[0]?.text ?? ''
+  if (name === 'git' && args.some(arg => arg.text === '-c' || arg.text.startsWith('--config-env'))) return notVouched('git -c')
+  if (['npm', 'pnpm', 'yarn'].includes(name) && RUNS_ARGUMENTS.test(first)) return notVouched(`${name} ${first}`)
+  if (name === 'docker' && !PLAIN_DOCKER.test(first)) return notVouched(`docker ${first}`)
 
   return undefined
 }
 
-function checkScript(script: string, place: Place, nesting: number) {
-  for (const words of lex(script, nesting)) {
-    const refusal = checkCommand(words, place, nesting)
-    if (refusal) return refusal
-  }
+const withoutQuotes = (command: string) => command.replace(/['"\\]/g, '')
 
-  return undefined
-}
-
-function judge(command: string, home: string, cwd: string): Judged {
-  const place: Place = { home, cwds: [cwd, ...earlierFolders], isCwdKnown: isEarlierFolderKnown, isHomeKnown: true, hasNewLink: false, holdsDelete: STORES_DELETE.test(withoutQuotes(command)), namesData: NAMES_DATA.test(withoutQuotes(command)), targets: [] }
-
-  return { refusal: checkScript(command, place, 0), place }
-}
-
-// True if a command might delete something once quotes are out of the way, which decides what a failed check does.
+// True if a command might delete something, which is what puts it under this check at all.
 export const mentionsDelete = (command: unknown) =>
-  typeof command === 'string' && /\bg?rm\b|-delete\b|(^|\s)-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|--recursive|\br\$|\$\{?\w+\}?m\b/i.test(withoutQuotes(command))
-
-// A command that couldn't be read runs if it mentions no delete, and it may have moved the shell.
-export function noteUnreadCommand(command: unknown) {
-  if (typeof command === 'string' && /\b(cd|pushd|popd|chdir)\b/.test(command)) isEarlierFolderKnown = false
-}
+  typeof command === 'string' && (command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)))
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
-// The reason to refuse a Bash command, or nothing if it may run. Throws if the command can't be read.
+// The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
+  if (!mentionsDelete(command)) return undefined
   const home = await $.env.get('HOME')
-  if (!home) {
-    if (mentionsDelete(command)) throw new Error('no home folder')
-
-    return undefined
+  if (!home) throw unsure('a command with no home folder')
+  const targets: Target[] = []
+  for (const words of lex(command)) {
+    const refusal = checkCommand(words, home, targets)
+    if (refusal) return refusal
   }
-  const cwd = await $.session.cwd()
-  const { refusal, place } = judge(command, home, cwd)
-  if (refusal) return refusal
-  const { targets } = place
 
   // Links can lead a harmless spelling somewhere protected, or make the home folder look like somewhere else.
   const real = async (path: string) => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath
   const homes = targets.length ? [home, (await real(home)) ?? home] : []
   for (const target of targets) {
-    // The system follows a link before it applies a .. after it, so resolve what comes before the first one.
-    const dots = `${target.path}/`.indexOf('/../')
-    const before = dots > 0 ? await real(target.path.slice(0, dots)) : undefined
-    const written = before ? normalize(before + target.path.slice(dots)) : target.path
-    const cut = written.lastIndexOf('/')
-    const last = written.slice(cut + 1)
-    const followsLast = ['', '.', '..'].includes(last) || target.shown.search(/[*?[{]/) >= 0
-    const landed = await real(followsLast ? written : written.slice(0, cut) || '/')
-    if (!landed && !before) continue
-    const path = normalize(!landed ? written : followsLast ? landed : `${landed}/${last}`)
+    const followsLast = target.path.endsWith('/')
+    const cut = target.path.lastIndexOf('/')
+    const landed = await real(followsLast ? target.path : target.path.slice(0, cut) || '/')
+    if (!landed) continue
+    const path = normalize(followsLast ? landed : `${landed}/${target.path.slice(cut + 1)}`)
     for (const each of homes) {
-      const what = mattersFor(protectedAs(path, each), path, each, target)
-      if (what) return tooBroad(target.shown, what, target.isRecursive)
+      const what = protectedAs(path, each)
+      if (what) return tooBroad(target.shown, what)
     }
   }
-  for (const folder of place.cwds) if (folder !== cwd) earlierFolders.add(folder)
-  if (!place.isCwdKnown) isEarlierFolderKnown = false
 
   return undefined
 }
