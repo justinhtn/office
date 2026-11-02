@@ -17,6 +17,19 @@ const OFFICE_TOOL = 'mcp__agent-office__office_status'
 const NOTEBOOK_READ_TOOL = 'mcp__agent-office__notebook_read'
 const NOTEBOOK_WRITE_TOOL = 'mcp__agent-office__notebook_write'
 const MAX_NOTE = 4000
+const TELEGRAM_REPLY_TOOL = 'mcp__plugin_telegram_telegram__reply'
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+// Attachments leave the Mac, so these are stricter than what the office shows on screen.
+// The u flag matters: macOS opens token.json from a spelling with the Kelvin sign, which plain /i wouldn't match.
+const SECRET_FOLDER = /^(\.git|\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.azure|\.gcloud|\.config|\.claude|secrets?)$/iu
+const SECRET_NAME =
+  /^(\.env.*|.*\.env|env\.(production|prod|staging|dev|development|local|test)|\.dev\.vars|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfstate|tfvars)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.(netrc|npmrc|pypirc|git-credentials|htpasswd|pgpass)|.*(credential|secret|token|password|service-account|api[-_]?key).*)$/iu
+const SECRET_TEXT =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}|\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b\d{8,10}:[A-Za-z0-9_-]{35}\b|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|(?<![a-z0-9])(api[-_]?key|access[-_]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?[^\s"']{8,}/i
+// These can't be searched when too large or unreadable as text, and anything else unsearchable is refused.
+const MEDIA_FILE = /\.(png|jpe?g|gif|webp|heic|pdf|mp4|mov|m4v|webm|mp3|m4a|wav)$/iu
+// Too broad to count as one project, even if a session runs there.
+const BROAD_FOLDERS = new Set(['desktop', 'documents', 'downloads', 'movies', 'music', 'pictures', 'public'])
 // The front desk reads everything, so it may only use these.
 const FRONT_DESK_TOOLS =
   /^(mcp__agent-office__(office_status|team_status|ask_for_attention|notebook_read|notebook_write)|mcp__ccd_session_mgmt__(list_sessions|get_session|list_events|search_session_transcripts)|mcp__ccd_turn__.*|mcp__plugin_telegram_telegram__reply|ToolSearch)$/
@@ -45,6 +58,7 @@ type Listed = {
 }
 type Person = {
   id: string
+  cwd?: string
   name: string
   title: string
   project: string
@@ -385,6 +399,90 @@ async function addToNotebook($: EngineInterface, input: { name?: unknown; note?:
   return 'Added to the notebook.'
 }
 
+async function realFolder($: EngineInterface, path: string): Promise<string | undefined> {
+  try {
+    const stat = await $.fs.stat(path, { resolve: true })
+
+    return stat.kind === 'dir' ? stat.realPath : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Compatibility forms such as a fullwidth letter can name the same file on disk.
+const isSecretFolder = (part: string) => SECRET_FOLDER.test(part.normalize('NFKC'))
+const isSecretName = (part: string) => SECRET_NAME.test(part.normalize('NFKC'))
+
+// Session folders that are really projects, resolved. A worktree also makes the repo that holds it one.
+async function projectFolders($: EngineInterface): Promise<string[]> {
+  const home = await realFolder($, (await $.env.get('HOME')) ?? '')
+  if (!home) return []
+  const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
+  const paths = people
+    .map(person => person.cwd ?? '')
+    .filter(path => path && !path.includes('/scratch-workspaces/'))
+    .flatMap(path => [path, path.split('/.claude/worktrees/')[0] ?? path])
+  const folders = await Promise.all([...new Set(paths)].map(path => realFolder($, path)))
+
+  return folders.filter((folder): folder is string => {
+    if (!folder?.startsWith(`${home}/`)) return false
+    const [first, ...rest] = folder.slice(home.length + 1).split('/')
+
+    const top = (first ?? '').toLowerCase()
+
+    return !top.startsWith('.') && top !== 'library' && (rest.length > 0 || !BROAD_FOLDERS.has(top))
+  })
+}
+
+// Decides on what the path really leads to, and returns that, so the file sent is the file checked.
+async function checkAttachment($: EngineInterface, file: unknown, folders: string[]): Promise<{ real: string } | { problem: string }> {
+  const shown = String(file)
+  const name = shown.split('/').pop() ?? ''
+  if (typeof file !== 'string' || !file.startsWith('/')) return { problem: `${shown} isn't a full file path.` }
+  let stat
+  try {
+    stat = await $.fs.stat(file, { resolve: true })
+  } catch {
+    return { problem: `${name} can't be found.` }
+  }
+  if (stat.kind !== 'file' || !stat.realPath) return { problem: `${name} isn't a file.` }
+  const real = stat.realPath
+  if (!folders.some(one => real.startsWith(`${one}/`))) return { problem: `${name} isn't inside a project folder.` }
+  // Every folder below home counts, so a session running inside a secrets folder doesn't make it clean.
+  const home = await realFolder($, (await $.env.get('HOME')) ?? '')
+  const parts = real.slice((home ?? '').length + 1).replace(/\/\.claude\/worktrees\/[^/]+\//u, '/').split('/')
+  const realName = parts.pop() ?? ''
+  if (!home || parts.some(isSecretFolder) || isSecretName(name) || isSecretName(realName)) {
+    return { problem: `${name} looks like it holds secrets.` }
+  }
+  if (stat.size > MAX_ATTACHMENT_BYTES) return { problem: `${name} is over the 50 MB limit.` }
+  let text = ''
+  try {
+    text = await $.fs.read(real)
+  } catch {
+    if (!MEDIA_FILE.test(real)) return { problem: `${name} can't be checked for secrets, because it's too large or can't be read.` }
+  }
+  if (SECRET_TEXT.test(text)) return { problem: `${name} looks like it holds secrets.` }
+
+  return { real }
+}
+
+// One bad file refuses the whole send, so nothing goes out that Mia didn't mean to send on its own.
+async function checkAttachments($: EngineInterface, files: unknown): Promise<{ reals: string[] } | { problem: string }> {
+  if (files === undefined) return { reals: [] }
+  if (!Array.isArray(files)) return { problem: "The files to attach weren't a list." }
+  if (!files.length) return { reals: [] }
+  const folders = await projectFolders($)
+  const reals: string[] = []
+  for (const file of files) {
+    const checked = await checkAttachment($, file, folders)
+    if ('problem' in checked) return checked
+    reals.push(checked.real)
+  }
+
+  return { reals }
+}
+
 async function raiseRequest(
   $: EngineInterface,
   input: { message?: unknown; show?: unknown },
@@ -506,6 +604,18 @@ export const register: Register = on => {
 
     return { result: text, text }
   })
+
+  on('tool.call', { tool: TELEGRAM_REPLY_TOOL }, async ($, e, next) => {
+    // Asked here rather than remembered, so a session.start hook that failed can't turn this off.
+    const folder = `${await $.env.get('HOME')}/.agent-office`
+    const here = await realFolder($, await $.session.cwd())
+    if (here !== (await realFolder($, `${folder}/front-desk`))) return next(e)
+    dataFolder = folder
+    const checked = await checkAttachments($, (e as unknown as { files?: unknown }).files)
+    if ('problem' in checked) return { deny: `Nothing was sent. ${checked.problem}` }
+
+    return next(checked.reals.length ? ({ ...e, files: checked.reals } as typeof e) : e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: "Nothing was sent, because the attachment check didn't finish." }))
 
   on('tool.check', async (_$, e, next) =>
     isFrontDesk && !FRONT_DESK_TOOLS.test(e.tool)

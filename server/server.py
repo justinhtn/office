@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import tempfile
 import sys
@@ -77,7 +78,7 @@ FRONT_DESK_GUIDE = """You are the front desk of Agent Office, the assistant for 
 
 When they ask who needs what, or how things are going, call office_status first and rely on that. Lead with who needs a decision, then what is blocked or failed, then what is going well. Answer in a few short sentences that sound natural read aloud, and say how old the information is. You can read a session's conversation with the session tools when you need detail.
 
-You are read-only. You can't edit files, run commands or send agents anything, and you never approve anything. If they want something done, tell them which agent to talk to, so they can click that agent in the office.
+You are read-only. You can't edit files, run commands or send agents anything, and you never approve anything. On Telegram you can attach a file from a project folder when the person asks. Keys, tokens and other secrets are refused, and a refused send delivers nothing, so tell them plainly and send your words again without the file. If they want something done, tell them which agent to talk to, so they can click that agent in the office.
 
 You keep a notebook of every team and independent developer (a session with no team). Sessions leave the office when they're archived, but the notebook keeps them. Use notebook_read to look people up, and search_session_transcripts and list_events to find what happened. When the person asks you to remember something, or a team wraps up, add a short note with notebook_write: what was done, what was decided, and where the results are. When you recall something, say where it came from and how old it is.
 
@@ -88,11 +89,13 @@ VOICE_MODE = DATA / "voice_mode.json"
 AWAY_MODE = DATA / "away_mode.json"
 SHUT_DOWN = DATA / "shut_down.json"
 TELEGRAM_PLUGIN = "telegram@claude-plugins-official"
+TELEGRAM_CHANNEL = f"plugin:{TELEGRAM_PLUGIN}"
 TELEGRAM_STATE = Path.home() / ".claude" / "channels" / "telegram"
 TELEGRAM_LOG = DATA / "logs" / "mia-telegram.log"
 TELEGRAM_QUIET_S = 10
 TELEGRAM_WAIT_S = 60
 TELEGRAM_CONNECT_S = 3
+TELEGRAM_STOP_S = 5
 TELEGRAM_NOTE = "The person has set themselves away and may text you on Telegram. Answer those texts with the Telegram reply tool. Reply to this note with only the word ready, without using any tools."
 SPEECH_DAILY_CAP = 20_000
 MODAL_CHECK_S = 60
@@ -233,53 +236,118 @@ def mia_session():
     return transcripts[-1] if transcripts else None
 
 
-def stop_mia_copies(session):
-    listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
+def mia_copies():
+    """Every away copy of Mia, whichever session it resumed or server started it. Only her folder counts, so nothing else is touched."""
+    listing = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
+    copies = []
     for line in listing.splitlines():
         pid, _, command = line.strip().partition(" ")
-        if re.search(rf"--resume[ =]{session}", command) and int(pid) != os.getpid():
+        if TELEGRAM_CHANNEL not in command or "--resume" not in command or int(pid) == os.getpid():
+            continue
+        folder = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=5).stdout
+        if f"n{FRONT_DESK.resolve()}" in folder.splitlines():
+            copies.append(int(pid))
+
+    return copies
+
+
+def signal_copy(pid, signal_number):
+    try:
+        # Each copy leads its own group, which also holds its Telegram server.
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal_number)
+        else:
+            os.kill(pid, signal_number)
+    except OSError:
+        pass
+
+
+def stop_mia_copies():
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        copies = mia_copies()
+        for pid in copies:
+            signal_copy(pid, signal_number)
+        deadline = time.time() + TELEGRAM_STOP_S
+        while copies and time.time() < deadline:
+            time.sleep(0.2)
+            copies = mia_copies()
+        if not copies:
+            return
+    print(f"Couldn't stop Telegram Mia: {copies}", file=sys.stderr, flush=True)
+
+
+def telegram_command(session):
+    settings = json.dumps({"enabledPlugins": {TELEGRAM_PLUGIN: True}})
+    claude = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-chrome", "--settings", settings, "--resume", session, "--channels", TELEGRAM_CHANNEL]
+
+    # The login shell finds claude and bun, which aren't on the background server's PATH. It runs the list as it is, without parsing it.
+    return [os.environ.get("SHELL", "/bin/zsh"), "-lic", 'exec "$@"', "telegram-mia", *claude]
+
+
+def is_away():
+    return read_json(AWAY_MODE, {}).get("isOn") is True
+
+
+def discard_telegram_mia():
+    process = telegram_mia["process"]
+    telegram_mia["process"] = None
+    stop_mia_copies()
+    if process is not None:
+        if process.stdin:
             try:
-                os.kill(int(pid), 15)
+                process.stdin.close()
             except OSError:
                 pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def start_telegram_mia(transcript):
     # Only start replying once it has finished any turn in progress.
     deadline = time.time() + TELEGRAM_WAIT_S
     while time.time() < deadline and time.time() - transcript.stat().st_mtime < TELEGRAM_QUIET_S:
+        if not is_away():
+            return
         time.sleep(1)
-    stop_mia_copies(transcript.stem)
+    stop_mia_copies()
     TELEGRAM_LOG.parent.mkdir(mode=0o700, exist_ok=True)
-    settings = json.dumps({"enabledPlugins": {TELEGRAM_PLUGIN: True}})
-    command = f"exec claude -p --input-format stream-json --output-format stream-json --verbose --no-chrome --settings '{settings}' --resume {transcript.stem} --channels plugin:{TELEGRAM_PLUGIN}"
     with open(TELEGRAM_LOG, "ab") as log:
-        # The login shell finds claude and bun, which aren't on the background server's PATH.
-        process = subprocess.Popen([os.environ.get("SHELL", "/bin/zsh"), "-lic", command], cwd=FRONT_DESK.resolve(), stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+        process = subprocess.Popen(telegram_command(transcript.stem), cwd=FRONT_DESK.resolve(), stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+    telegram_mia["process"] = process
     # Texts only arrive if Telegram connected before her first message, so hold that message until it has.
     started = time.time()
     pid_file = TELEGRAM_STATE / "bot.pid"
     while time.time() - started < TELEGRAM_WAIT_S and not (pid_file.exists() and pid_file.stat().st_mtime >= started - 2):
+        if not is_away():
+            discard_telegram_mia()
+            return
         time.sleep(0.5)
     time.sleep(TELEGRAM_CONNECT_S)
-    process.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": TELEGRAM_NOTE}}).encode() + b"\n")
-    process.stdin.flush()
-    telegram_mia["process"] = process
+    try:
+        process.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": TELEGRAM_NOTE}}).encode() + b"\n")
+        process.stdin.flush()
+    except (OSError, ValueError) as problem:
+        print(f"Telegram Mia stopped before she could start: {problem}", file=sys.stderr, flush=True)
+        discard_telegram_mia()
 
 
 def sync_telegram_mia():
-    with telegram_lock:
-        transcript = mia_session()
-        if not transcript or not (TELEGRAM_STATE / "access.json").exists():
-            return
-        process = telegram_mia["process"]
-        is_running = process is not None and process.poll() is None
-        is_away = read_json(AWAY_MODE, {}).get("isOn") is True
-        if is_away and not is_running:
-            start_telegram_mia(transcript)
-        elif not is_away and is_running:
-            stop_mia_copies(transcript.stem)
-            telegram_mia["process"] = None
+    try:
+        with telegram_lock:
+            if not is_away():
+                discard_telegram_mia()
+                return
+            transcript = mia_session()
+            if not transcript or not (TELEGRAM_STATE / "access.json").exists():
+                return
+            process = telegram_mia["process"]
+            if process is None or process.poll() is not None:
+                start_telegram_mia(transcript)
+    except Exception:
+        # This runs on its own thread, where nothing else would report it.
+        traceback.print_exc()
 
 
 def assistant_link():

@@ -13,6 +13,13 @@ else
   echo "No server tests yet"
 fi
 
+if command -v claude >/dev/null 2>&1; then
+  echo "Running plugin tests"
+  claude plugin test plugin
+else
+  echo "Skipping plugin tests: no claude command here"
+fi
+
 echo "Building the interface"
 [ -d web/node_modules ] || (cd web && npm ci --silent)
 out="$(mktemp -d)"
