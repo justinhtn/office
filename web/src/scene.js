@@ -1227,7 +1227,7 @@ function build(){
 }
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
-const PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
+const MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
 let isAdjusted=false,savedView=readSavedView()
 const fullView={center:new THREE.Vector3(),position:new THREE.Vector3()},cameraLook=new THREE.Vector3()
 // The closest camera distance that still shows the whole floor and back walls.
@@ -1284,7 +1284,7 @@ function keepPanOnFloor(aim){
 }
 function zoomBy(amount){
   isAdjusted=true
-  view.zoom=Math.min(ZOOM_OUT_RANGE,Math.max(-view.dist+6,view.zoom+amount))
+  view.zoom=Math.min(ZOOM_OUT_RANGE,Math.max(-view.dist+MIN_ZOOM_DIST,view.zoom+amount))
 }
 // Ribbed black rubber under the desks and chairs.
 let rubberTexture=null
@@ -1826,7 +1826,7 @@ function loop(){const t=clock.getElapsedTime()
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
-    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.roomLimit??home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.roomLimit,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
     // Someone can be away from their team's table, on a break or in a meeting, so go to them.
@@ -1837,12 +1837,14 @@ function loop(){const t=clock.getElapsedTime()
     view.az+=(goal.az-view.az)*ease;view.el+=(goal.el-view.el)*ease;view.dist+=(goal.d-view.dist)*ease
     if(!isAdjusted){view.zoom+=(0-view.zoom)*ease;viewPan.multiplyScalar(1-ease)}
   }
-  const fit=view.dist+view.zoom
+  // The camera can keep moving under a held zoom, so this keeps it in front of what it's looking at.
+  const fit=Math.max(Math.min(MIN_ZOOM_DIST,view.dist),view.dist+view.zoom)
   camera.position.set(view.center.x+Math.sin(view.az)*Math.cos(view.el)*fit,view.center.y+Math.sin(view.el)*fit,view.center.z+Math.cos(view.az)*Math.cos(view.el)*fit)
   // Pulling back rises out of the room, ending at the whole office.
   const pulled=smooth(0,ZOOM_OUT_RANGE,view.zoom)
   camera.position.lerp(fullView.position,pulled);cameraLook.lerpVectors(view.center,fullView.center,pulled)
-  keepPanOnFloor(cameraLook);camera.position.add(viewPan);cameraLook.add(viewPan);camera.lookAt(cameraLook)
+  // A pan fades as the view pulls back, so all the way out always shows the whole office.
+  keepPanOnFloor(cameraLook);camera.position.addScaledVector(viewPan,1-pulled);cameraLook.addScaledVector(viewPan,1-pulled);camera.lookAt(cameraLook)
   marker.visible=false
   const dt=Math.min(TEST_MODE?.25:.1,t-lastTick);lastTick=t
   actors.forEach(a=>{
