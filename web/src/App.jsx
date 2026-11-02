@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Command } from 'cmdk'
 import { DiffEditor, Editor } from '@monaco-editor/react'
 import { Tree } from 'react-arborist'
 import {
-  Building2, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
-  Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Volume2, VolumeX, SkipForward, X,
+  Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
+  Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
@@ -183,7 +184,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   pick.current = onPick
   space.current = onSpace
   useEffect(() => {
-    scene.current = createScene(stage.current, canvas.current, tags.current, id => pick.current(id), key => space.current(key))
+    scene.current = createScene(stage.current, canvas.current, tags.current, (id, isMap) => pick.current(id, isMap), (key, isMap) => space.current(key, isMap))
     mapHost.current?.appendChild(scene.current.map)
 
     return () => scene.current.dispose()
@@ -284,12 +285,26 @@ function TeamMenu({ focus, mapHost, onPlace, onNews, children }) {
 }
 
 // Slides over the room when asked for, so the office keeps the whole window the rest of the time.
+// It leaves the team list, whose glass would otherwise hold it inside the panel.
 function Drawer({ onClose, children }) {
-  return (
+  return createPortal(
     <>
       <div className="drawer-backdrop" onClick={onClose} />
       <aside className="drawer">{children}</aside>
-    </>
+    </>,
+    document.querySelector('.corner'),
+  )
+}
+
+// Opens at the top of the team list. Its row stays in view and folds it away again.
+function ListSection({ icon: Icon, title, label, className = '', onClose, children }) {
+  return (
+    <section className={`list-section ${className}`} aria-label={label}>
+      <button className="team-button on" aria-expanded="true" aria-label={`${title}. Back to the floor`} title="Back to the floor" onClick={onClose}>
+        <span className="place-icon"><Icon size={17} /></span><b>{title}</b><ChevronDown size={14} />
+      </button>
+      <div className="list-section-body">{children}</div>
+    </section>
   )
 }
 
@@ -989,43 +1004,40 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
     setShowPath(path)
   }
   const boss = everyone.find(other => other.id === person.startedBy)
+  // Their room's TV already says what they're doing. Mia, the lounge and anyone away have none.
+  const hasTv = teams.some(team => team.members.some(member => member.id === person.id))
 
   return (
     <>
-      <section className="person-card" aria-label={person.name}>
-        <header className="card-head">
+      <ListSection key={person.id} className="person-section" icon={person.isAssistant ? Building2 : Users} title={person.isAssistant ? 'Your office' : person.isIndependent ? 'Independent' : person.teamName} label={person.name} onClose={onClose}>
+        <header className="section-head">
           <Avatar person={person} everyone={everyone} size={36} />
-          <div className="card-who">
+          <div className="section-who">
             <EditableText key={`name-${person.id}`} value={person.name} label="name" className="name" onSave={name => api('/api/rename', { id: person.id, name })} />
             <EditableText key={`label-${person.id}`} value={person.label} label="job label" className="job" onSave={label => api('/api/label', { id: person.id, label })} />
           </div>
-          <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
         </header>
-        <div className="card-state">
+        <div className="section-state">
           <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : person.prOutcome || `Idle ${age(person.lastActivityAt)}`}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
-        {person.title && !person.title.startsWith(person.label) && <p className="card-doing">{person.title}</p>}
+        {!hasTv && person.title && !person.title.startsWith(person.label) && <p className="section-doing">{person.title}</p>}
         <Memory person={person} />
         {person.request && <RequestBanner person={person} onShow={show} />}
-        <details className="card-team">
-          <summary>{person.isIndependent ? 'Independent' : `Team: ${person.teamName}`}</summary>
+        <div className="section-actions">
+          {SESSION_TABS.map(({ id, label, icon: Icon }) => (
+            <button key={id} className="section-action" onClick={() => onOpen(id)}><Icon size={13} /> {label}</button>
+          ))}
+          <button className="icon" title="Hear their latest update" aria-label="Hear their latest update" onClick={() => onHear(person.id)}><Volume2 size={14} /></button>
+          <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
+          {person.link?.startsWith('claude://') && <a className="icon" href={person.link} title="Open in Claude app" aria-label="Open in Claude app"><ExternalLink size={14} /></a>}
+        </div>
+        <details className="section-team">
+          <summary>Teammates and team</summary>
           <Teammates person={person} teams={teams} onPick={onPick} />
           <TeamChoice person={person} teams={teams} />
         </details>
-        <div className="card-actions">
-          {SESSION_TABS.map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => onOpen(id)}><Icon size={14} /> {label}</button>
-          ))}
-        </div>
-        <footer className="card-foot">
-          {person.link?.startsWith('claude://') && <a className="open-app" href={person.link}>Open in Claude app</a>}
-          <span className="card-tools">
-            <button className="icon" title="Hear their latest update" aria-label="Hear their latest update" onClick={() => onHear(person.id)}><Volume2 size={14} /></button>
-            <button className="icon" title="Try a different look" aria-label="Try a different look" onClick={() => api('/api/reroll', { id: person.id })}><Dices size={14} /></button>
-          </span>
-        </footer>
-      </section>
+      </ListSection>
       {isOpen && (
         <Drawer onClose={onCloseDetails}>
           <section className="session">
@@ -1254,11 +1266,15 @@ export default function App() {
     setPlace(key)
     setIsDetailOpen(false)
   }
-  function goToSpace(key) {
+  // On the map, clicking what's already open folds its section away.
+  function goToSpace(key, isMap) {
     const team = teams.find(one => one.lead.id === key)
-    if (team) pick(team.lead.id)
+    const isOpen = team ? selected === team.lead.id : key === 'office' && (selected ? person?.isAssistant : place === 'office')
+    if (isMap && isOpen) goToPlace(null)
+    else if (team) pick(team.lead.id)
     else goToPlace(key)
   }
+  const pickInRoom = (id, isMap) => (isMap && id === selected ? goToPlace(null) : pick(id))
   function pick(id) {
     // The demo opens the work, and doesn't switch the Claude app's session.
     if (id === presenterId) {
@@ -1311,33 +1327,30 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pick} onSpace={isShowing ? ignoreRoomClick : goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
         {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
         <div className="corner">
-          {!person && !shutDown && place === 'office' && (
-            <>
-              <section className="person-card" aria-label="Your office">
-                <header className="card-head"><b className="name">Your office</b></header>
-                <div className="card-actions"><button onClick={() => setIsDetailOpen(true)}><Gauge size={14} /> Usage</button></div>
-              </section>
-              {isDetailOpen && (
-                <Drawer onClose={() => setIsDetailOpen(false)}>
-                  <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => setIsDetailOpen(false)} />
-                </Drawer>
-              )}
-            </>
-          )}
-          {person && (
-            <Session
-              person={person} everyone={cast} teams={teams} tab={tab} isOpen={isDetailOpen}
-              onOpen={id => { setTab(id); setIsDetailOpen(true) }} onCloseDetails={() => setIsDetailOpen(false)}
-              onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)}
-            />
-          )}
           {isNewsOpen && newsDay && <Drawer onClose={() => setIsNewsOpen(false)}><Newsroom day={newsDay} onClose={() => setIsNewsOpen(false)} /></Drawer>}
           <TeamMenu onNews={() => setIsNewsOpen(true)} focus={focus} mapHost={mapHost} onPlace={goToPlace}>
+            {!person && !shutDown && place === 'office' && (
+              <ListSection icon={Building2} title="Your office" label="Your office" onClose={() => goToPlace(null)}>
+                <div className="section-actions"><button className="section-action" onClick={() => setIsDetailOpen(true)}><Gauge size={13} /> Usage</button></div>
+                {isDetailOpen && (
+                  <Drawer onClose={() => setIsDetailOpen(false)}>
+                    <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => setIsDetailOpen(false)} />
+                  </Drawer>
+                )}
+              </ListSection>
+            )}
+            {person && (
+              <Session
+                person={person} everyone={cast} teams={teams} tab={tab} isOpen={isDetailOpen}
+                onOpen={id => { setTab(id); setIsDetailOpen(true) }} onCloseDetails={() => setIsDetailOpen(false)}
+                onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)}
+              />
+            )}
             <span className="voices">
             <button className={`voice-mode shut-down ${shutDown ? 'on' : ''}`} title={shutDown ? "Turn the lights back on, and hear what's waiting" : 'Put the office to sleep: lights, TVs and name tags go off, and nobody alerts you. Agents keep working'} aria-pressed={shutDown} onClick={toggleShutDown}><Power size={14} /> {shutDown ? 'Wake up' : 'Sleep'}</button>
             <button className={`voice-mode away-mode ${awayMode ? 'on' : ''}`} title={awayMode ? "You're away. Click when you're back to hear what's waiting" : 'Nobody alerts you until you come back. Mia keeps everything waiting'} aria-pressed={awayMode} onClick={toggleAway}>{awayMode ? <><Moon size={14} /> I'm back</> : <><Moon size={14} /> Set away</>}</button>
