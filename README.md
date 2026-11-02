@@ -82,6 +82,8 @@ These checks recognise common secrets, so they can't promise to catch every one.
 
 To move around the office, drag to rotate, scroll to zoom, and right-drag or Shift-drag to pan. The hand button makes a plain drag pan, and so does holding Space. Shift-scroll pans too, though on some systems only sideways. The buttons at the bottom left zoom, go back to the default view, and set the current view as your default in this browser. Your default stays the same as rooms are added; zooming all the way out still shows the whole office.
 
+On an iPad, tap to open someone, drag with one finger to pan, pinch to zoom, and twist or drag with two fingers to rotate. Add the page to the Home Screen to open it full screen. Touch devices draw at a lower resolution and frame rate to save power. Add `?touch` to the address to try touch mode on a computer.
+
 To see the presentation prototype, add `?present` to the address, or `?present=Name` to choose who presents. A teammate shows "ready for you" and walks you through a fixed excerpt of a report, with each claim marked by a small code check. Your choice is saved only in this browser.
 
 ## Privacy and security

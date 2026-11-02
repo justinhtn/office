@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { isTouchDevice } from './device.js'
 import { readSavedView, writeSavedView } from './savedView.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -116,11 +117,13 @@ export function portrait(p) {
 // The N64-style room. Everything else in the app is ordinary React.
 // ?test draws a small, slow room, enough to check layout without working the fan. Measure in normal mode.
 const TEST_MODE=new URLSearchParams(location.search).has('test'),TEST_PIXEL_RATIO=.6
+// Touch devices start gentler than a desktop, and look better than ?test.
+const TOUCH_MODE=isTouchDevice&&!TEST_MODE,TOUCH_PIXEL_RATIO=1.25
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
 let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,modalTv=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
-renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,2))
+renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,TOUCH_MODE?TOUCH_PIXEL_RATIO:2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
@@ -128,7 +131,7 @@ const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
 const camera = new THREE.PerspectiveCamera(46, 1, .1, 300)
 const hemi = new THREE.HemisphereLight(0xfffaf0, 0xc9b8a2, .62); scene.add(hemi)
-const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.setScalar(TEST_MODE?512:2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
+const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.setScalar(TEST_MODE?512:TOUCH_MODE?1024:2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
 let world = new THREE.Group(); scene.add(world)
 
 const mats = {}
@@ -1227,7 +1230,7 @@ function build(){
 }
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
-const MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
+const TOUCH_CLICK_MS=700,TOUCH_SLOP=10,TOUCH_TAP_MS=500,TOUCH_PINCH=.08,MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
 let isAdjusted=false,viewPulled=0,savedView=readSavedView()
 const fullView={center:new THREE.Vector3(),position:new THREE.Vector3()},cameraLook=new THREE.Vector3()
 // The closest camera distance that still shows the whole floor and back walls.
@@ -1818,16 +1821,68 @@ const onSpaceUp=e=>{if(e.code==='Space'&&isSpaceHeld){isSpaceHeld=false;showPanC
 const onSpaceLost=()=>{isSpaceHeld=false;showPanCursor()}
 window.addEventListener('keydown',onSpaceDown);window.addEventListener('keyup',onSpaceUp);window.addEventListener('blur',onSpaceLost)
 canvas.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch'){touchDown(e);return}
   const isPan=e.button===2||e.shiftKey||wantsPan()
   if(!isPan)isManual=true
   drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el,isPan,lastX:e.clientX,lastY:e.clientY};moved=e.button===2;canvas.setPointerCapture(e.pointerId);if(isPan)canvas.style.cursor='grabbing'
 })
-canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':wantsPan()?'grab':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
-canvas.addEventListener('pointerup',e=>{drag=null;canvas.style.cursor=wantsPan()?'grab':'';if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
+canvas.addEventListener('pointermove',e=>{if(e.pointerType==='touch'){touchMove(e);return}if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':wantsPan()?'grab':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('pointerup',e=>{if(e.pointerType==='touch'){touchUp(e);return}drag=null;canvas.style.cursor=wantsPan()?'grab':'';if(moved)return;tapAt(e)})
+function tapAt(e){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}}
+// One finger pans, and a short still touch is a tap. Two fingers pinch to zoom, and twist or drag to rotate.
+const touches=new Map()
+let touchIsTap=false,touchStart=null,twoFingers=null,touchTag=null,clickingTag=false,lastTouchUp=-Infinity
+function fingers(){
+  const [a,b]=[...touches.values()]
+  return {dist:Math.hypot(a.x-b.x,a.y-b.y),angle:Math.atan2(b.y-a.y,b.x-a.x),x:(a.x+b.x)/2,y:(a.y+b.y)/2}
+}
+function touchDown(e){
+  try{canvas.setPointerCapture(e.pointerId)}catch{}
+  touches.set(e.pointerId,{x:e.clientX,y:e.clientY})
+  if(touches.size===1){touchIsTap=true;touchStart={x:e.clientX,y:e.clientY,at:performance.now()};touchTag=e.target.closest?.('.tag,.zone-tag')??null}
+  else{touchIsTap=false;if(touches.size===2)twoFingers=fingers()}
+}
+function touchMove(e){
+  const finger=touches.get(e.pointerId)
+  if(!finger)return
+  const dx=e.clientX-finger.x,dy=e.clientY-finger.y
+  finger.x=e.clientX;finger.y=e.clientY
+  if(touches.size===1){
+    if(Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>TOUCH_SLOP)touchIsTap=false
+    if(!touchIsTap)panBy(dx,dy)
+  }else if(touches.size===2&&twoFingers){
+    const now=fingers(),turn=Math.atan2(Math.sin(now.angle-twoFingers.angle),Math.cos(now.angle-twoFingers.angle))
+    isManual=true
+    zoomBy((twoFingers.dist-now.dist)*TOUCH_PINCH)
+    view.az=Math.min(1.35,Math.max(.1,view.az+turn-(now.x-twoFingers.x)*.005))
+    view.el=Math.min(1.25,Math.max(.06,view.el+(now.y-twoFingers.y)*.004))
+    twoFingers=now
+  }
+}
+function touchUp(e){
+  if(!touches.delete(e.pointerId))return
+  lastTouchUp=performance.now()
+  twoFingers=touches.size===2?fingers():null
+  if(touches.size||!touchIsTap||performance.now()-touchStart.at>=TOUCH_TAP_MS)return
+  if(touchTag){clickingTag=true;touchTag.click();clickingTag=false}else tapAt(e)
+}
+const forgetTouches=()=>{touches.clear();touchIsTap=false;twoFingers=null}
+canvas.addEventListener('pointercancel',forgetTouches)
+// A missed lift would otherwise leave a finger behind, and every later touch would count as two.
+canvas.addEventListener('lostpointercapture',e=>{if(touches.has(e.pointerId))forgetTouches()})
+// Name tags cover much of the room, so a gesture starting on one has to reach the same code.
+tagsEl.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchDown(e)})
+tagsEl.addEventListener('pointermove',e=>{if(e.pointerType==='touch')touchMove(e)})
+tagsEl.addEventListener('pointerup',e=>{if(e.pointerType==='touch')touchUp(e)})
+tagsEl.addEventListener('pointercancel',forgetTouches)
+// The browser's own click after a touch is already handled above. A mouse click isn't.
+tagsEl.addEventListener('click',e=>{if(!clickingTag&&performance.now()-lastTouchUp<TOUCH_CLICK_MS)e.stopPropagation()},true)
+// Safari would otherwise zoom the whole page.
+if(isTouchDevice)stage.addEventListener('gesturestart',e=>e.preventDefault())
 canvas.addEventListener('wheel',e=>{e.preventDefault();if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 // Milliseconds between frames. Nothing is drawn while the page is hidden.
-const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
+const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:TOUCH_MODE?{active:50,watching:100,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
 function loop(){const t=clock.getElapsedTime()

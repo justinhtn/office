@@ -9,6 +9,7 @@ import {
   Hand, Maximize, Minus, Pin, Plus, RotateCcw,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
+import { isTouchDevice } from './device.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import ReactMarkdown from 'react-markdown'
 
@@ -1309,7 +1310,8 @@ export default function App() {
     setTab('outputs')
     setIsDetailOpen(false)
     // The left side of the Claude app follows whoever is clicked here.
-    api('/api/open', { id }).catch(failure => setProblem(failure.message))
+    // A tablet's tap shouldn't switch the session on the Mac.
+    if (!isTouchDevice) api('/api/open', { id }).catch(failure => setProblem(failure.message))
     setIsAwayOpen(false)
     setIsPaletteOpen(false)
     if (target?.isFinished) api('/api/seen', { id }).catch(() => {})
