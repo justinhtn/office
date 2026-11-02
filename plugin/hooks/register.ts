@@ -614,9 +614,8 @@ export const register: Register = on => {
     if (here && desk && here !== desk) return next(e)
     dataFolder = folder
     const checked = await checkAttachments($, (e as unknown as { files?: unknown }).files)
-    if ('problem' in checked) return { deny: `Nothing was sent. ${checked.problem}` }
 
-    return next(checked.reals.length ? ({ ...e, files: checked.reals } as typeof e) : e)
+    return next('reals' in checked && checked.reals.length ? ({ ...e, files: checked.reals } as typeof e) : e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: "Nothing was sent, because the attachment check didn't finish." }))
 
   on('tool.check', async (_$, e, next) =>
