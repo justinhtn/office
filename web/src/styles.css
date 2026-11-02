@@ -327,6 +327,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .list-section.person-section { flex: 0 1 auto; min-height: 160px; }
 .list-section > .team-button b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .list-section-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; padding: 7px 6px 2px; }
+.list-section-body > * { flex: none; }
 .section-head { display: flex; align-items: center; gap: 9px; }
 .section-who { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
 .section-state { display: flex; align-items: center; gap: 8px; }

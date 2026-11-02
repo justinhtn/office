@@ -1007,7 +1007,7 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
 
   return (
     <>
-      <ListSection className="person-section" icon={person.isAssistant ? Building2 : Users} title={person.isAssistant ? 'Your office' : person.isIndependent ? 'Independent' : person.teamName} label={person.name} onClose={onClose}>
+      <ListSection key={person.id} className="person-section" icon={person.isAssistant ? Building2 : Users} title={person.isAssistant ? 'Your office' : person.isIndependent ? 'Independent' : person.teamName} label={person.name} onClose={onClose}>
         <header className="section-head">
           <Avatar person={person} everyone={everyone} size={36} />
           <div className="section-who">
@@ -1267,7 +1267,7 @@ export default function App() {
   // On the map, clicking what's already open folds its section away.
   function goToSpace(key, isMap) {
     const team = teams.find(one => one.lead.id === key)
-    const isOpen = team ? selected === team.lead.id : key === 'office' && place === 'office' && !selected
+    const isOpen = team ? selected === team.lead.id : key === 'office' && (selected ? person?.isAssistant : place === 'office')
     if (isMap && isOpen) goToPlace(null)
     else if (team) pick(team.lead.id)
     else goToPlace(key)
