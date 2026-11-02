@@ -1,3 +1,4 @@
+import { isTouchDevice } from './device.js'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { loader } from '@monaco-editor/react'
@@ -11,3 +12,4 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
 loader.config({ monaco })
 
 createRoot(document.getElementById('root')).render(<App />)
+if (isTouchDevice) document.documentElement.classList.add('touch')
