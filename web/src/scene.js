@@ -1243,7 +1243,7 @@ function fitCamera(){
   if(!lowFits){home.dist=whole.dist;home.center.copy(whole.center)}
   const wider=whole.dist*FULL_VIEW_MARGIN,dir=viewDirection(FULL_VIEW.az,FULL_VIEW.el)
   fullView.center.copy(whole.center);fullView.position.copy(whole.center).addScaledVector(dir,wider)
-  if(first){view.dist=home.dist;view.center.copy(home.center)}
+  if(first){view.dist=home.dist;view.center.copy(home.center);view.az=home.az;view.el=home.el}
 }
 function viewDirection(az,el){return new THREE.Vector3(Math.sin(az)*Math.cos(el),Math.sin(el),Math.cos(az)*Math.cos(el))}
 // The distance and aim that fit the floor and back walls in the part of the window the panel leaves clear.
@@ -1860,7 +1860,7 @@ return {
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
   },
   zoomBy,
-  resetView(){isManual=false;view.zoom=0},
+  resetView(){isManual=false},
   setViewShift(next){viewShift=next;applyViewShift()},
   setPace(next){
     if(next===pace)return
