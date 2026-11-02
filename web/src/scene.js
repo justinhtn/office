@@ -1803,13 +1803,22 @@ map.addEventListener('pointerleave',()=>{mapHover=null;drawMap()})
 map.addEventListener('click',e=>{const {person,spaceKey}=mapTarget(e);if(person)onPick(person.id,true);else if(spaceKey)onSpace(spaceKey,true)})
 canvas.addEventListener('pointerleave',e=>{if(!stage.contains(e.relatedTarget))checkInKey=null})
 canvas.addEventListener('contextmenu',e=>e.preventDefault())
+// The hand tool makes a plain drag pan, and holding Space does the same for a moment.
+let isHandTool=false,isSpaceHeld=false
+const wantsPan=()=>isHandTool||isSpaceHeld
+const showPanCursor=()=>{if(!drag)canvas.style.cursor=wantsPan()?'grab':''}
+const isTypingOrButton=target=>/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target?.tagName)||target?.isContentEditable
+const onSpaceDown=e=>{if(e.code!=='Space'||isTypingOrButton(e.target))return;e.preventDefault();if(!isSpaceHeld){isSpaceHeld=true;showPanCursor()}}
+const onSpaceUp=e=>{if(e.code==='Space'&&isSpaceHeld){isSpaceHeld=false;showPanCursor()}}
+const onSpaceLost=()=>{isSpaceHeld=false;showPanCursor()}
+window.addEventListener('keydown',onSpaceDown);window.addEventListener('keyup',onSpaceUp);window.addEventListener('blur',onSpaceLost)
 canvas.addEventListener('pointerdown',e=>{
-  const isPan=e.button===2||e.shiftKey
+  const isPan=e.button===2||e.shiftKey||wantsPan()
   if(!isPan)isManual=true
-  drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el,isPan,lastX:e.clientX,lastY:e.clientY};moved=e.button===2;canvas.setPointerCapture(e.pointerId)
+  drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el,isPan,lastX:e.clientX,lastY:e.clientY};moved=e.button===2;canvas.setPointerCapture(e.pointerId);if(isPan)canvas.style.cursor='grabbing'
 })
-canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
-canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
+canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':wantsPan()?'grab':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('pointerup',e=>{drag=null;canvas.style.cursor=wantsPan()?'grab':'';if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 // Milliseconds between frames. Nothing is drawn while the page is hidden.
@@ -1887,6 +1896,7 @@ return {
   },
   zoomBy,
   resetView(){isManual=false;isAdjusted=false},
+  setHandTool(isOn){isHandTool=isOn;showPanCursor()},
   hasSavedView(){return Boolean(savedView)},
   saveView(){
     const toCamera=camera.position.clone().sub(cameraLook),dist=toCamera.length()
@@ -1914,6 +1924,6 @@ return {
     boards.forEach(drawBoard);drawDirectory();drawModal();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
   map,
-  dispose(){clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
+  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
 }
 }
