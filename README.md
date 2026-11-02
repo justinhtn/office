@@ -80,6 +80,8 @@ The plugin checks each attachment in code, on the path it really leads to, so a 
 
 These checks recognise common secrets, so they can't promise to catch every one. A secret in an image, an archive or another binary format won't be seen.
 
+To see the presentation prototype, add `?present` to the address, or `?present=Name` to choose who presents. A teammate shows "ready for you" and walks you through a fixed excerpt of a report, with each claim marked by a small code check. Your choice is saved only in this browser.
+
 ## Privacy and security
 
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.

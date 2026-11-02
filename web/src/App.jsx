@@ -54,7 +54,130 @@ function useRoomPace() {
   return [pace, wake]
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, mapHost, onPick, onSpace }) {
+const CLAIM_MARKS = { checked: 'Checked', flagged: 'Flagged', unconfirmed: "Couldn't confirm" }
+const PRESENTATION_CHOICE = 'office-presentation-choice'
+const PRESENTATION_SHIFT = .29
+const ignoreRoomClick = () => {}
+
+// A teammate walks the person through finished work, claim by claim. Marks come from the server's code checks.
+function Presentation({ person, everyone, onClose }) {
+  const [work, setWork] = useState(null)
+  const [problem, setProblem] = useState('')
+  const [step, setStep] = useState(0)
+  const [isWalking, setIsWalking] = useState(true)
+  const [pointer, setPointer] = useState(null)
+  const [choice, setChoice] = useState(null)
+  const page = useRef(null)
+  useEffect(() => {
+    api('/api/presentation').then(next => {
+      setWork(next)
+      try {
+        const saved = JSON.parse(localStorage.getItem(PRESENTATION_CHOICE))
+        if (saved?.id === next.id) setChoice(saved.choice)
+      } catch {}
+    }, failure => setProblem(failure.message))
+  }, [])
+  const claims = work?.claims ?? []
+  const current = isWalking ? claims[step] : null
+  const atEnd = work && !current
+  useEffect(() => {
+    const place = () => {
+      const target = current && page.current?.querySelector(`[data-claim="${current.id}"]`)
+      if (!target) return setPointer(null)
+      const box = page.current.getBoundingClientRect(), spot = target.getClientRects()[0]
+      setPointer(spot.top - box.top + page.current.scrollTop)
+      target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+    place()
+    window.addEventListener('resize', place)
+
+    return () => window.removeEventListener('resize', place)
+  }, [current?.id])
+  const next = () => (step + 1 < claims.length ? setStep(step + 1) : setIsWalking(false))
+  const back = () => { setIsWalking(true); setStep(Math.max(0, isWalking ? step - 1 : claims.length - 1)) }
+  const onKey = useRef()
+  onKey.current = event => {
+    if (/^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return
+    const action = { ArrowRight: () => isWalking && next(), ArrowLeft: back, Escape: () => (isWalking ? setIsWalking(false) : onClose()) }[event.key]
+    if (!action) return
+    event.stopImmediatePropagation()
+    action()
+  }
+  useEffect(() => {
+    const listen = event => onKey.current(event)
+    window.addEventListener('keydown', listen, true)
+
+    return () => window.removeEventListener('keydown', listen, true)
+  }, [])
+  const decide = made => {
+    setChoice(made)
+    try { localStorage.setItem(PRESENTATION_CHOICE, JSON.stringify({ id: work.id, choice: made, at: new Date().toISOString() })) } catch {}
+  }
+  const count = mark => claims.filter(claim => claim.mark === mark).length
+  const claimById = Object.fromEntries(claims.map(claim => [claim.id, claim]))
+  const open = claims.filter(claim => claim.mark !== 'checked')
+
+  return (
+    <section className="presentation" aria-label={`${person.name} presents finished work`}>
+      <header className="presentation-head">
+        <Avatar person={person} everyone={everyone} size={36} />
+        <div><small>{person.name} is showing you</small><b>{work?.title ?? 'Finished work'}</b></div>
+        <button className="icon" aria-label="Close" title="Close" onClick={onClose}><X size={16} /></button>
+      </header>
+      {problem && <p className="error">{problem}</p>}
+      {work && <>
+        <p className="presentation-counts">
+          <span className="claim-mark checked">{count('checked')} {CLAIM_MARKS.checked}</span>
+          <span className="claim-mark flagged">{count('flagged')} {CLAIM_MARKS.flagged}</span>
+          <span className="claim-mark unconfirmed">{count('unconfirmed')} {CLAIM_MARKS.unconfirmed}</span>
+        </p>
+        <article className="presentation-page" ref={page}>
+          {work.paragraphs.map((parts, index) => (
+            <p key={index}>{parts.map((part, at) => {
+              if (!part.claim) return <span key={at}>{part.text}</span>
+              const claim = claimById[part.claim]
+
+              return (
+                <button key={at} data-claim={claim.id} className={`claim ${claim.mark} ${current?.id === claim.id ? 'current' : ''}`} onClick={() => { setIsWalking(true); setStep(claims.indexOf(claim)) }}>
+                  {claim.text} <span className={`claim-mark ${claim.mark}`}>{CLAIM_MARKS[claim.mark]}</span>
+                </button>
+              )
+            })}</p>
+          ))}
+          {pointer !== null && <span className="presentation-pointer" style={{ transform: `translateY(${pointer}px)` }}>{person.name}<i /></span>}
+        </article>
+        <p className="presentation-origin">{work.origin}</p>
+        {current ? (
+          <div className="presentation-step">
+            <p className="presentation-line"><b>{person.name}:</b> {current.line}</p>
+            <p className="presentation-checked"><span className={`claim-mark ${current.mark}`}>{CLAIM_MARKS[current.mark]}</span>{current.mark === 'checked' && ` ${current.checked}.`}</p>
+            <div className="presentation-controls">
+              <button onClick={back} disabled={step === 0}>Back</button>
+              <button onClick={next}>{step + 1 < claims.length ? 'Next' : 'Finish'}</button>
+              <button onClick={() => setIsWalking(false)}>Stop</button>
+              <small>{step + 1} of {claims.length}</small>
+            </div>
+          </div>
+        ) : atEnd && (
+          <div className="presentation-step">
+            {open.length > 0 && <>
+              <p className="presentation-line"><b>Not confirmed as fact:</b></p>
+              <ul className="presentation-open">{open.map(claim => <li key={claim.id}><span className={`claim-mark ${claim.mark}`}>{CLAIM_MARKS[claim.mark]}</span> <q>{claim.text}</q> {claim.checked}.</li>)}</ul>
+            </>}
+            <div className="presentation-controls">
+              <button className={choice === 'looks-good' ? 'chosen' : 'primary'} onClick={() => decide('looks-good')}>Looks good</button>
+              <button className={choice === 'change-this' ? 'chosen' : ''} onClick={() => decide('change-this')}>Change this</button>
+              <button onClick={back}>Back</button>
+            </div>
+            {choice && <small>Saved on this computer: {choice === 'looks-good' ? 'Looks good' : 'Change this'}. Nothing was sent.</small>}
+          </div>
+        )}
+      </>}
+    </section>
+  )
+}
+
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, onPick, onSpace }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -74,6 +197,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   useEffect(() => {
     scene.current.setPace(pace)
   }, [pace])
+  useEffect(() => {
+    scene.current.setViewShift(viewShift)
+  }, [viewShift])
 
   useEffect(() => {
     let isCurrent = true
@@ -1042,10 +1168,14 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!isAway) return
+    setIsPresenting(false)
     setSelected(null)
     setPlace('office')
   }, [isAway])
-  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
+  const [presenterId, setPresenterId] = useState(null)
+  const [isPresenting, setIsPresenting] = useState(false)
+  // The demo presenter's real session isn't read aloud while they present.
+  const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), isPresenting && selected === presenterId ? null : selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
   const [idlePace, wakeRoom] = useRoomPace()
   // Someone asking for you, or speaking, lights the room back up, and it stays lit while anyone waits.
   const requestIds = everyone.filter(person => person.request).map(person => person.request.id).sort().join()
@@ -1093,9 +1223,23 @@ export default function App() {
   }, [])
 
   const cast = everyone
-  const active = useMemo(() => cast.filter(isActive), [cast])
+  const realActive = useMemo(() => cast.filter(isActive), [cast])
+  // ?present is the demo: one teammate has finished work ready. ?present=Name picks who.
+  const presentAs = useMemo(() => new URLSearchParams(window.location.search).get('present'), [])
+  useEffect(() => {
+    if (presentAs === null || presenterId) return
+    const floorNow = realActive.filter(other => !other.isAssistant)
+    const team = officeTeams(floorNow).find(one => one.members.length > 1) ?? officeTeams(floorNow)[0]
+    // Left alone by default: anyone working or asking for the person.
+    const isFree = other => !other.isRunning && !other.request
+    const chosen = realActive.find(other => other.name === presentAs) ?? team?.members.find(other => other.id !== team.lead.id && isFree(other)) ?? officeTeams(floorNow).flatMap(one => one.members).find(isFree) ?? team?.lead
+    if (chosen) setPresenterId(chosen.id)
+  }, [presentAs, presenterId, realActive])
+  const active = useMemo(() => realActive.map(other => (other.id === presenterId ? { ...other, isRunning: false, isActing: false, isFinished: true, plan: null, label: isPresenting ? 'Presenting' : 'Ready for you', readyLine: isPresenting ? 'Showing you their work' : 'Ready for you' } : other)), [realActive, presenterId, isPresenting])
+  const presenter = active.find(other => other.id === presenterId)
+  const isShowing = isPresenting && Boolean(presenter)
   const away = useMemo(() => cast.filter(person => !isActive(person)), [cast])
-  const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)]
+  const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId || person.request)
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
 
@@ -1105,6 +1249,7 @@ export default function App() {
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
   function goToPlace(key) {
+    setIsPresenting(false)
     setSelected(null)
     setPlace(key)
     setIsDetailOpen(false)
@@ -1115,6 +1260,15 @@ export default function App() {
     else goToPlace(key)
   }
   function pick(id) {
+    // The demo opens the work, and doesn't switch the Claude app's session.
+    if (id === presenterId) {
+      setSelected(id)
+      setPlace(null)
+      setIsDetailOpen(false)
+      setIsPresenting(true)
+      return
+    }
+    setIsPresenting(false)
     const target = everyone.find(other => other.id === id)
     setSelected(id)
     setPlace(null)
@@ -1137,11 +1291,12 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${isShowing ? 'presenting' : ''}`}>
 
-      {(needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
+      {((presenter && !isPresenting) || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
       <div className="needs" aria-label="Needs you">
         <b>Needs you</b>
+        {presenter && !isPresenting && <button className="need" onClick={() => pick(presenter.id)}><Avatar person={presenter} everyone={everyone} size={20} /><span className="dot finished" /><b>{presenter.name}</b> ready for you <small>Demo: a finished report</small></button>}
         {newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition && <button className="need" onClick={() => setIsNewsOpen(true)}><Newspaper size={14} /><b>Nell</b> has today's topics</button>}
         {newsDay?.edition && !newsReadOn && <button className="need" onClick={() => { setIsNewsOpen(true); markNewsRead(newsDay.date) }}><Newspaper size={14} /><b>Nell</b> finished today's piece</button>}
         {needsYou.map(target => (
@@ -1156,9 +1311,10 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pick} onSpace={isShowing ? ignoreRoomClick : goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
         {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
+        {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
         <div className="corner">
           {!person && !shutDown && place === 'office' && (
             <>

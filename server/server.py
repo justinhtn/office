@@ -63,6 +63,7 @@ NOTEBOOK = DATA / "notebook"
 NOTEBOOK_INDEX = NOTEBOOK / "index.json"
 NOTEBOOK_EVERY_S = 60
 TEAMS = DATA / "teams.json"
+PRESENTATION_DEMO = Path(__file__).resolve().parent / "fixtures" / "presentation-demo.json"
 NO_PROJECT = {"No folder", "Other", "", "front-desk"}
 TEAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$")
 NEWSROOM = DATA / "newsroom"
@@ -1419,6 +1420,85 @@ def modal_report():
         return {"modal": modal_state["value"], "modalChecked": modal_state["isChecked"]}
 
 
+def presented_level(row):
+    """The highest visual level in a table cell such as "1–2" or "1?"."""
+    return max(int(number) for number in re.findall(r"\d", row["visualLevel"]))
+
+
+def uncertain_note(rows):
+    uncertain = sum("?" in row["visualLevel"] for row in rows)
+
+    return f", {uncertain} of them uncertain" if uncertain else ""
+
+
+def check_claim(check, rows, source_name):
+    """Compares one claim with the source. Returns its mark, and what was checked, in code alone."""
+    by_tool = {row["tool"]: row for row in rows}
+    kind = check.get("type")
+    if kind == "most_at_most":
+        fits = sum(presented_level(row) <= check["level"] for row in rows)
+        return ("checked" if fits * 2 > len(rows) else "flagged"), f"{fits} of {len(rows)} tools in {source_name} are at list or pane level{uncertain_note(rows)}"
+    if kind == "rarer_than_lists":
+        fits = sum(presented_level(row) == check["level"] for row in rows)
+        lists = sum(presented_level(row) < check["level"] for row in rows)
+        return ("checked" if 0 < fits < lists else "flagged"), f"{source_name} has {fits} board and {lists} list or pane tools{uncertain_note(rows)}"
+    if kind == "row_level":
+        if not check["tools"]:
+            return "unconfirmed", "The check names no tools"
+        missing = [tool for tool in check["tools"] if tool not in by_tool]
+        if missing:
+            return "unconfirmed", f"{missing[0]} isn't in {source_name}"
+        uncertain = [tool for tool in check["tools"] if "?" in by_tool[tool]["visualLevel"]]
+        if uncertain:
+            return "unconfirmed", f"{uncertain[0]}'s level is uncertain in {source_name}"
+        wrong = [tool for tool in check["tools"] if presented_level(by_tool[tool]) != check["level"]]
+        names = " and ".join(check["tools"])
+        return ("flagged", f"{wrong[0]} isn't level {check['level']} in {source_name}") if wrong else ("checked", f"{names}: level {check['level']} in {source_name}")
+    if kind == "rows_confirmed":
+        if not check["tools"] or not check["terms"]:
+            return "unconfirmed", "The check names no tools or terms"
+        missing = [tool for tool in check["tools"] if tool not in by_tool]
+        if missing:
+            return "unconfirmed", f"{missing[0]} isn't in {source_name}"
+        doubted = [tool for tool in check["tools"] if check["phrase"] in by_tool[tool].get("form", "")]
+        if doubted:
+            return "flagged", f"{doubted[0]}'s row in {source_name} says its layout is {check['phrase']}"
+        terms = " or ".join(check["terms"])
+        unlike = [tool for tool in check["tools"] if not any(term in by_tool[tool].get("form", "").lower() for term in check["terms"])]
+        if unlike:
+            return "flagged", f"{unlike[0]}'s row in {source_name} doesn't mention {terms}"
+        return "checked", f"All {len(check['tools'])} rows in {source_name} mention {terms}"
+    if kind == "row_stars":
+        row = by_tool.get(check["tool"])
+        if not row or not row.get("stars"):
+            return "unconfirmed", f"{check['tool']} has no star count in {source_name}"
+        same = row["stars"] == check["stars"]
+        return ("checked" if same else "flagged"), f"{source_name} gives {check['tool']} {row['stars']} stars"
+    if kind == "none":
+        return "unconfirmed", f"Nothing to check it against: {check['why']}"
+
+    return "unconfirmed", "No check exists for this claim"
+
+
+def presentation(document):
+    """Marks every claim from code. Only a checked claim is spoken as fact."""
+    rows, source_name, claims = document["source"], document["sourceName"], []
+    for claim in document["claims"]:
+        try:
+            mark, checked = check_claim(claim.get("check") or {}, rows, source_name)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            mark, checked = "unconfirmed", "The check couldn't run"
+        checked = checked[0].upper() + checked[1:]
+        line = claim["line"]
+        if mark == "flagged":
+            line = f"The report says this, but it needs a look. {checked}."
+        elif mark == "unconfirmed":
+            line = f"The report says this, but I couldn't confirm it. {checked}."
+        claims.append({"id": claim["id"], "text": claim["text"], "mark": mark, "checked": checked, "line": line})
+
+    return {**{key: document[key] for key in ("id", "title", "origin", "sourceName", "paragraphs")}, "claims": claims}
+
+
 def directory():
     """Every team and independent developer from the notebook, most recently active first."""
     book = read_json(NOTEBOOK_INDEX, {})
@@ -1654,6 +1734,8 @@ class Handler(BaseHTTPRequestHandler):
                 away_mode = read_json(AWAY_MODE, {}).get("isOn") is True
                 shut_down = read_json(SHUT_DOWN, {}).get("isOn") is True
                 self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on()})
+            elif url.path == "/api/presentation":
+                self.reply(200, presentation(json.loads(PRESENTATION_DEMO.read_text())))
             elif url.path == "/api/usage":
                 self.reply(200, usage_report())
             elif url.path == "/api/outputs":
