@@ -1046,14 +1046,16 @@ export default function App() {
     setPlace('office')
   }, [isAway])
   const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
-  const [roomPace, wakeRoom] = useRoomPace()
-  // Someone asking for you, or speaking, lights the room back up.
-  const requests = everyone.filter(person => person.request).length
-  const lastRequests = useRef(requests)
+  const [idlePace, wakeRoom] = useRoomPace()
+  // Someone asking for you, or speaking, lights the room back up, and it stays lit while anyone waits.
+  const requestIds = everyone.filter(person => person.request).map(person => person.request.id).sort().join()
+  const lastRequestIds = useRef(requestIds)
   useEffect(() => {
-    if (requests > lastRequests.current) wakeRoom()
-    lastRequests.current = requests
-  }, [requests])
+    const known = lastRequestIds.current.split(',')
+    if (requestIds && requestIds.split(',').some(id => !known.includes(id))) wakeRoom()
+    lastRequestIds.current = requestIds
+  }, [requestIds])
+  const roomPace = idlePace === 'asleep' && requestIds ? 'watching' : idlePace
   useEffect(() => {
     if (voices.speaker) wakeRoom()
   }, [voices.speaker])
