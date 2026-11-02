@@ -13,14 +13,15 @@ else
   echo "No server tests yet"
 fi
 
-if command -v claude >/dev/null 2>&1; then
+# An older claude would take "plugin test" as a prompt and send it to the API, and its help exits 0 too, so look for this command's own usage line.
+if claude plugin test --help 2>/dev/null | grep -q 'Usage: claude plugin test'; then
   echo "Running plugin tests"
   claude plugin test plugin
 elif [ -n "${CI:-}" ]; then
-  echo "Plugin tests can't run: no claude command in CI" >&2
+  echo "Plugin tests can't run: no claude command with plugin tests in CI" >&2
   exit 1
 else
-  echo "Skipping plugin tests: no claude command here. CI still runs them."
+  echo "Skipping plugin tests: no claude command with plugin tests here. CI still runs them."
 fi
 
 echo "Building the interface"

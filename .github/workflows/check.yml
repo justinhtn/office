@@ -33,5 +33,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       # The plugin tests run through this command. They need no login or API key.
+      # Pinned because the plugin uses an early-access API. Raise it deliberately.
       - run: npm install --global @anthropic-ai/claude-code@2.1.309
       - run: scripts/check.sh
