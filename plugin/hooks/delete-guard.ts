@@ -2,9 +2,9 @@ import type { EngineInterface } from 'claude-code'
 
 // A safety net for Bash commands, not a guarantee: a script file or another language can still delete anything.
 type Word = { text: string; isDynamic: boolean; isSplit: boolean; hasBrace: boolean; globAt: number }
-type Target = { path: string; shown: string; isRecursive: boolean }
+type Target = { path: string; shown: string; isRecursive: boolean; isDescending: boolean }
 type Judged = { refusal?: string; place: Place }
-type Place = { home: string; cwds: string[]; isCwdKnown: boolean; isHomeKnown: boolean; hasNewLink: boolean; holdsDelete: boolean; targets: Target[] }
+type Place = { home: string; cwds: string[]; isCwdKnown: boolean; isHomeKnown: boolean; hasNewLink: boolean; holdsDelete: boolean; namesData: boolean; targets: Target[] }
 
 const MAX_NESTING = 8
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish'])
@@ -38,7 +38,12 @@ const MAX_BRACE_WORDS = 256
 // Programs with their own rm command or that only print the word. For any other, rm and delete flags among its arguments count as a delete.
 const NOT_LAUNCHERS = new Set(['git', 'docker', 'podman', 'kubectl', 'helm', 'gh', 'npm', 'yarn', 'pnpm', 'cargo', 'brew', 'conda', 'pip', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'cat', 'ls', 'echo', 'printf', 'man', 'which', 'type', 'test', '['])
 // An assignment or set that stores rm, for a variable to run later.
-const STORES_DELETE = /(=|\bset\s+--)[^;&|\n]*\bg?rm\b/i
+const STORES_DELETE = /(=|\bset\s+--)[^;&|\n]*(?<![-\w])g?rm\b/i
+// These run whatever follows their exec or run word, unlike the rest of that list.
+const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'conda'])
+// Text that points at the session data, or a pattern that could, for a loop to hand to rm "$f".
+const NAMES_DATA = /\.claude\b|\.agent-office\b|Application Support\/Claude|~\/?[*?[{]|~\/\.[\w-]*[*?[{]|(^|\s)\/[^/\s]+\/[*?[{]/i
+const withoutQuotes = (command: string) => command.replace(/['"\\]/g, '')
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
 const ADVICE = 'Write the literal path, check it with ls, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
 
@@ -331,14 +336,23 @@ function protectedAs(path: string, home: string) {
   return undefined
 }
 
-// A non-recursive pattern can still empty the session data, but it can't take a whole folder tree.
-const mattersFor = (what: string | undefined, isRecursive: boolean) => (isRecursive || what?.startsWith('~/') ? what : undefined)
+function isAboveHome(path: string, home: string) {
+  const p = fold(path)
+  const h = fold(normalize(home))
+
+  return p === '/' || p === h || h.startsWith(`${p}/`)
+}
+
+// Without -r a pattern can't take a folder tree, but it can empty the session data, by starting there or by descending from above it.
+function mattersFor(what: string | undefined, path: string, home: string, target: { isRecursive: boolean; isDescending: boolean }) {
+  return target.isRecursive || what?.startsWith('~/') || (target.isDescending && isAboveHome(path, home)) ? what : undefined
+}
 
 const notLiteral = (shown: string) =>
   `Agent Office blocked this delete because \`${shown}\` isn't a literal path. A variable or command that comes back empty can delete a whole parent folder. ${ADVICE}`
 
-const tooBroad = (shown: string, what: string) =>
-  `Agent Office blocked this recursive delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
+const tooBroad = (shown: string, what: string, isRecursive: boolean) =>
+  `Agent Office blocked this ${isRecursive ? 'recursive ' : ''}delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
 
 // Every place a path might mean. A cd can fail or sit in a subshell, so each folder seen so far counts.
 function absolutes(path: string, place: Place) {
@@ -359,9 +373,10 @@ function checkTarget(word: Word, place: Place, isRecursive = true) {
   const fulls = absolutes(literal, place)
   if (!fulls || place.hasNewLink) return notLiteral(word.text)
   for (const full of fulls) {
-    const what = mattersFor(protectedAs(normalize(full), place.home), isRecursive)
-    if (what) return tooBroad(word.text, what)
-    place.targets.push({ path: full, shown: word.text, isRecursive })
+    const shape = { isRecursive, isDescending: hasGlob && word.text.slice(word.globAt).includes('/') }
+    const what = mattersFor(protectedAs(normalize(full), place.home), normalize(full), place.home, shape)
+    if (what) return tooBroad(word.text, what, isRecursive)
+    place.targets.push({ path: full, shown: word.text, ...shape })
   }
 
   return undefined
@@ -386,7 +401,7 @@ function checkRm(args: Word[], isFromPipe: boolean, place: Place) {
     }
   }
   if (isFromPipe) return notLiteral('xargs rm')
-  const dynamic = paths.find(path => path.isDynamic && (isRecursive || isForced || path.globAt >= 0))
+  const dynamic = paths.find(path => path.isDynamic && (isRecursive || isForced || path.globAt >= 0 || place.namesData))
   if (dynamic) return notLiteral(dynamic.text)
   for (const path of isRecursive ? paths : paths.filter(path => path.globAt >= 0)) {
     const refusal = checkTarget(path, place, isRecursive)
@@ -447,7 +462,7 @@ function checkScriptWord(word: Word | undefined, place: Place, nesting: number) 
   return checkScript(word.text, place, nesting + 1)
 }
 
-const hasDeleteFlags = (word: Word) => /^-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|^--recursive/.test(word.text)
+const hasRecursiveFlag = (word: Word) => /^-[A-Za-z]*[rR]|^--rec/.test(word.text)
 
 function checkCommand(given: Word[], place: Place, nesting: number): string | undefined {
   let words = given.flatMap(word =>
@@ -457,7 +472,7 @@ function checkCommand(given: Word[], place: Place, nesting: number): string | un
   )
   let isFromPipe = false
   // These change where a ~ or a relative path leads.
-  if (words.some(word => /^(HOME|CDPATH)\+?=/.test(word.text))) {
+  if (words.some(word => /^(HOME|CDPATH|cdpath)(\+?=.*)?$/s.test(word.text))) {
     place.isHomeKnown = false
     place.isCwdKnown = false
   }
@@ -504,13 +519,7 @@ function checkCommand(given: Word[], place: Place, nesting: number): string | un
   if (name === 'rm' || name === 'grm') return checkRm(args, isFromPipe, place)
   if (name === 'find' || name === 'gfind') return checkFind(args, place, nesting)
   // A program named by a variable can be rm, if rm was stored earlier or it's given rm's flags.
-  if (words[0].isDynamic && (place.holdsDelete || args.some(hasDeleteFlags))) throw unsure('a program named by a variable')
-  if (!NOT_LAUNCHERS.has(name) && !SHELLS.has(name)) {
-    const rm = args.findIndex(arg => /^g?rm$/.test(nameOf(arg)))
-    if (rm >= 0 && args.slice(rm + 1).some(hasDeleteFlags)) return checkRm(args.slice(rm + 1), isFromPipe, place)
-    const find = args.findIndex(arg => /^g?find$/.test(nameOf(arg)))
-    if (find >= 0 && args.slice(find + 1).some(arg => arg.text === '-delete')) return checkFind(args.slice(find + 1), place, nesting)
-  }
+  if (words[0].isDynamic && (place.holdsDelete || args.some(hasRecursiveFlag))) throw unsure('a program named by a variable')
   if (name === 'cd' || name === 'pushd' || name === 'chdir') followCd(args, place)
   else if (name === 'popd') place.isCwdKnown = false
   else if (name === 'ln') place.hasNewLink = true
@@ -526,6 +535,15 @@ function checkCommand(given: Word[], place: Place, nesting: number): string | un
   else if (SHELLS.has(name)) {
     const at = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg.text))
     if (at >= 0) return checkScriptWord(args.slice(at + 1).find(arg => arg.text !== '--'), place, nesting)
+
+    return undefined
+  }
+
+  // Any other program may be launching what follows, so read its arguments from the first word that can delete.
+  const runs = PACKAGE_RUNNERS.has(name) && /^(exec|run|x|dlx)$/.test(args[0]?.text ?? '')
+  if (runs || !NOT_LAUNCHERS.has(name)) {
+    const inner = args.findIndex(arg => RUNS_OTHERS.has(nameOf(arg)) || nameOf(arg) === 'xargs')
+    if (inner >= 0) return checkCommand(args.slice(inner), place, nesting)
   }
 
   return undefined
@@ -541,14 +559,19 @@ function checkScript(script: string, place: Place, nesting: number) {
 }
 
 function judge(command: string, home: string, cwd: string): Judged {
-  const place: Place = { home, cwds: [cwd, ...earlierFolders], isCwdKnown: isEarlierFolderKnown, isHomeKnown: true, hasNewLink: false, holdsDelete: STORES_DELETE.test(command), targets: [] }
+  const place: Place = { home, cwds: [cwd, ...earlierFolders], isCwdKnown: isEarlierFolderKnown, isHomeKnown: true, hasNewLink: false, holdsDelete: STORES_DELETE.test(withoutQuotes(command)), namesData: NAMES_DATA.test(withoutQuotes(command)), targets: [] }
 
   return { refusal: checkScript(command, place, 0), place }
 }
 
 // True if a command might delete something once quotes are out of the way, which decides what a failed check does.
 export const mentionsDelete = (command: unknown) =>
-  typeof command === 'string' && /\bg?rm\b|-delete\b|(^|\s)-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|--recursive/i.test(command.replace(/['"\\]/g, ''))
+  typeof command === 'string' && /\bg?rm\b|-delete\b|(^|\s)-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|--recursive|\br\$|\$\{?\w+\}?m\b/i.test(withoutQuotes(command))
+
+// A command that couldn't be read runs if it mentions no delete, and it may have moved the shell.
+export function noteUnreadCommand(command: unknown) {
+  if (typeof command === 'string' && /\b(cd|pushd|popd|chdir)\b/.test(command)) isEarlierFolderKnown = false
+}
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
@@ -580,8 +603,8 @@ export async function refuseDelete($: EngineInterface, command: string): Promise
     if (!landed && !before) continue
     const path = normalize(!landed ? written : followsLast ? landed : `${landed}/${last}`)
     for (const each of homes) {
-      const what = mattersFor(protectedAs(path, each), target.isRecursive)
-      if (what) return tooBroad(target.shown, what)
+      const what = mattersFor(protectedAs(path, each), path, each, target)
+      if (what) return tooBroad(target.shown, what, target.isRecursive)
     }
   }
   for (const folder of place.cwds) if (folder !== cwd) earlierFolders.add(folder)

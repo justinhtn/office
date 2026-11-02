@@ -179,6 +179,26 @@ const REFUSED: [string, string][] = [
   ['env -S joined to its script', "env -S'rm -rf ~/.claude'"],
   ['a split rm in unreadable syntax', '((1)); r${y}m -rf ~/.claude'],
   ['find -delete through a launcher', 'arch -arm64 find ~/.claude -delete'],
+  ['force with an earlier pattern', 'rm -f ~/.cla*/projects/*/*.jsonl'],
+  ['plain rm with a pattern on a dot folder', 'rm ~/.*/projects/*/*'],
+  ['force with a pattern above home', 'rm -f /Users/*/.claude/projects/*/*.jsonl'],
+  ['a loop of plain rm', 'for f in ~/.claude/projects/*/*.jsonl; do rm "$f"; done'],
+  ['a read loop of plain rm', `find ~/.claude/projects -name '*.jsonl' | while read f; do rm "$f"; done`],
+  ['a loop from a pattern of plain rm', 'for f in ~/.cla*/projects/*; do rm "$f"; done'],
+  ['a lowercase cdpath', 'cdpath=(~); cd .claude && rm -rf projects'],
+  ['HOME as a loop variable', 'for HOME in ~/.claude; do rm -rf ~/projects; done'],
+  ['HOME from read', 'read HOME < f; rm -rf ~/projects'],
+  ['recursion alone in a split rm', 'r${y}m -r ~/.claude'],
+  ['a split rm with its start in a variable', 'x=r; ${x}m -r ~/.claude'],
+  ['a stored rm with quotes inside', "R=r''m; $R -r ~/.claude"],
+  ['separate flags on a split rm in unreadable syntax', '((1)); r${y}m -r -f ~/.claude'],
+  ['a launcher with -r alone', 'arch -arm64 rm -r ~/.claude'],
+  ['a launcher with a forced pattern', 'arch -arm64 rm -f ~/.claude/projects/*/*'],
+  ['a launcher running a shell', "arch -arm64 sh -c 'rm -rf ~/.claude'"],
+  ['a launcher running find', 'arch -arm64 find ~/.claude -exec rm -f {} +'],
+  ['a launcher running xargs', 'arch -arm64 xargs rm -rf'],
+  ['npm exec', 'npm exec -- rm -rf ~/.claude'],
+  ['conda run', 'conda run rm -rf ~/.claude'],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
@@ -221,6 +241,14 @@ const ALLOWED: [string, string][] = [
   ['an unrelated broken quote', "echo don't"],
   ['an ordinary command', 'npm test && git status'],
   ['a plain pattern in a project', 'rm *.log'],
+  ['a descending pattern in a temp folder', 'rm -f /tmp/*/x.log'],
+  ['a descending pattern in a project', 'rm code/*/x.log'],
+  ['a variable program after a docker --rm', 'docker run -e A=1 --rm img && "$PY" x.py'],
+  ['a launcher with an unrelated path', 'arch -arm64 rm -r build'],
+  ['words that only name programs', 'touch rm find sh'],
+  ['npm removing a package', 'npm rm -f left-pad'],
+  ['a recursive copy in unreadable syntax', '((1)); cp -r a b'],
+  ['a HOME read by value', 'ls "$HOME/code"; rm -rf build'],
   ['force with a pattern in a temp folder', 'rm -f /tmp/*.log'],
   ['a variable program that extracts', '"$TAR" -xf a.tar -C "$D"'],
   ['a variable program that searches', '$GREP -rn foo "$DIR"'],
@@ -310,4 +338,21 @@ test('a cd that cannot be read in an earlier call still counts', async ($, on) =
   expect(rm.deny).toMatch(/isn't a literal path/)
   const full = await $.tool.call({ tool: 'Bash', command: `rm -rf ${PROJECT}/build` })
   expect(full.deny).toBeUndefined()
+})
+
+test('a cd in an earlier command that could not be read still counts', async ($, on) => {
+  await bash($, on, 'cd ~/.claude && echo $((1+1))')
+  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf projects' })
+  expect(rm.deny).toMatch(/isn't a literal path/)
+})
+
+test('unreadable syntax with no cd leaves later deletes alone', async ($, on) => {
+  await bash($, on, 'echo $((1+1))')
+  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+  expect(rm.deny).toBeUndefined()
+})
+
+test('a pattern without -r is not called recursive', async ($, on) => {
+  const { deny } = await bash($, on, 'rm -f ~/.claude/*.tmp')
+  expect(deny).toMatch(/blocked this delete/)
 })
