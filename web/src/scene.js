@@ -929,7 +929,7 @@ const PENDANT_Y=5.2
 const AISLE_GAP=3.2
 const OFFICE_GAP=.9
 const LIGHTS_OUT_DIM=.45
-const SCREEN_OFF=.03,SOLO_BOARD=.6,MODAL_TV_ROWS=8
+const SCREEN_OFF=.03,SOLO_LINES=4,SOLO_BOARD=.6,MODAL_TV_ROWS=8
 const SLEEP_REFLECTIONS=.06
 const NIGHT_REFLECTIONS=.45
 const REFLECTION_CHECK_S=2
@@ -1321,10 +1321,50 @@ function statusOfRow(p){
   return{label:p.prOutcome||'Idle',fg:UI.muted,bg:UI.idleWash,rank:4}
 }
 function roundRect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath()}
+// One person on a small screen: their work gets the room a table of rows would use.
+function fitText(g,text,max){let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+function rowTiming(p){return p.isWaiting&&p.jobStartedAt?`${Math.max(1,Math.round((Date.now()/1000-p.jobStartedAt)/60))}m`:shortAge(p.lastActivityAt)}
+// Wraps on spaces, then splits anything still too wide, such as a long path.
+function soloLines(g,text,width){
+  return wrapped(g,text,width).flatMap(line=>{
+    const parts=[];let part=''
+    for(const letter of line){if(part&&g.measureText(part+letter).width>width){parts.push(part);part=letter}else part+=letter}
+    return [...parts,part]
+  })
+}
+function soloWork(p){
+  if(p.request)return ['Needs you',p.request.message]
+  if(p.isWaiting&&p.jobs?.[0])return ['Job running',p.jobs[0]]
+  if(p.isRunning)return ['Working on',p.step||p.jobs?.[0]||p.recent?.[p.recent.length-1]||p.title]
+  return p.lastUpdate?['Last update',p.lastUpdate]:['Idle',p.title]
+}
+function drawSoloRow(g,p,face,W,H){
+  const margin=24,y=124,status=statusOfRow(p),isIdle=status.rank===4
+  g.save();g.beginPath();g.arc(margin+30,y,30,0,7);g.clip();g.fillStyle=UI.hover;g.fillRect(margin,y-30,60,60);if(face)g.drawImage(face,margin,y-30,60,60);g.restore()
+  const timing=rowTiming(p)
+  g.font='22px '+boardFont;const timingW=g.measureText(timing).width
+  g.font='500 20px '+boardFont;const pillW=g.measureText(status.label).width+28
+  g.textAlign='left';g.fillStyle=UI.text;g.font='600 34px '+boardFont
+  const name=fitText(g,p.name,W-margin*2-76-18-pillW-18-timingW);g.fillText(name,margin+76,y)
+  const pillX=margin+76+g.measureText(name).width+18
+  g.font='500 20px '+boardFont
+  g.fillStyle=status.bg;roundRect(g,pillX,y-18,pillW,36,18);g.fill();g.fillStyle=status.fg;g.fillText(status.label,pillX+14,y+1)
+  g.textAlign='right';g.fillStyle=UI.muted;g.font='22px '+boardFont;g.fillText(timing,W-margin,y);g.textAlign='left'
+  g.fillStyle=UI.line;g.fillRect(margin,170,W-margin*2,1)
+  const [heading,work]=soloWork(p)
+  g.fillStyle=UI.muted;g.font='500 22px '+boardFont;g.fillText(heading,margin,200)
+  g.fillStyle=isIdle?'#d4d4d8':UI.text;g.font='500 40px '+boardFont
+  const lines=soloLines(g,String(work||''),W-margin*2),max=SOLO_LINES
+  lines.slice(0,max).forEach((line,i)=>{
+    let text=line
+    if(i===max-1&&lines.length>max){while(g.measureText(`${text}…`).width>W-margin*2&&text.length>1)text=text.slice(0,-1);text+='…'}
+    g.fillText(text,margin,250+i*52)
+  })
+}
 function drawBoard(board){
   const {g,team,faces,texture,live}=board,W=960,H=480,lead=team.lead
   const members=team.members.map(m=>people.find(x=>x.id===m.id)||m)
-  const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+  const fit=(text,max)=>fitText(g,text,max)
   const back=g.createLinearGradient(0,0,0,H);back.addColorStop(0,'#10141b');back.addColorStop(1,'#0a0d12');g.fillStyle=back;g.fillRect(0,0,W,H)
   // The team's own header, with the time and task progress on the right.
   const isTeam=team.members.length>1
@@ -1340,6 +1380,8 @@ function drawBoard(board){
     g.fillStyle=UI.hover;roundRect(g,W-146,58,122,8,4);g.fill();if(done){g.fillStyle=UI.accent;roundRect(g,W-146,58,Math.max(8,122*done/total),8,4);g.fill()}
   }
   g.textAlign='left'
+  if(!isTeam)drawSoloRow(g,members[0],faces.get(members[0].id),W,H)
+  else{
   // Section label.
   const margin=24,right=W-24,nameX=margin+50,pillX=268,workX=420,ageX=right-16
   g.fillStyle=UI.muted;g.font='500 13px '+boardFont;g.fillText('Name',nameX,106);g.fillText('Status',pillX,106);g.fillText('Working on',workX,106)
@@ -1355,12 +1397,13 @@ function drawBoard(board){
     g.font='500 13px '+boardFont;const pillW=g.measureText(status.label).width+22
     g.fillStyle=status.bg;roundRect(g,pillX,y-12,pillW,24,12);g.fill();g.fillStyle=status.fg;g.fillText(status.label,pillX+11,y+.5)
     const doing=p.request?.message||p.jobs?.[0]||(p.isRunning?p.step||p.recent?.[p.recent.length-1]:'')||p.label||p.title
-    const timing=p.isWaiting&&p.jobStartedAt?`${Math.max(1,Math.round((Date.now()/1000-p.jobStartedAt)/60))}m`:shortAge(p.lastActivityAt)
+    const timing=rowTiming(p)
     g.fillStyle=isIdle?UI.muted:UI.text;g.font='14px '+boardFont;g.fillText(fit(doing,right-workX-76),workX,y)
     g.textAlign='right';g.fillStyle=UI.faint;g.font='13px '+boardFont;g.fillText(timing,ageX,y);g.textAlign='left'
     if(i<rows.length-1){g.fillStyle=UI.line;g.fillRect(margin,top+53,right-margin,1)}
   })
   if(members.length>6){g.fillStyle=UI.muted;g.font='13px '+boardFont;g.textAlign='right';g.fillText(`+${members.length-6} more`,right,H-10);g.textAlign='left'}
+  }
   // A faint sheen, since this is glass in a sunny room.
   const sheen=g.createLinearGradient(0,0,W,H);sheen.addColorStop(0,'rgba(255,255,255,0)');sheen.addColorStop(.42,'rgba(170,205,240,.025)');sheen.addColorStop(.5,'rgba(170,205,240,.055)');sheen.addColorStop(.58,'rgba(170,205,240,.015)');sheen.addColorStop(1,'rgba(255,255,255,0)')
   g.fillStyle=sheen;g.fillRect(0,0,W,H)

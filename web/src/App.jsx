@@ -1052,10 +1052,10 @@ export default function App() {
   const lastRequestIds = useRef(requestIds)
   useEffect(() => {
     const known = lastRequestIds.current.split(',')
-    if (requestIds && requestIds.split(',').some(id => !known.includes(id))) wakeRoom()
+    if (!shutDown && requestIds && requestIds.split(',').some(id => !known.includes(id))) wakeRoom()
     lastRequestIds.current = requestIds
   }, [requestIds])
-  const roomPace = idlePace === 'asleep' && requestIds ? 'watching' : idlePace
+  const roomPace = idlePace === 'asleep' && requestIds && !shutDown ? 'watching' : idlePace
   useEffect(() => {
     if (voices.speaker) wakeRoom()
   }, [voices.speaker])
