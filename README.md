@@ -86,9 +86,40 @@ On an iPad, tap to open someone, drag with one finger to pan, pinch to zoom, and
 
 To see the presentation prototype, add `?present` to the address, or `?present=Name` to choose who presents. A teammate shows "ready for you" and walks you through a fixed excerpt of a report, with each claim marked by a small code check. Your choice is saved only in this browser.
 
+## Your iPad
+
+You can open the office from your own devices over [Tailscale](https://tailscale.com). It's off unless you turn it on. Until then, the office only answers on this Mac.
+
+Install Tailscale on the Mac and the iPad and turn on HTTPS for your tailnet, then run these on the Mac, using your Mac's Tailscale name:
+
+```bash
+scripts/ipad-access.py on my-mac.tail1234.ts.net
+```
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.agentoffice.server
+```
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8795
+```
+
+```bash
+scripts/ipad-access.py code
+```
+
+Open `https://my-mac.tail1234.ts.net` on the iPad and enter the code. It works once and lasts 10 minutes, and five wrong tries end it. A device stays signed in for 30 days. Use `serve`, never `funnel`, which would put the office on the public internet.
+
+A signed-in device can do what the office can do on the Mac: read sessions, see their files and media, send messages, and start or stop Telegram Mia. Some buttons, such as opening a session in the Claude app, act on the Mac rather than the iPad.
+
+- See devices: `scripts/ipad-access.py devices`
+- Sign one out: `scripts/ipad-access.py revoke ID`, or `revoke all`
+- Sign-ins and refused tries go in `~/.agent-office/server.log`, without codes or cookies.
+- Turn it all off: `scripts/ipad-access.py off`, then `tailscale serve --https=443 off`. Sign-in stops working at once.
+
 ## Privacy and security
 
-- The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.
+- The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start. [Your iPad](#your-ipad) adds a second loopback port for a proxy, off by default, where every request needs a signed-in device.
 - Session titles, folders and names are stored in `~/.agent-office`.
 - Secret-looking files such as `.env` aren't shown.
 - The server reads Claude Code's transcript files in `~/.claude/projects`, and the app's session records to find them. Videos and images an agent shared are streamed through private signed links.

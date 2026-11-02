@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import sys
@@ -26,7 +27,11 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qs, urlencode, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from remote_access import COOKIE, DEVICE_S, RemoteAccess  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
@@ -147,6 +152,36 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8794
 TOKEN = secrets.token_urlsafe(32)
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 ALLOWED_ORIGINS = {f"http://{host}" for host in ALLOWED_HOSTS}
+REMOTE = RemoteAccess(DATA)
+# Tailscale sets this on public Funnel traffic and removes any copy a client sends.
+FUNNEL_HEADER = "Tailscale-Funnel-Request"
+# Added by a proxy. The Mac's own browser never sends these, so they mean a route has been pointed at the wrong port.
+PROXY_HEADERS = ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Tailscale-User-Login", "Tailscale-User-Name", FUNNEL_HEADER)
+SIGN_IN_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Office</title>
+<body style="font:16px system-ui;margin:12vh auto;max-width:26em;padding:0 16px">
+<h1>Sign in to the office</h1>
+<p>On your Mac, run <code>scripts/ipad-access.py code</code>, then enter the code here.</p>
+<form id="form">
+<p><label>Code<br><input id="code" autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" required style="font:inherit;width:100%;box-sizing:border-box;padding:8px"></label></p>
+<p><label>This device's name<br><input id="name" value="iPad" maxlength="40" style="font:inherit;width:100%;box-sizing:border-box;padding:8px"></label></p>
+<p><button style="font:inherit;padding:8px 16px">Sign in</button></p>
+<p id="problem" role="alert"></p>
+</form>
+<script>
+document.getElementById("form").onsubmit = async event => {
+  event.preventDefault()
+  const problem = document.getElementById("problem")
+  problem.textContent = ""
+  try {
+    const response = await fetch("/api/sign-in", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: document.getElementById("code").value, name: document.getElementById("name").value }) })
+    if (response.ok) return window.location.reload()
+    problem.textContent = (await response.json()).error
+  } catch {
+    problem.textContent = "Couldn't reach the office."
+  }
+}
+</script>
+</body>"""
 MAX_OUTPUT = 200_000
 MAX_MESSAGE = 20_000
 SESSION_ID = re.compile(r"^local_[0-9a-f-]{36}$")
@@ -929,10 +964,10 @@ def file_diff(session_id, relative):
     return {"original": original if code == 0 else "", "modified": modified.decode("utf-8", "replace")}
 
 
-def office_page():
+def office_page(token=TOKEN):
     """The app, or a page saying how to get it. Pulling can remove the built files until the next build finishes."""
     try:
-        return 200, (DIST / "index.html").read_text().replace("__OFFICE_TOKEN__", TOKEN)
+        return 200, (DIST / "index.html").read_text().replace("__OFFICE_TOKEN__", token)
     except FileNotFoundError:
         return 503, NO_INTERFACE_PAGE.replace("__UPDATE__", html.escape(str(ROOT / "scripts" / "update.sh"))).replace("__BUILD__", html.escape(str(ROOT / "scripts" / "build.sh")))
 
@@ -1695,7 +1730,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def guarded(self):
         # The host check stops DNS rebinding; the origin and token checks stop other sites.
-        if self.headers.get("Host") not in ALLOWED_HOSTS:
+        if self.headers.get("Host") not in ALLOWED_HOSTS or any(self.headers.get(name) for name in PROXY_HEADERS):
             raise Refused(403, "Bad host.")
         origin = self.headers.get("Origin")
         if origin and origin not in ALLOWED_ORIGINS:
@@ -1707,12 +1742,15 @@ class Handler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(supplied.encode(), TOKEN.encode()):
             raise Refused(403, "Bad token.")
 
+    def page_token(self):
+        return TOKEN
+
     def do_GET(self):
         try:
             self.guarded()
             url = urlparse(self.path)
             if url.path == "/":
-                status, page = office_page()
+                status, page = office_page(self.page_token())
                 self.reply(status, page.encode(), "text/html; charset=utf-8")
                 return
             if url.path.startswith("/assets/"):
@@ -1887,6 +1925,142 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(500, {"error": "The office server hit an error."})
 
 
+class RemoteHandler(Handler):
+    """The only way in from another device. Sign-in is checked here, by which port was reached, so no header can get around it."""
+
+    device = None
+    # Until sign-in shows who this is, so a silent connection can't hold a thread. Signed-in streams may pause.
+    timeout = 10
+    # The timeout above is per read, so a slow drip also needs a limit on the whole request.
+    sign_in_limit_s = 10
+
+    def setup(self):
+        super().setup()
+        self.sign_in_limit = threading.Timer(self.sign_in_limit_s, self.close_connection_now)
+        self.sign_in_limit.daemon = True
+        self.sign_in_limit.start()
+
+    def finish(self):
+        self.sign_in_limit.cancel()
+        try:
+            super().finish()
+        except OSError:
+            pass
+
+    def close_connection_now(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def end_headers(self):
+        self.send_header("X-Frame-Options", "DENY")
+        for name, value in self.cookies_to_set:
+            self.send_header(name, value)
+        # A kept-alive connection reuses this object, and a cookie must only go to whoever signed in.
+        self.cookies_to_set = ()
+        super().end_headers()
+
+    cookies_to_set = ()
+
+    def guarded(self):
+        host = REMOTE.host()
+        if not host or self.headers.get("Host") != host or self.headers.get(FUNNEL_HEADER):
+            raise Refused(403, "Bad host.")
+        origin = self.headers.get("Origin")
+        if origin and origin != f"https://{host}":
+            raise Refused(403, "Bad origin.")
+
+    def sign_in_cookie(self):
+        try:
+            morsel = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
+        except CookieError:
+            return ""
+
+        return morsel.value if morsel else ""
+
+    def gate(self):
+        self.guarded()
+        self.device = REMOTE.device_for(self.sign_in_cookie())
+        if self.device:
+            self.sign_in_limit.cancel()
+            self.connection.settimeout(None)
+
+    def page_token(self):
+        # Only for this device, so the office's own token never leaves the Mac.
+        return hmac.new(hashlib.sha256(f"device\0{TOKEN}".encode()).digest(), self.device.encode(), hashlib.sha256).hexdigest()
+
+    def authorized(self):
+        supplied = self.headers.get("X-Office-Token", "")
+        if not self.device or not secrets.compare_digest(supplied.encode(), self.page_token().encode()):
+            raise Refused(403, "Bad token.")
+
+    def do_GET(self):
+        try:
+            self.gate()
+        except Refused as refused:
+            self.reply(refused.status, {"error": str(refused)})
+            return
+        if self.device:
+            super().do_GET()
+        elif urlparse(self.path).path == "/":
+            self.reply(401, SIGN_IN_PAGE.encode(), "text/html; charset=utf-8")
+        else:
+            # The page reloads on this and lands on the sign-in form.
+            self.reply(403, {"error": "Bad token."})
+
+    def do_POST(self):
+        try:
+            self.gate()
+            if urlparse(self.path).path == "/api/sign-in":
+                self.sign_in()
+            elif self.device:
+                super().do_POST()
+            else:
+                raise Refused(403, "Bad token.")
+        except Refused as refused:
+            self.reply(refused.status, {"error": str(refused)})
+        except (ValueError, AttributeError):
+            self.reply(400, {"error": "Bad request."})
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            pass
+        except Exception:
+            traceback.print_exc()
+            self.reply(500, {"error": "The office server hit an error."})
+
+    def sign_in(self):
+        if self.headers.get("Origin") != f"https://{REMOTE.host()}":
+            raise Refused(403, "Bad origin.")
+        length = int(self.headers.get("Content-Length") or 0)
+        if not 0 <= length <= 2000:
+            raise Refused(413, "That message is too long.")
+        body = json.loads(self.rfile.read(length))
+        cookie, problem = REMOTE.sign_in(body.get("code", ""), body.get("name", ""))
+        if problem:
+            print(f"Device sign-in refused: {problem}", file=sys.stderr, flush=True)
+        else:
+            print(f"Device signed in: {cookie.split('.')[0]}", file=sys.stderr, flush=True)
+        if problem == "locked":
+            raise Refused(429, "Too many tries. Make a new code on your Mac.")
+        if problem:
+            raise Refused(403, "That code isn't right, or it has expired.")
+        self.cookies_to_set = [("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={DEVICE_S}; Secure; HttpOnly; SameSite=Strict")]
+        self.reply(200, {"status": "ok"})
+
+
+def remote_address():
+    """Where to listen for other devices, or None while it's off. Always loopback: the proxy is what reaches them."""
+
+    return ("127.0.0.1", REMOTE.port()) if REMOTE.host() and REMOTE.port() != PORT else None
+
+
+def serve_remote(address):
+    try:
+        ThreadingHTTPServer(address, RemoteHandler).serve_forever()
+    except OSError as problem:
+        print(f"Couldn't start device access: {problem}", file=sys.stderr, flush=True)
+
+
 if __name__ == "__main__":
     os.umask(0o077)
     DATA.mkdir(mode=0o700, exist_ok=True)
@@ -1901,4 +2075,6 @@ if __name__ == "__main__":
         print(f"The interface isn't built. Run {ROOT / 'scripts' / 'update.sh'}, or {ROOT / 'scripts' / 'build.sh'} outside the checkout the office runs from.", file=sys.stderr, flush=True)
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
+    if remote_address():
+        threading.Thread(target=serve_remote, args=(remote_address(),), daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
