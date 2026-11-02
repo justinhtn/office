@@ -6,7 +6,7 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Maximize, Minus, Plus,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
@@ -183,11 +183,15 @@ function Presentation({ person, everyone, onClose }) {
 function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, onPick, onSpace, onHome }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
+  const [hasSavedView, setHasSavedView] = useState(false)
+  const [isHandTool, setIsHandTool] = useState(false)
+  const homeLabel = hasSavedView ? 'Back to your default view' : 'Back to the whole office'
   pick.current = onPick
   space.current = onSpace
   useEffect(() => {
     scene.current = createScene(stage.current, canvas.current, tags.current, (id, isMap) => pick.current(id, isMap), (key, isMap) => space.current(key, isMap))
     mapHost.current?.appendChild(scene.current.map)
+    setHasSavedView(scene.current.hasSavedView())
 
     return () => scene.current.dispose()
   }, [])
@@ -197,6 +201,10 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   useEffect(() => {
     scene.current.setLightsOut(lightsOut)
   }, [lightsOut])
+  useEffect(() => {
+    // Its button is hidden during a presentation, so it rests until that ends.
+    scene.current.setHandTool(isHandTool && !viewShift)
+  }, [isHandTool, viewShift])
   useEffect(() => {
     scene.current.setPace(pace)
   }, [pace])
@@ -215,10 +223,13 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
-      <div className="zoom-controls" role="group" aria-label="Zoom the office">
+      <div className="zoom-controls" role="group" aria-label="Zoom the office" onMouseUp={event => event.target.closest('button')?.blur()}>
         <button aria-label="Zoom in" title="Zoom in" onClick={() => scene.current.zoomBy(-ZOOM_STEP)}><Plus size={16} /></button>
         <button aria-label="Zoom out" title="Zoom out" onClick={() => scene.current.zoomBy(ZOOM_STEP)}><Minus size={16} /></button>
-        <button aria-label="Back to the whole office" title="Back to the whole office" onClick={() => { scene.current.resetView(); onHome() }}><Maximize size={15} /></button>
+        <button className={isHandTool ? 'on' : ''} aria-label="Hand tool: drag to pan" aria-pressed={isHandTool} title={isHandTool ? 'Hand tool on: drag to pan' : 'Hand tool: drag to pan'} onClick={() => setIsHandTool(!isHandTool)}><Hand size={15} /></button>
+        <button aria-label={homeLabel} title={homeLabel} onClick={() => { scene.current.resetView(); onHome() }}><Maximize size={15} /></button>
+        <button className={hasSavedView ? 'on' : ''} aria-label="Set this view as the default" title="Set this view as the default" onClick={() => { scene.current.saveView(); setHasSavedView(true); onHome() }}><Pin size={15} /></button>
+        {hasSavedView && <button aria-label="Clear the default view" title="Clear the default view, and fit the whole office" onClick={() => { scene.current.clearSavedView(); setHasSavedView(false); onHome() }}><RotateCcw size={15} /></button>}
       </div>
     </div>
   )
