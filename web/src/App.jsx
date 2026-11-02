@@ -1004,6 +1004,8 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
     setShowPath(path)
   }
   const boss = everyone.find(other => other.id === person.startedBy)
+  // Their room's TV already says what they're doing. Mia, the lounge and anyone away have none.
+  const hasTv = teams.some(team => team.members.some(member => member.id === person.id))
 
   return (
     <>
@@ -1019,7 +1021,7 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
           <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : person.prOutcome || `Idle ${age(person.lastActivityAt)}`}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
-        {person.title && !person.title.startsWith(person.label) && <p className="section-doing">{person.title}</p>}
+        {!hasTv && person.title && !person.title.startsWith(person.label) && <p className="section-doing">{person.title}</p>}
         <Memory person={person} />
         {person.request && <RequestBanner person={person} onShow={show} />}
         <div className="section-actions">
