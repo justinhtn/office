@@ -16,8 +16,11 @@ fi
 if command -v claude >/dev/null 2>&1; then
   echo "Running plugin tests"
   claude plugin test plugin
+elif [ -n "${CI:-}" ]; then
+  echo "Plugin tests can't run: no claude command in CI" >&2
+  exit 1
 else
-  echo "Skipping plugin tests: no claude command here"
+  echo "Skipping plugin tests: no claude command here. CI still runs them."
 fi
 
 echo "Building the interface"

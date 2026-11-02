@@ -32,4 +32,6 @@ jobs:
           node-version: "22.17.0"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # The plugin tests run through this command. They need no login or API key.
+      - run: npm install --global @anthropic-ai/claude-code@2.1.309
       - run: scripts/check.sh
