@@ -113,11 +113,13 @@ export function portrait(p) {
 }
 
 // The N64-style room. Everything else in the app is ordinary React.
+// ?test draws a small, slow room, enough to check layout without working the fan. Measure in normal mode.
+const TEST_MODE=new URLSearchParams(location.search).has('test'),TEST_PIXEL_RATIO=.6
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
 let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,modalTv=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
-renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
+renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
@@ -125,7 +127,7 @@ const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
 const camera = new THREE.PerspectiveCamera(46, 1, .1, 300)
 const hemi = new THREE.HemisphereLight(0xfffaf0, 0xc9b8a2, .62); scene.add(hemi)
-const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
+const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.setScalar(TEST_MODE?512:2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
 let world = new THREE.Group(); scene.add(world)
 
 const mats = {}
@@ -1364,7 +1366,10 @@ function drawBoard(board){
   g.fillStyle=sheen;g.fillRect(0,0,W,H)
   texture.needsUpdate=true
 }
+// Shared by every screen, since blurring it is slow and rooms rebuild often.
+let sharedReflection=null
 function glassReflection(){
+  if(sharedReflection)return sharedReflection
   const texture=paintTex(1024,512,(g,w,h)=>{
     g.fillStyle='#000';g.fillRect(0,0,w,h)
     // Bright panes of the far windows, slanted across the glass.
@@ -1373,7 +1378,8 @@ function glassReflection(){
     g.restore()
     const top=g.createLinearGradient(0,0,0,h*.32);top.addColorStop(0,'rgba(165,180,200,.1)');top.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=top;g.fillRect(0,0,w,h*.32)
   })
-  texture.wrapS=THREE.RepeatWrapping
+  texture.wrapS=THREE.RepeatWrapping;texture.keep=true
+  sharedReflection=texture
   return texture
 }
 function projector(team,x0,cz){
@@ -1384,7 +1390,7 @@ function projector(team,x0,cz){
   box(world,.09,y-.3,.16,0x3a3e46,x-.06,(y-.3)/2+.05,cz)
   box(world,.09,.05,2.2,0x3a3e46,x-.06,.11,cz)
   ;[-1,1].forEach(side=>{box(world,1,.05,.09,0x3a3e46,x-.06,.11,cz+side*1.05);[-.42,.42].forEach(dx=>{const wheel=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,.04,10),mat(0x17181b));wheel.rotation.x=Math.PI/2;wheel.position.set(x-.06+dx,.05,cz+side*1.05);world.add(wheel)})})
-  const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=960
+  const canvas=document.createElement('canvas');canvas.width=Math.round(1920*size);canvas.height=Math.round(960*size)
   const texture=crispTexture(canvas)
   const panel=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture}));panel.rotation.y=Math.PI/2;panel.position.set(x+.031,y,cz);world.add(panel)
   // Light from the screen, falling on the floor in front of it.
@@ -1393,7 +1399,7 @@ function projector(team,x0,cz){
   // A glass front that reflects the windows and shifts as the camera moves.
   const reflection=glassReflection();
   const glassFront=new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:reflection,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));glassFront.rotation.y=Math.PI/2;glassFront.position.set(x+.036,y,cz);world.add(glassFront)
-  const g=canvas.getContext('2d');g.scale(2,2)
+  const g=canvas.getContext('2d');g.scale(2*size,2*size)
   const board={g,reflection,team,faces:new Map(),texture,live:m=>people.find(x=>x.id===m.id)||m,nextDraw:0,panel,spill}
   boards.push(board)
   team.members.slice(0,12).forEach(m=>portrait(m).then(url=>{const image=new Image();image.onload=()=>{board.faces.set(m.id,image);drawBoard(board)};image.src=url},()=>{}))
@@ -1707,6 +1713,8 @@ canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingCl
 canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
+// Milliseconds between frames. Nothing is drawn while the page is hidden.
+const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
 function loop(){const t=clock.getElapsedTime()
@@ -1733,7 +1741,7 @@ function loop(){const t=clock.getElapsedTime()
   const fit=view.dist+view.zoom
   camera.position.set(view.center.x+Math.sin(view.az)*Math.cos(view.el)*fit,view.center.y+Math.sin(view.el)*fit,view.center.z+Math.cos(view.az)*Math.cos(view.el)*fit);camera.lookAt(view.center)
   marker.visible=false
-  const dt=Math.min(.1,t-lastTick);lastTick=t
+  const dt=Math.min(TEST_MODE?.25:.1,t-lastTick);lastTick=t
   actors.forEach(a=>{
     if(a.life?.undo)a.life.undo()
     if(a.mixer)a.mixer.update(dt)
@@ -1747,7 +1755,7 @@ function loop(){const t=clock.getElapsedTime()
     if(a.route)walk(a,dt)
     if(a.p.id===selected&&!focusKey){marker.visible=true;marker.position.set(a.g.position.x,a.g.position.y+(a.pose==='wave'||a.pose==='walk'?2.95:2.4)+Math.sin(t*4)*.05,a.g.position.z);marker.rotation.y=t*2}
   })
-  boards.forEach(board=>{if(t>board.nextDraw){board.nextDraw=t+4;drawBoard(board)};board.reflection.offset.x=view.az*.32+camera.position.z*.012})
+  boards.forEach(board=>{if(!lightsOut&&t>board.nextDraw){board.nextDraw=t+4;drawBoard(board)};board.reflection.offset.x=view.az*.32+camera.position.z*.012})
   // People move slightly, so their shadows needn't redraw every frame; walkers keep them current.
   shadowTick=(shadowTick+1)%5
   sun.shadow.needsUpdate=shadowTick===0||actors.some(a=>a.route)
@@ -1758,7 +1766,7 @@ function loop(){const t=clock.getElapsedTime()
   let thoughtRoom=3
   tags.forEach(({el,a,key,isZone})=>{if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
 }
-const timer=setInterval(loop,33)
+let pace='active',timer=setInterval(loop,PACE_MS.active)
 let signature=''
 return {
   update(nextPeople,nextSelected,nextFocus,nextSpeaker=null,nextUsage=null){
@@ -1771,6 +1779,13 @@ return {
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
+  },
+  setPace(next){
+    if(next===pace)return
+    pace=next
+    clearInterval(timer)
+    timer=PACE_MS[next]?setInterval(loop,PACE_MS[next]):null
+    if(timer)loop()
   },
   setLightsOut(isOut){
     if(isOut===lightsOut)return
