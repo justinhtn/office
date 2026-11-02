@@ -391,3 +391,4 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .zoom-controls button:hover { background: rgba(255, 255, 255, .16); }
 .zoom-controls button:focus-visible { outline: 2px solid #fff; }
 .presenting .zoom-controls { display: none; }
+.zoom-controls button.on { color: #ffc824; }

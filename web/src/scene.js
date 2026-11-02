@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { readSavedView, writeSavedView } from './savedView.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
@@ -1226,6 +1227,8 @@ function build(){
 }
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
+const PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
+let isAdjusted=false,savedView=readSavedView()
 const fullView={center:new THREE.Vector3(),position:new THREE.Vector3()},cameraLook=new THREE.Vector3()
 // The closest camera distance that still shows the whole floor and back walls.
 function fitCamera(){
@@ -1243,6 +1246,9 @@ function fitCamera(){
   if(!lowFits){home.dist=whole.dist;home.center.copy(whole.center)}
   const wider=whole.dist*FULL_VIEW_MARGIN,dir=viewDirection(FULL_VIEW.az,FULL_VIEW.el)
   fullView.center.copy(whole.center);fullView.position.copy(whole.center).addScaledVector(dir,wider)
+  // Rooms are framed as before. Only home follows a saved view, and zooming out still reaches the whole office.
+  home.roomLimit=home.dist
+  if(savedView){home.az=savedView.az;home.el=savedView.el;home.dist=savedView.dist;home.center.set(savedView.x,savedView.y,savedView.z)}
   if(first){view.dist=home.dist;view.center.copy(home.center);view.az=home.az;view.el=home.el}
 }
 function viewDirection(az,el){return new THREE.Vector3(Math.sin(az)*Math.cos(el),Math.sin(el),Math.cos(az)*Math.cos(el))}
@@ -1264,8 +1270,20 @@ function frameWholeOffice(az,el){
   // Aim right of that, so the office sits to the left of the panel.
   return {dist,center:center.addScaledVector(right,covered*tanFull*dist)}
 }
+// Moves the view with the pointer, across the floor.
+function panBy(dx,dy){
+  isAdjusted=true
+  const look=camera.getWorldDirection(new THREE.Vector3()),steep=Math.max(PAN_MIN_STEEPNESS,-look.y),right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0)
+  right.y=0;right.normalize();look.y=0;look.normalize()
+  const perPixel=2*Math.tan(camera.fov*Math.PI/360)*camera.position.distanceTo(cameraLook)/Math.max(1,stage.clientHeight)
+  viewPan.addScaledVector(right,-dx*perPixel).addScaledVector(look,dy*perPixel/steep)
+}
+function keepPanOnFloor(aim){
+  const {W,D}=floorSize,keep=(at,half,offset)=>Math.min(Math.max(half+PAN_MARGIN,at),Math.max(Math.min(-half-PAN_MARGIN,at),at+offset))-at
+  viewPan.x=keep(aim.x,W/2,viewPan.x);viewPan.z=keep(aim.z,D/2,viewPan.z)
+}
 function zoomBy(amount){
-  isManual=true
+  isAdjusted=true
   view.zoom=Math.min(ZOOM_OUT_RANGE,Math.max(-view.dist+6,view.zoom+amount))
 }
 // Ribbed black rubber under the desks and chairs.
@@ -1753,7 +1771,7 @@ function drawMap(){
     const moved=mapFurnitureShift(key,o,scale);g.save();g.translate(near.x+moved.x,near.y+moved.y);drawMapFurniture(g,key,o,scale,x,y);g.restore()
   })
   // What the camera can see, as a faint cone.
-  const ox=Math.min(MAP_WIDTH,Math.max(0,x(camera.position.x))),oy=Math.min(height,Math.max(0,y(camera.position.z))),turn=Math.atan2(view.center.z-camera.position.z,view.center.x-camera.position.x),spread=Math.atan(Math.tan(camera.fov*Math.PI/360)*camera.aspect),reach=MAP_VIEW_REACH*scale
+  const ox=Math.min(MAP_WIDTH,Math.max(0,x(camera.position.x))),oy=Math.min(height,Math.max(0,y(camera.position.z))),turn=Math.atan2(cameraLook.z-camera.position.z,cameraLook.x-camera.position.x),spread=Math.atan(Math.tan(camera.fov*Math.PI/360)*camera.aspect),reach=MAP_VIEW_REACH*scale
   const cone=g.createRadialGradient(ox,oy,0,ox,oy,reach);cone.addColorStop(0,'rgba(255,255,255,.1)');cone.addColorStop(1,'rgba(255,255,255,0)')
   g.fillStyle=cone;g.beginPath();g.moveTo(ox,oy);g.arc(ox,oy,reach,turn-spread,turn+spread);g.closePath();g.fill()
   const seated=new Set()
@@ -1784,10 +1802,15 @@ map.addEventListener('pointermove',e=>{
 map.addEventListener('pointerleave',()=>{mapHover=null;drawMap()})
 map.addEventListener('click',e=>{const {person,spaceKey}=mapTarget(e);if(person)onPick(person.id,true);else if(spaceKey)onSpace(spaceKey,true)})
 canvas.addEventListener('pointerleave',e=>{if(!stage.contains(e.relatedTarget))checkInKey=null})
-canvas.addEventListener('pointerdown',e=>{isManual=true;drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el};moved=false;canvas.setPointerCapture(e.pointerId)})
-canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('contextmenu',e=>e.preventDefault())
+canvas.addEventListener('pointerdown',e=>{
+  const isPan=e.button===2||e.shiftKey
+  if(!isPan)isManual=true
+  drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el,isPan,lastX:e.clientX,lastY:e.clientY};moved=e.button===2;canvas.setPointerCapture(e.pointerId)
+})
+canvas.addEventListener('pointermove',e=>{if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
 canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}})
-canvas.addEventListener('wheel',e=>{e.preventDefault();zoomBy(e.deltaY*.02)},{passive:false})
+canvas.addEventListener('wheel',e=>{e.preventDefault();if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 // Milliseconds between frames. Nothing is drawn while the page is hidden.
 const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
@@ -1803,7 +1826,7 @@ function loop(){const t=clock.getElapsedTime()
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
-    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.roomLimit??home.dist,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
     // Someone can be away from their team's table, on a break or in a meeting, so go to them.
@@ -1812,13 +1835,14 @@ function loop(){const t=clock.getElapsedTime()
     if(talker){if(speakerView===null)speakerView=clearViewOf(talker);const offset=speakerView-view.az;goal.x=talker.g.position.x;goal.y=talker.g.position.y+SPEAKER_HEIGHT;goal.z=talker.g.position.z;goal.az=view.az+Math.atan2(Math.sin(offset),Math.cos(offset));goal.el=SPEAKER_RISE;goal.d=SPEAKER_DISTANCE}
     view.center.x+=(goal.x-view.center.x)*ease;view.center.y+=(goal.y-view.center.y)*ease;view.center.z+=(goal.z-view.center.z)*ease
     view.az+=(goal.az-view.az)*ease;view.el+=(goal.el-view.el)*ease;view.dist+=(goal.d-view.dist)*ease
-    view.zoom+=(0-view.zoom)*ease
+    if(!isAdjusted){view.zoom+=(0-view.zoom)*ease;viewPan.multiplyScalar(1-ease)}
   }
   const fit=view.dist+view.zoom
   camera.position.set(view.center.x+Math.sin(view.az)*Math.cos(view.el)*fit,view.center.y+Math.sin(view.el)*fit,view.center.z+Math.cos(view.az)*Math.cos(view.el)*fit)
   // Pulling back rises out of the room, ending at the whole office.
   const pulled=smooth(0,ZOOM_OUT_RANGE,view.zoom)
-  camera.position.lerp(fullView.position,pulled);cameraLook.lerpVectors(view.center,fullView.center,pulled);camera.lookAt(cameraLook)
+  camera.position.lerp(fullView.position,pulled);cameraLook.lerpVectors(view.center,fullView.center,pulled)
+  keepPanOnFloor(cameraLook);camera.position.add(viewPan);cameraLook.add(viewPan);camera.lookAt(cameraLook)
   marker.visible=false
   const dt=Math.min(TEST_MODE?.25:.1,t-lastTick);lastTick=t
   actors.forEach(a=>{
@@ -1851,16 +1875,26 @@ return {
   update(nextPeople,nextSelected,nextFocus,nextSpeaker=null,nextUsage=null){
     selected=nextSelected
     if(nextSpeaker!==speaker)speakerView=null
-    if(nextSpeaker&&nextSpeaker!==speaker)isManual=false
+    if(nextSpeaker&&nextSpeaker!==speaker){isManual=false;isAdjusted=false}
     speaker=nextSpeaker
-    if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false}
+    if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false;isAdjusted=false}
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.isNamedTeam,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
   },
   zoomBy,
-  resetView(){isManual=false},
+  resetView(){isManual=false;isAdjusted=false},
+  hasSavedView(){return Boolean(savedView)},
+  saveView(){
+    const toCamera=camera.position.clone().sub(cameraLook),dist=toCamera.length()
+    savedView={x:cameraLook.x,y:cameraLook.y,z:cameraLook.z,az:Math.atan2(toCamera.x,toCamera.z),el:Math.asin(toCamera.y/dist),dist}
+    writeSavedView(savedView)
+    // Already there, so nothing moves.
+    view.center.set(savedView.x,savedView.y,savedView.z);view.az=savedView.az;view.el=savedView.el;view.dist=dist;view.zoom=0;viewPan.set(0,0,0)
+    isManual=false;isAdjusted=false;fitDirty=true
+  },
+  clearSavedView(){savedView=null;writeSavedView(null);isManual=false;isAdjusted=false;fitDirty=true},
   setViewShift(next){viewShift=next;applyViewShift()},
   setPace(next){
     if(next===pace)return
