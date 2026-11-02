@@ -10,13 +10,20 @@ const MAX_NESTING = 8
 const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'sleep', 'test', '[', 'mkdir', 'touch', 'cp', 'mv', 'cd', 'pushd', 'popd', 'git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'])
 // What these subcommands do with their arguments decides whether they can be vouched for.
 const RUNS_ARGUMENTS = /^(exec|x|dlx|explore)$/
+const PLAIN_GIT = /^(status|log|diff|show|add|commit|push|pull|fetch|branch|checkout|switch|merge|restore|reset|rm|mv|tag|stash|remote|rev-parse|ls-files|worktree|clone|init|blame)$/
+const PLAIN_GH = /^(pr|issue|api|run|repo|release|auth)$/
+// Flags that make a listed program run another one.
+const RUNS_A_PROGRAM = /^--(pre|hostname-bin|compress-program|upload-pack|receive-pack|exec)\b/
+// Predicates of find whose value is only compared, so it may be a variable.
+const FIND_VALUES = /^-(name|iname|path|ipath|regex|iregex|newer|size|mtime|mmin|type|maxdepth|mindepth|user|group|perm)$/
 const PLAIN_DOCKER = /^(rm|rmi|ps|images|logs|stop)$/
 const READERS = new Set(['cat', 'ls', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'stat', 'file'])
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
 const ADVICE = 'Run the delete as its own command with the full literal path, starting with /. Check it with ls first, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
 
 // Anything that could be a delete, once quotes are out of the way, including rm pieced together from variables.
-const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|-delete\b|\S*[?*[{]\S*\s+-[A-Za-z]*[rRf]|(^|\s)-[A-Za-z]*([rR][A-Za-z]*f|f[A-Za-z]*[rR])|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|(\$\w+|\$\{[^}]*\}|\$[@*]|\))\s+-[A-Za-z]*[rRf]/i
+// A pattern or variable counts only as the program itself, perhaps after a wrapper, followed anywhere on its line by a flag rm could use.
+const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|(])\s*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|(])\s*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s)\S*[?*[]\S*(\s|$)|(^|[\n;&|(])\s*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=)(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
 
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
@@ -74,6 +81,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
       }
       const inner = src.slice(start + 2, i - 1)
       if (/['"]/.test(inner)) throw unsure('quotes inside ${}')
+      if (inner.replace(/\$\{/g, '').includes('{') || inner.startsWith('(')) throw unsure('a brace or flag inside ${}')
       out.push(...lex(inner, nesting + 1, true))
     } else if (after === "'" && !isQuoted) {
       i += 2
@@ -82,6 +90,8 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
         i += src[i] === '\\' ? 2 : 1
       }
       word.text += decodeAnsi(src.slice(start + 2, i))
+      // What the program receives can differ from the decoded text, such as at a NUL.
+      word.isDynamic = true
       i++
       return
     } else if (after === '"' && !isQuoted) {
@@ -200,6 +210,7 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
           const stripsTabs = src[i] === '-'
           if (stripsTabs) i++
           while (isBlank(src[i] ?? '')) i++
+          const startOfEnd = i
           let end = ''
           let isQuoted = false
           while (i < src.length && !/[\s;|&()<>]/.test(src[i])) {
@@ -208,6 +219,8 @@ function lex(src: string, nesting = 0, isText = false): Word[][] {
             else end += src[i]
             i++
           }
+          // A quoted end can hold blanks that this scan stops at, so accept only a plain name.
+          if (isQuoted && !/^(['"]?)[\w.-]+\1$|^\\[\w.-]+$/.test(src.slice(startOfEnd, i))) throw unsure('an unusual heredoc end')
           heredocs.push({ end, stripsTabs, isQuoted })
         } else {
           i += c === '&' ? 2 : 1
@@ -260,7 +273,8 @@ function normalize(path: string) {
 const fold = (path: string) => path.normalize('NFC').toLowerCase()
 
 function protectedAs(path: string, home: string) {
-  const p = fold(path)
+  // On macOS this prefix reaches the same files, and resolving links doesn't remove it.
+  const p = fold(path).replace(/^\/system\/volumes\/data(?=\/)/, '')
   const h = fold(normalize(home))
   if (p === '/' || p.lastIndexOf('/') === 0) return 'a top-level folder'
   if (p === h || h.startsWith(`${p}/`)) return 'your home folder'
@@ -317,20 +331,24 @@ function checkFind(args: Word[], home: string, targets: Target[]) {
   while (at < args.length && /^-[HLPEXdsx]+$/.test(args[at].text)) at++
   const roots: Word[] = []
   for (; at < args.length && !/^(-|\(|!)/.test(args[at].text); at++) roots.push(args[at])
+  const unclear = roots.find(root => root.isDynamic)
+  if (unclear) return notLiteral(unclear.text)
 
   let isDeleting = false
   for (; at < args.length; at++) {
     const text = args[at].text
-    if (text === '-delete') isDeleting = true
+    if (args[at].isDynamic) return notVouched(text)
+    if (FIND_VALUES.test(text)) at++
+    else if (text === '-delete') isDeleting = true
     else if (/^-(exec|execdir|ok|okdir)$/.test(text)) {
       const program = args[at + 1]
       if (!program || program.isDynamic || !READERS.has(nameOf(program))) return notVouched(`find ${text}`)
-    } else if (args[at].isDynamic && text.startsWith('-')) return notVouched(text)
+    }
   }
   if (!isDeleting) return undefined
   if (!roots.length) return notLiteral('.')
   for (const root of roots) {
-    if (root.isDynamic || root.globAt >= 0) return notLiteral(root.text)
+    if (root.globAt >= 0) return notLiteral(root.text)
     const refusal = checkTarget(root, home, targets)
     if (refusal) return refusal
   }
@@ -347,14 +365,21 @@ function checkCommand(words: Word[], home: string, targets: Target[]) {
   if (name === 'find' || name === 'gfind') return checkFind(args, home, targets)
   if (!PLAIN_PROGRAMS.has(name)) return notVouched(program.text)
   const first = args[0]?.text ?? ''
-  if (name === 'git' && args.some(arg => arg.text === '-c' || arg.text.startsWith('--config-env'))) return notVouched('git -c')
-  if (['npm', 'pnpm', 'yarn'].includes(name) && RUNS_ARGUMENTS.test(first)) return notVouched(`${name} ${first}`)
+  const runner = args.find(arg => RUNS_A_PROGRAM.test(arg.text))
+  if (runner) return notVouched(`${name} ${runner.text}`)
+  if (name === 'git') {
+    if (args.some(arg => arg.text === '-c' || arg.text.startsWith('--config-env'))) return notVouched('git -c')
+    const command = args.find((arg, k) => !arg.text.startsWith('-') && args[k - 1]?.text !== '-C')
+    if (!command || !PLAIN_GIT.test(command.text)) return notVouched(`git ${command?.text ?? ''}`)
+  }
+  if (name === 'gh' && !PLAIN_GH.test(first)) return notVouched(`gh ${first}`)
+  if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return notVouched(`${name} exec`)
   if (name === 'docker' && !PLAIN_DOCKER.test(first)) return notVouched(`docker ${first}`)
 
   return undefined
 }
 
-const withoutQuotes = (command: string) => command.replace(/['"\\]/g, '')
+const withoutQuotes = (command: string) => command.replace(/\\\n|['"\\]/g, '')
 
 // True if a command might delete something, which is what puts it under this check at all.
 export const mentionsDelete = (command: unknown) =>
