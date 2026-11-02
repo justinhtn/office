@@ -1230,7 +1230,7 @@ function build(){
 }
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
-const TOUCH_SLOP=10,TOUCH_TAP_MS=500,TOUCH_PINCH=.08,MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
+const TOUCH_CLICK_MS=700,TOUCH_SLOP=10,TOUCH_TAP_MS=500,TOUCH_PINCH=.08,MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
 let isAdjusted=false,viewPulled=0,savedView=readSavedView()
 const fullView={center:new THREE.Vector3(),position:new THREE.Vector3()},cameraLook=new THREE.Vector3()
 // The closest camera distance that still shows the whole floor and back walls.
@@ -1831,7 +1831,7 @@ canvas.addEventListener('pointerup',e=>{if(e.pointerType==='touch'){touchUp(e);r
 function tapAt(e){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}}
 // One finger pans, and a short still touch is a tap. Two fingers pinch to zoom, and twist or drag to rotate.
 const touches=new Map()
-let touchIsTap=false,touchStart=null,twoFingers=null
+let touchIsTap=false,touchStart=null,twoFingers=null,touchTag=null,clickingTag=false,lastTouchUp=-Infinity
 function fingers(){
   const [a,b]=[...touches.values()]
   return {dist:Math.hypot(a.x-b.x,a.y-b.y),angle:Math.atan2(b.y-a.y,b.x-a.x),x:(a.x+b.x)/2,y:(a.y+b.y)/2}
@@ -1839,7 +1839,7 @@ function fingers(){
 function touchDown(e){
   try{canvas.setPointerCapture(e.pointerId)}catch{}
   touches.set(e.pointerId,{x:e.clientX,y:e.clientY})
-  if(touches.size===1){touchIsTap=true;touchStart={x:e.clientX,y:e.clientY,at:performance.now()}}
+  if(touches.size===1){touchIsTap=true;touchStart={x:e.clientX,y:e.clientY,at:performance.now()};touchTag=e.target.closest?.('.tag,.zone-tag')??null}
   else{touchIsTap=false;if(touches.size===2)twoFingers=fingers()}
 }
 function touchMove(e){
@@ -1861,10 +1861,22 @@ function touchMove(e){
 }
 function touchUp(e){
   if(!touches.delete(e.pointerId))return
+  lastTouchUp=performance.now()
   twoFingers=touches.size===2?fingers():null
-  if(!touches.size&&touchIsTap&&performance.now()-touchStart.at<TOUCH_TAP_MS)tapAt(e)
+  if(touches.size||!touchIsTap||performance.now()-touchStart.at>=TOUCH_TAP_MS)return
+  if(touchTag){clickingTag=true;touchTag.click();clickingTag=false}else tapAt(e)
 }
-canvas.addEventListener('pointercancel',e=>{touches.delete(e.pointerId);touchIsTap=false;twoFingers=null})
+const forgetTouches=()=>{touches.clear();touchIsTap=false;twoFingers=null}
+canvas.addEventListener('pointercancel',forgetTouches)
+// A missed lift would otherwise leave a finger behind, and every later touch would count as two.
+canvas.addEventListener('lostpointercapture',e=>{if(touches.has(e.pointerId))forgetTouches()})
+// Name tags cover much of the room, so a gesture starting on one has to reach the same code.
+tagsEl.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchDown(e)})
+tagsEl.addEventListener('pointermove',e=>{if(e.pointerType==='touch')touchMove(e)})
+tagsEl.addEventListener('pointerup',e=>{if(e.pointerType==='touch')touchUp(e)})
+tagsEl.addEventListener('pointercancel',forgetTouches)
+// The browser's own click after a touch is already handled above. A mouse click isn't.
+tagsEl.addEventListener('click',e=>{if(!clickingTag&&performance.now()-lastTouchUp<TOUCH_CLICK_MS)e.stopPropagation()},true)
 // Safari would otherwise zoom the whole page.
 if(isTouchDevice)stage.addEventListener('gesturestart',e=>e.preventDefault())
 canvas.addEventListener('wheel',e=>{e.preventDefault();if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})

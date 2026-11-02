@@ -394,27 +394,27 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .zoom-controls button.on { color: #ffc824; }
 /* Touch devices: larger targets, room for the Home Screen's edges, no page bounce. */
 .touch, .touch body { overscroll-behavior: none; }
-.touch .room canvas { touch-action: none; }
 .touch .zoom-controls { bottom: calc(32px + env(safe-area-inset-bottom)); }
 .touch .zoom-controls button { width: 44px; height: 44px; }
 .touch .zoom-controls button[aria-pressed] { display: none; }
-.touch .corner { padding-bottom: calc(40px + env(safe-area-inset-bottom)); padding-right: calc(10px + env(safe-area-inset-right)); }
-.touch .needs { padding-top: env(safe-area-inset-top); -webkit-overflow-scrolling: touch; }
+.touch .corner { padding-top: calc(58px + env(safe-area-inset-top)); padding-bottom: calc(40px + env(safe-area-inset-bottom)); padding-right: calc(10px + env(safe-area-inset-right)); }
+.touch .needs { padding-top: env(safe-area-inset-top); scrollbar-width: none; }
 .touch .need { height: 40px; }
 .touch .icon { width: 44px; height: 44px; }
 .touch .search { height: 44px; }
 .touch .voice-mode { min-height: 40px; }
 .touch .team-list .team-button { min-height: 44px; }
-.touch .card-team summary, .touch details > summary { padding-top: 10px; padding-bottom: 10px; }
-.touch .tag { padding: 5px 11px; }
-.touch .zone-tag { padding: 7px 12px; }
+.touch details > summary { padding-top: 10px; padding-bottom: 10px; }
+.touch .tag, .touch .zone-tag { touch-action: none; }
+.touch .tag::after, .touch .zone-tag::after { content: ''; position: absolute; inset: -6px; }
 .touch .presentation-controls button { min-height: 44px; padding: 8px 18px; }
 .touch .section-action, .touch .session-tabs button, .touch .mate, .touch .team-rename, .touch .away-button { min-height: 44px; }
 .touch .section-action, .touch .session-tabs button, .touch .away-button { padding-left: 10px; padding-right: 10px; }
 .touch .room-title { top: calc(58px + env(safe-area-inset-top)); }
-.touch .needs { scrollbar-width: none; }
 .touch .needs::-webkit-scrollbar { display: none; }
 .touch .drawer button, .touch .drawer a { min-height: 40px; }
 .touch .card-who button { min-height: 36px; }
 
 .touch .section-actions { flex-wrap: wrap; overflow-x: visible; }
+.touch .drawer { top: calc(48px + env(safe-area-inset-top)); bottom: calc(30px + env(safe-area-inset-bottom)); }
+.touch .statusbar { height: calc(30px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
