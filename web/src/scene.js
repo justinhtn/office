@@ -1322,26 +1322,39 @@ function statusOfRow(p){
 }
 function roundRect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath()}
 // One person on a small screen: their work gets the room a table of rows would use.
+function fitText(g,text,max){let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+function rowTiming(p){return p.isWaiting&&p.jobStartedAt?`${Math.max(1,Math.round((Date.now()/1000-p.jobStartedAt)/60))}m`:shortAge(p.lastActivityAt)}
+// Wraps on spaces, then splits anything still too wide, such as a long path.
+function soloLines(g,text,width){
+  return wrapped(g,text,width).flatMap(line=>{
+    const parts=[];let part=''
+    for(const letter of line){if(part&&g.measureText(part+letter).width>width){parts.push(part);part=letter}else part+=letter}
+    return [...parts,part]
+  })
+}
 function soloWork(p){
   if(p.request)return ['Needs you',p.request.message]
-  if(p.jobs?.[0])return ['Job running',p.jobs[0]]
-  if(p.isRunning)return ['Working on',p.step||p.recent?.[p.recent.length-1]||p.title]
+  if(p.isWaiting&&p.jobs?.[0])return ['Job running',p.jobs[0]]
+  if(p.isRunning)return ['Working on',p.step||p.jobs?.[0]||p.recent?.[p.recent.length-1]||p.title]
   return p.lastUpdate?['Last update',p.lastUpdate]:['Idle',p.title]
 }
 function drawSoloRow(g,p,face,W,H){
   const margin=24,y=124,status=statusOfRow(p),isIdle=status.rank===4
   g.save();g.beginPath();g.arc(margin+30,y,30,0,7);g.clip();g.fillStyle=UI.hover;g.fillRect(margin,y-30,60,60);if(face)g.drawImage(face,margin,y-30,60,60);g.restore()
-  g.textAlign='left';g.fillStyle=UI.text;g.font='600 34px '+boardFont;g.fillText(p.name,margin+76,y)
-  const pillX=margin+76+g.measureText(p.name).width+18
+  const timing=rowTiming(p)
+  g.font='22px '+boardFont;const timingW=g.measureText(timing).width
   g.font='500 20px '+boardFont;const pillW=g.measureText(status.label).width+28
+  g.textAlign='left';g.fillStyle=UI.text;g.font='600 34px '+boardFont
+  const name=fitText(g,p.name,W-margin*2-76-18-pillW-18-timingW);g.fillText(name,margin+76,y)
+  const pillX=margin+76+g.measureText(name).width+18
+  g.font='500 20px '+boardFont
   g.fillStyle=status.bg;roundRect(g,pillX,y-18,pillW,36,18);g.fill();g.fillStyle=status.fg;g.fillText(status.label,pillX+14,y+1)
-  const timing=p.isWaiting&&p.jobStartedAt?`${Math.max(1,Math.round((Date.now()/1000-p.jobStartedAt)/60))}m`:shortAge(p.lastActivityAt)
   g.textAlign='right';g.fillStyle=UI.muted;g.font='22px '+boardFont;g.fillText(timing,W-margin,y);g.textAlign='left'
   g.fillStyle=UI.line;g.fillRect(margin,170,W-margin*2,1)
   const [heading,work]=soloWork(p)
   g.fillStyle=UI.muted;g.font='500 22px '+boardFont;g.fillText(heading,margin,200)
   g.fillStyle=isIdle?'#d4d4d8':UI.text;g.font='500 40px '+boardFont
-  const lines=wrapped(g,String(work||''),W-margin*2),max=SOLO_LINES
+  const lines=soloLines(g,String(work||''),W-margin*2),max=SOLO_LINES
   lines.slice(0,max).forEach((line,i)=>{
     let text=line
     if(i===max-1&&lines.length>max){while(g.measureText(`${text}…`).width>W-margin*2&&text.length>1)text=text.slice(0,-1);text+='…'}
@@ -1351,7 +1364,7 @@ function drawSoloRow(g,p,face,W,H){
 function drawBoard(board){
   const {g,team,faces,texture,live}=board,W=960,H=480,lead=team.lead
   const members=team.members.map(m=>people.find(x=>x.id===m.id)||m)
-  const fit=(text,max)=>{let t=String(text||'');while(g.measureText(t).width>max&&t.length>1)t=t.slice(0,-2)+'…';return t}
+  const fit=(text,max)=>fitText(g,text,max)
   const back=g.createLinearGradient(0,0,0,H);back.addColorStop(0,'#10141b');back.addColorStop(1,'#0a0d12');g.fillStyle=back;g.fillRect(0,0,W,H)
   // The team's own header, with the time and task progress on the right.
   const isTeam=team.members.length>1
@@ -1384,7 +1397,7 @@ function drawBoard(board){
     g.font='500 13px '+boardFont;const pillW=g.measureText(status.label).width+22
     g.fillStyle=status.bg;roundRect(g,pillX,y-12,pillW,24,12);g.fill();g.fillStyle=status.fg;g.fillText(status.label,pillX+11,y+.5)
     const doing=p.request?.message||p.jobs?.[0]||(p.isRunning?p.step||p.recent?.[p.recent.length-1]:'')||p.label||p.title
-    const timing=p.isWaiting&&p.jobStartedAt?`${Math.max(1,Math.round((Date.now()/1000-p.jobStartedAt)/60))}m`:shortAge(p.lastActivityAt)
+    const timing=rowTiming(p)
     g.fillStyle=isIdle?UI.muted:UI.text;g.font='14px '+boardFont;g.fillText(fit(doing,right-workX-76),workX,y)
     g.textAlign='right';g.fillStyle=UI.faint;g.font='13px '+boardFont;g.fillText(timing,ageX,y);g.textAlign='left'
     if(i<rows.length-1){g.fillStyle=UI.line;g.fillRect(margin,top+53,right-margin,1)}
