@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import os
 import stat
@@ -239,7 +240,7 @@ class CodeTests(Case):
         self.addCleanup(connection.close)
         connection.request("POST", "/api/sign-in", body="[" * 1900, headers={"Host": HOST, "Origin": ORIGIN})
         with mock.patch.object(server.traceback, "print_exc"):
-            self.assertIn(connection.getresponse().status, (400, 500))
+            self.assertEqual(connection.getresponse().status, 500)
 
     def test_devices_hide_and_drop_expired_ones_and_note_use(self):
         cookie = self.signed_in()
@@ -252,6 +253,25 @@ class CodeTests(Case):
             server.REMOTE.sign_in(server.REMOTE.new_code(), "next")
             stored = json.loads(server.REMOTE.path.read_text())["devices"]
         self.assertNotIn(device_id, stored)
+
+    def test_a_failed_write_gets_a_clean_refusal(self):
+        with mock.patch.object(server.REMOTE, "sign_in", side_effect=OSError("disk full")), mock.patch.object(server.traceback, "print_exc"):
+            status, body, _ = self.sign_in("anything")
+        self.assertEqual(status, 500)
+        self.assertNotIn(b"disk full", body)
+
+    def test_sign_ins_and_failed_tries_are_logged_without_secrets(self):
+        code = server.REMOTE.new_code()
+        with mock.patch.object(server.sys, "stderr", io.StringIO()) as log:
+            self.sign_in("wrong-guess")
+            status, _, response = self.sign_in(code)
+        self.assertEqual(status, 200)
+        cookie = response.getheader("Set-Cookie").split(";")[0].split("=", 1)[1]
+        written = log.getvalue()
+        self.assertIn("Device sign-in refused: wrong", written)
+        self.assertIn(f"Device signed in: {cookie.split('.')[0]}", written)
+        for secret in ("wrong-guess", code, cookie.split(".")[1]):
+            self.assertNotIn(secret, written)
 
     def test_bad_bodies_are_refused(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=10)
