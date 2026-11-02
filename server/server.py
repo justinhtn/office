@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import sys
@@ -152,8 +153,10 @@ TOKEN = secrets.token_urlsafe(32)
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 ALLOWED_ORIGINS = {f"http://{host}" for host in ALLOWED_HOSTS}
 REMOTE = RemoteAccess(DATA)
+# Tailscale sets this on public Funnel traffic and removes any copy a client sends.
+FUNNEL_HEADER = "Tailscale-Funnel-Request"
 # Added by a proxy. The Mac's own browser never sends these, so they mean a route has been pointed at the wrong port.
-PROXY_HEADERS = ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Tailscale-User-Login", "Tailscale-User-Name")
+PROXY_HEADERS = ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Tailscale-User-Login", "Tailscale-User-Name", FUNNEL_HEADER)
 SIGN_IN_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Office</title>
 <body style="font:16px system-ui;margin:12vh auto;max-width:26em;padding:0 16px">
 <h1>Sign in to the office</h1>
@@ -1926,6 +1929,8 @@ class RemoteHandler(Handler):
     """The only way in from another device. Sign-in is checked here, by which port was reached, so no header can get around it."""
 
     device = None
+    # Until sign-in shows who this is, so a silent connection can't hold a thread. Signed-in streams may pause.
+    timeout = 10
 
     def end_headers(self):
         self.send_header("X-Frame-Options", "DENY")
@@ -1939,7 +1944,7 @@ class RemoteHandler(Handler):
 
     def guarded(self):
         host = REMOTE.host()
-        if not host or self.headers.get("Host") != host:
+        if not host or self.headers.get("Host") != host or self.headers.get(FUNNEL_HEADER):
             raise Refused(403, "Bad host.")
         origin = self.headers.get("Origin")
         if origin and origin != f"https://{host}":
@@ -1956,10 +1961,12 @@ class RemoteHandler(Handler):
     def gate(self):
         self.guarded()
         self.device = REMOTE.device_for(self.sign_in_cookie())
+        if self.device:
+            self.connection.settimeout(None)
 
     def page_token(self):
         # Only for this device, so the office's own token never leaves the Mac.
-        return hmac.new(TOKEN.encode(), f"device\0{self.device}".encode(), hashlib.sha256).hexdigest()
+        return hmac.new(hashlib.sha256(f"device\0{TOKEN}".encode()).digest(), self.device.encode(), hashlib.sha256).hexdigest()
 
     def authorized(self):
         supplied = self.headers.get("X-Office-Token", "")
@@ -1993,6 +2000,11 @@ class RemoteHandler(Handler):
             self.reply(refused.status, {"error": str(refused)})
         except (ValueError, AttributeError):
             self.reply(400, {"error": "Bad request."})
+        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            pass
+        except Exception:
+            traceback.print_exc()
+            self.reply(500, {"error": "The office server hit an error."})
 
     def sign_in(self):
         if self.headers.get("Origin") != f"https://{REMOTE.host()}":
@@ -2002,6 +2014,10 @@ class RemoteHandler(Handler):
             raise Refused(413, "That message is too long.")
         body = json.loads(self.rfile.read(length))
         cookie, problem = REMOTE.sign_in(body.get("code", ""), body.get("name", ""))
+        if problem:
+            print(f"Device sign-in refused: {problem}", file=sys.stderr, flush=True)
+        else:
+            print(f"Device signed in: {cookie.split('.')[0]}", file=sys.stderr, flush=True)
         if problem == "locked":
             raise Refused(429, "Too many tries. Make a new code on your Mac.")
         if problem:
@@ -2010,10 +2026,15 @@ class RemoteHandler(Handler):
         self.reply(200, {"status": "ok"})
 
 
-def serve_remote():
+def remote_address():
+    """Where to listen for other devices, or None while it's off. Always loopback: the proxy is what reaches them."""
+
+    return ("127.0.0.1", REMOTE.port()) if REMOTE.host() and REMOTE.port() != PORT else None
+
+
+def serve_remote(address):
     try:
-        # Always loopback: the proxy is what reaches other devices.
-        ThreadingHTTPServer(("127.0.0.1", REMOTE.port()), RemoteHandler).serve_forever()
+        ThreadingHTTPServer(address, RemoteHandler).serve_forever()
     except OSError as problem:
         print(f"Couldn't start device access: {problem}", file=sys.stderr, flush=True)
 
@@ -2032,6 +2053,6 @@ if __name__ == "__main__":
         print(f"The interface isn't built. Run {ROOT / 'scripts' / 'update.sh'}, or {ROOT / 'scripts' / 'build.sh'} outside the checkout the office runs from.", file=sys.stderr, flush=True)
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
-    if REMOTE.host() and REMOTE.port() != PORT:
-        threading.Thread(target=serve_remote, daemon=True).start()
+    if remote_address():
+        threading.Thread(target=serve_remote, args=(remote_address(),), daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

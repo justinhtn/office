@@ -112,6 +112,7 @@ A signed-in device can do what the office can do on the Mac: read sessions, see 
 
 - See devices: `scripts/ipad-access.py devices`
 - Sign one out: `scripts/ipad-access.py revoke ID`, or `revoke all`
+- Sign-ins and refused tries go in `~/.agent-office/server.log`, without codes or cookies.
 - Turn it all off: `scripts/ipad-access.py off`, then `tailscale serve --https=443 off`. Sign-in stops working at once.
 
 ## Privacy and security

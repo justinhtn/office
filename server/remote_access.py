@@ -17,6 +17,7 @@ DEVICE_S = 30 * 86400
 MAX_TRIES = 5
 TRIES_WINDOW_S = 900
 DEFAULT_PORT = 8795
+LAST_SEEN_EVERY_S = 3600
 HOST = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ts\.net$")
 CODE_LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 COOKIE = "__Host-office-device"
@@ -65,7 +66,7 @@ class RemoteAccess:
         return self.read().get("port")
 
     def turn_on(self, host, port=DEFAULT_PORT):
-        if not HOST.match(host):
+        if not HOST.fullmatch(host):
             raise ValueError("That isn't a Tailscale name. It should look like my-mac.tail1234.ts.net.")
         if not 1024 <= port <= 65535:
             raise ValueError("Use a port from 1024 to 65535.")
@@ -91,6 +92,7 @@ class RemoteAccess:
         """Returns (cookie value, None), or (None, why). A code works once, and too many wrong tries end it."""
         def change(state):
             now = time.time()
+            state["devices"] = {key: one for key, one in state.get("devices", {}).items() if now < one.get("expires", 0)}
             failures = [at for at in state.get("failures", []) if now - at < TRIES_WINDOW_S]
             state["failures"] = failures
             if len(failures) >= MAX_TRIES:
@@ -128,10 +130,17 @@ class RemoteAccess:
         if not device or time.time() >= device.get("expires", 0):
             return None
 
-        return device_id if hmac.compare_digest(hashed(device_secret), device.get("hash", "")) else None
+        if not hmac.compare_digest(hashed(device_secret), device.get("hash", "")):
+            return None
+        if time.time() - device.get("lastSeen", 0) >= LAST_SEEN_EVERY_S:
+            self.changing(lambda fresh: fresh.get("devices", {}).get(device_id, {}).update(lastSeen=time.time()) if device_id in fresh.get("devices", {}) else None)
+
+        return device_id
 
     def devices(self):
-        return self.read().get("devices", {})
+        now = time.time()
+
+        return {key: one for key, one in self.read().get("devices", {}).items() if now < one.get("expires", 0)}
 
     def revoke(self, device_id):
         return self.changing(lambda state: state.get("devices", {}).pop(device_id, None)) is not None

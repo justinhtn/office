@@ -116,6 +116,10 @@ class WrongPlaceTests(Case):
                 self.assertEqual(self.sign_in(code, origin=origin)[0], 403)
         self.assertEqual(self.sign_in(code)[0], 200)
 
+    def test_public_funnel_traffic_is_refused_even_when_signed_in(self):
+        cookie = self.signed_in()
+        self.assertEqual(self.request("GET", "/", cookie=cookie, headers={server.FUNNEL_HEADER: "?1"})[0], 403)
+
     def test_off_by_default_refuses_everything(self):
         server.REMOTE.turn_off()
         self.assertEqual(self.request("GET", "/")[0], 403)
@@ -219,6 +223,36 @@ class CodeTests(Case):
             self.assertEqual(self.sign_in("wrong")[0], 403)
         self.assertEqual(self.sign_in("wrong")[0], 429)
 
+    def test_a_silent_sign_in_cant_hold_a_thread(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        with mock.patch.object(server.RemoteHandler, "timeout", 0.2):
+            connection.putrequest("POST", "/api/sign-in", skip_host=True)
+            for name, value in (("Host", HOST), ("Origin", ORIGIN), ("Content-Length", "2000")):
+                connection.putheader(name, value)
+            connection.endheaders()
+            with self.assertRaises((http.client.RemoteDisconnected, ConnectionError)):
+                connection.getresponse()
+
+    def test_a_deeply_nested_body_gets_a_reply(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=10)
+        self.addCleanup(connection.close)
+        connection.request("POST", "/api/sign-in", body="[" * 1900, headers={"Host": HOST, "Origin": ORIGIN})
+        with mock.patch.object(server.traceback, "print_exc"):
+            self.assertIn(connection.getresponse().status, (400, 500))
+
+    def test_devices_hide_and_drop_expired_ones_and_note_use(self):
+        cookie = self.signed_in()
+        device_id = cookie.split(".")[0]
+        self.request("GET", "/", cookie=cookie)
+        self.assertIn("lastSeen", server.REMOTE.devices()[device_id])
+        later = server.time.time() + server.DEVICE_S + 1
+        with mock.patch("remote_access.time.time", return_value=later):
+            self.assertEqual(server.REMOTE.devices(), {})
+            server.REMOTE.sign_in(server.REMOTE.new_code(), "next")
+            stored = json.loads(server.REMOTE.path.read_text())["devices"]
+        self.assertNotIn(device_id, stored)
+
     def test_bad_bodies_are_refused(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=10)
         self.addCleanup(connection.close)
@@ -267,8 +301,15 @@ class HostTests(unittest.TestCase):
     def setUp(self):
         clean_slate()
 
+    def test_it_only_ever_listens_on_loopback_and_only_when_on(self):
+        self.assertIsNone(server.remote_address())
+        server.REMOTE.turn_on(HOST)
+        self.assertEqual(server.remote_address(), ("127.0.0.1", server.REMOTE.port()))
+        server.REMOTE.turn_off()
+        self.assertIsNone(server.remote_address())
+
     def test_only_a_tailscale_name_is_accepted(self):
-        for host in ("example.com", "0.0.0.0", "localhost", "*.ts.net", "a.ts.net.evil.com", "A.TS.NET", "a b.ts.net", "ts.net", ""):
+        for host in ("example.com", "0.0.0.0", "localhost", "*.ts.net", "a.ts.net.evil.com", "A.TS.NET", "a b.ts.net", "ts.net", "", "a.ts.net\n"):
             with self.subTest(host), self.assertRaises(ValueError):
                 server.REMOTE.turn_on(host)
         self.assertIsNone(server.REMOTE.host())

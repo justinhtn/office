@@ -2,6 +2,7 @@
 """Turns on access to the office from your own devices over Tailscale, and manages them. Run it on the Mac."""
 import datetime
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -33,7 +34,8 @@ def main(arguments):
         print(f"{ACCESS.new_code()}\n\nEnter it at https://{ACCESS.host()} within {CODE_S // 60} minutes. It works once.")
     elif command == "devices":
         for device_id, device in ACCESS.devices().items():
-            print(f"{device_id}  {device['name']}  signed in {when(device['created'])}, ends {when(device['expires'])}")
+            seen = f"last used {when(device['lastSeen'])}" if device.get("lastSeen") else "not used yet"
+            print(f"{device_id}  {device['name']}  signed in {when(device['created'])}, {seen}, ends {when(device['expires'])}")
         if not ACCESS.devices():
             print("No devices.")
     elif command == "revoke" and len(arguments) == 2:
@@ -45,7 +47,14 @@ def main(arguments):
         else:
             raise ValueError("There's no device with that ID. Run devices to list them.")
     elif command == "status":
-        print(f"On for {ACCESS.host()}, on local port {ACCESS.port()}." if ACCESS.host() else "Off. The office only answers on this Mac.")
+        if ACCESS.host():
+            with socket.socket() as probe:
+                probe.settimeout(1)
+                answering = probe.connect_ex(("127.0.0.1", ACCESS.port())) == 0
+            print(f"Allowed for {ACCESS.host()}, on local port {ACCESS.port()}.")
+            print("Something is answering on that port. Check the server log if a device can't connect." if answering else f"Nothing is answering on that port. Restart the server:\n\n  {RESTART}")
+        else:
+            print("Off. The office only answers on this Mac.")
     elif command == "off":
         port_note = "tailscale serve --https=443 off"
         ACCESS.turn_off()
