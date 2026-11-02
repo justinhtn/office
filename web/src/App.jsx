@@ -24,7 +24,37 @@ async function loadBoardFont(family) {
   await Promise.all(['400', '500', '600'].map(weight => document.fonts.load(`${weight} 20px "${family}"`))).catch(() => {})
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, mapHost, onPick, onSpace }) {
+// How fast the room draws. This only changes the page: unlike the Sleep button, it leaves alerts and voices alone.
+function useRoomPace() {
+  const [pace, setPace] = useState('active')
+  const lastInput = useRef(Date.now())
+  const wake = () => {
+    lastInput.current = Date.now()
+    setPace(document.hidden ? 'hidden' : 'active')
+  }
+  useEffect(() => {
+    const check = () => {
+      const idle = Date.now() - lastInput.current
+      setPace(document.hidden ? 'hidden' : idle >= ROOM_ASLEEP_MS ? 'asleep' : idle >= ROOM_WATCHING_MS ? 'watching' : 'active')
+    }
+    const onVisibility = () => (document.hidden ? check() : wake())
+    const inputs = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']
+    inputs.forEach(name => window.addEventListener(name, wake, { passive: true }))
+    document.addEventListener('visibilitychange', onVisibility)
+    check()
+    const timer = setInterval(check, 1000)
+
+    return () => {
+      clearInterval(timer)
+      inputs.forEach(name => window.removeEventListener(name, wake))
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
+  return [pace, wake]
+}
+
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, mapHost, onPick, onSpace }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -41,6 +71,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, m
   useEffect(() => {
     scene.current.setLightsOut(lightsOut)
   }, [lightsOut])
+  useEffect(() => {
+    scene.current.setPace(pace)
+  }, [pace])
 
   useEffect(() => {
     let isCurrent = true
@@ -206,6 +239,8 @@ const LINES_SETTING = 'office-voice-lines'
 const BUILD_CHECK_MS = 15000
 const NEWS_READ_SETTING = 'office-news-read'
 const USAGE_CHECK_MS = 15000
+const ROOM_WATCHING_MS = 30 * 1000
+const ROOM_ASLEEP_MS = 30 * 60 * 1000
 const COMPACTED_NOTE_S = 3600
 const PRESENCE_CHECK_MS = 5000
 const DESK_QUIET_MS = 180000
@@ -1011,6 +1046,17 @@ export default function App() {
     setPlace('office')
   }, [isAway])
   const voices = useVoices(everyone, [...onScreen.split(',').filter(Boolean), selected].filter(Boolean), isAway, voiceMode, setVoiceMode)
+  const [roomPace, wakeRoom] = useRoomPace()
+  // Someone asking for you, or speaking, lights the room back up.
+  const requests = everyone.filter(person => person.request).length
+  const lastRequests = useRef(requests)
+  useEffect(() => {
+    if (requests > lastRequests.current) wakeRoom()
+    lastRequests.current = requests
+  }, [requests])
+  useEffect(() => {
+    if (voices.speaker) wakeRoom()
+  }, [voices.speaker])
   // A window left open picks up new builds by itself.
   useEffect(() => {
     const own = document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src')
@@ -1108,7 +1154,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} mapHost={mapHost} onPick={pick} onSpace={goToSpace} />
           : !problem && <Empty text="Waiting for session data…" />}
         {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         <div className="corner">

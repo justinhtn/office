@@ -57,6 +57,8 @@ She has a read-only tool list, so she can read what sessions are doing and add t
 
 The TV in your office lists your [Modal](https://modal.com) apps: what's running, what stopped today, and how many deployed apps have no tasks. It needs the `modal` command on your Mac and logged in, and only reads the list, checking once a minute.
 
+To save power, the room slows down after 30 seconds without input, dims after 30 minutes, and stops drawing while the page is hidden. Any input, or someone asking for you, brings it back. This doesn't affect alerts or voices, and it isn't the Sleep button.
+
 ## Privacy and security
 
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.
