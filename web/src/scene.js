@@ -1228,7 +1228,7 @@ function build(){
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
 const MIN_ZOOM_DIST=6,PAN_MARGIN=4,PAN_MIN_STEEPNESS=.3,viewPan=new THREE.Vector3()
-let isAdjusted=false,savedView=readSavedView()
+let isAdjusted=false,viewPulled=0,savedView=readSavedView()
 const fullView={center:new THREE.Vector3(),position:new THREE.Vector3()},cameraLook=new THREE.Vector3()
 // The closest camera distance that still shows the whole floor and back walls.
 function fitCamera(){
@@ -1272,6 +1272,7 @@ function frameWholeOffice(az,el){
 }
 // Moves the view with the pointer, across the floor.
 function panBy(dx,dy){
+  if(viewPulled>=1)return
   isAdjusted=true
   const look=camera.getWorldDirection(new THREE.Vector3()),steep=Math.max(PAN_MIN_STEEPNESS,-look.y),right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0)
   right.y=0;right.normalize();look.y=0;look.normalize()
@@ -1808,7 +1809,11 @@ let isHandTool=false,isSpaceHeld=false
 const wantsPan=()=>isHandTool||isSpaceHeld
 const showPanCursor=()=>{if(!drag)canvas.style.cursor=wantsPan()?'grab':''}
 const isTypingOrButton=target=>/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target?.tagName)||target?.isContentEditable
-const onSpaceDown=e=>{if(e.code!=='Space'||isTypingOrButton(e.target))return;e.preventDefault();if(!isSpaceHeld){isSpaceHeld=true;showPanCursor()}}
+// Only over the room, so Space keeps its usual job everywhere else.
+let isPointerOverRoom=false
+canvas.addEventListener('pointerenter',()=>{isPointerOverRoom=true})
+canvas.addEventListener('pointerleave',()=>{isPointerOverRoom=false})
+const onSpaceDown=e=>{if(e.code!=='Space'||!isPointerOverRoom||isTypingOrButton(e.target))return;e.preventDefault();if(!isSpaceHeld){isSpaceHeld=true;showPanCursor()}}
 const onSpaceUp=e=>{if(e.code==='Space'&&isSpaceHeld){isSpaceHeld=false;showPanCursor()}}
 const onSpaceLost=()=>{isSpaceHeld=false;showPanCursor()}
 window.addEventListener('keydown',onSpaceDown);window.addEventListener('keyup',onSpaceUp);window.addEventListener('blur',onSpaceLost)
@@ -1850,7 +1855,7 @@ function loop(){const t=clock.getElapsedTime()
   const fit=Math.max(Math.min(MIN_ZOOM_DIST,view.dist),view.dist+view.zoom)
   camera.position.set(view.center.x+Math.sin(view.az)*Math.cos(view.el)*fit,view.center.y+Math.sin(view.el)*fit,view.center.z+Math.cos(view.az)*Math.cos(view.el)*fit)
   // Pulling back rises out of the room, ending at the whole office.
-  const pulled=smooth(0,ZOOM_OUT_RANGE,view.zoom)
+  const pulled=viewPulled=smooth(0,ZOOM_OUT_RANGE,view.zoom)
   camera.position.lerp(fullView.position,pulled);cameraLook.lerpVectors(view.center,fullView.center,pulled)
   // A pan fades as the view pulls back, so all the way out always shows the whole office.
   keepPanOnFloor(cameraLook);camera.position.addScaledVector(viewPan,1-pulled);cameraLook.addScaledVector(viewPan,1-pulled);camera.lookAt(cameraLook)

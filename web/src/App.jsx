@@ -202,8 +202,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     scene.current.setLightsOut(lightsOut)
   }, [lightsOut])
   useEffect(() => {
-    scene.current.setHandTool(isHandTool)
-  }, [isHandTool])
+    // Its button is hidden during a presentation, so it rests until that ends.
+    scene.current.setHandTool(isHandTool && !viewShift)
+  }, [isHandTool, viewShift])
   useEffect(() => {
     scene.current.setPace(pace)
   }, [pace])
@@ -222,7 +223,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
-      <div className="zoom-controls" role="group" aria-label="Zoom the office">
+      <div className="zoom-controls" role="group" aria-label="Zoom the office" onMouseUp={event => event.target.closest('button')?.blur()}>
         <button aria-label="Zoom in" title="Zoom in" onClick={() => scene.current.zoomBy(-ZOOM_STEP)}><Plus size={16} /></button>
         <button aria-label="Zoom out" title="Zoom out" onClick={() => scene.current.zoomBy(ZOOM_STEP)}><Minus size={16} /></button>
         <button className={isHandTool ? 'on' : ''} aria-label="Hand tool: drag to pan" aria-pressed={isHandTool} title={isHandTool ? 'Hand tool on: drag to pan' : 'Hand tool: drag to pan'} onClick={() => setIsHandTool(!isHandTool)}><Hand size={15} /></button>
