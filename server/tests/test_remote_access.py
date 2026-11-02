@@ -225,6 +225,15 @@ class CodeTests(Case):
         connection.request("POST", "/api/sign-in", body="not json", headers={"Host": HOST, "Origin": ORIGIN})
         self.assertEqual(connection.getresponse().status, 400)
 
+    def test_a_negative_length_is_refused(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=10)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/api/sign-in", skip_host=True)
+        for name, value in (("Host", HOST), ("Origin", ORIGIN), ("Content-Length", "-1")):
+            connection.putheader(name, value)
+        connection.endheaders()
+        self.assertEqual(connection.getresponse().status, 413)
+
     def test_only_hashes_reach_the_disk_in_a_private_file(self):
         code = server.REMOTE.new_code()
         stored = server.REMOTE.path.read_text()

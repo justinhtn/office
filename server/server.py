@@ -1931,6 +1931,8 @@ class RemoteHandler(Handler):
         self.send_header("X-Frame-Options", "DENY")
         for name, value in self.cookies_to_set:
             self.send_header(name, value)
+        # A kept-alive connection reuses this object, and a cookie must only go to whoever signed in.
+        self.cookies_to_set = ()
         super().end_headers()
 
     cookies_to_set = ()
@@ -1996,7 +1998,7 @@ class RemoteHandler(Handler):
         if self.headers.get("Origin") != f"https://{REMOTE.host()}":
             raise Refused(403, "Bad origin.")
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 2000:
+        if not 0 <= length <= 2000:
             raise Refused(413, "That message is too long.")
         body = json.loads(self.rfile.read(length))
         cookie, problem = REMOTE.sign_in(body.get("code", ""), body.get("name", ""))
