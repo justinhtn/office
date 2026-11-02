@@ -6,6 +6,7 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
+  Maximize, Minus, Plus,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
@@ -59,6 +60,7 @@ const CLAIM_MARKS = { checked: 'Checked', flagged: 'Flagged', unconfirmed: "Coul
 const PRESENTATION_CHOICE = 'office-presentation-choice'
 const PRESENTATION_SHIFT = .29
 const ignoreRoomClick = () => {}
+const ZOOM_STEP = 8
 
 // A teammate walks the person through finished work, claim by claim. Marks come from the server's code checks.
 function Presentation({ person, everyone, onClose }) {
@@ -178,7 +180,7 @@ function Presentation({ person, everyone, onClose }) {
   )
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, onPick, onSpace }) {
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, onPick, onSpace, onHome }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   pick.current = onPick
@@ -213,6 +215,11 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
       <div className="tags" ref={tags} />
+      <div className="zoom-controls" role="group" aria-label="Zoom the office">
+        <button aria-label="Zoom in" title="Zoom in" onClick={() => scene.current.zoomBy(-ZOOM_STEP)}><Plus size={16} /></button>
+        <button aria-label="Zoom out" title="Zoom out" onClick={() => scene.current.zoomBy(ZOOM_STEP)}><Minus size={16} /></button>
+        <button aria-label="Back to the whole office" title="Back to the whole office" onClick={() => { scene.current.resetView(); onHome() }}><Maximize size={15} /></button>
+      </div>
     </div>
   )
 }
@@ -1327,7 +1334,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)} />
           : !problem && <Empty text="Waiting for session data…" />}
         {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}

@@ -386,3 +386,8 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .presentation-controls button:disabled { opacity: .45; cursor: default; }
 .presentation-controls button.primary, .presentation-controls button.chosen { color: #fff; background: #128c8c; border-color: #128c8c; }
 .presentation-controls small { color: #a1a1aa; margin-left: auto; }
+.zoom-controls { position: absolute; left: 12px; bottom: 32px; z-index: 2; display: flex; flex-direction: column; gap: 2px; padding: 3px; background: rgba(14, 17, 24, .72); border-radius: 9px; }
+.zoom-controls button { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.zoom-controls button:hover { background: rgba(255, 255, 255, .16); }
+.zoom-controls button:focus-visible { outline: 2px solid #fff; }
+.presenting .zoom-controls { display: none; }
