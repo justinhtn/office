@@ -2,6 +2,7 @@ import http.client
 import io
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
@@ -234,6 +235,41 @@ class CodeTests(Case):
             connection.endheaders()
             with self.assertRaises((http.client.RemoteDisconnected, ConnectionError)):
                 connection.getresponse()
+
+    def test_a_slow_drip_cant_hold_a_thread(self):
+        requests = {
+            "body": b"POST /api/sign-in HTTP/1.1\r\nHost: " + HOST.encode() + b"\r\nOrigin: " + ORIGIN.encode() + b"\r\nContent-Length: 2000\r\n\r\n",
+            "headers": b"GET / HTTP/1.1\r\nHost: ",
+        }
+        for kind, start in requests.items():
+            with self.subTest(kind), mock.patch.object(server.RemoteHandler, "sign_in_limit_s", 0.3), mock.patch.object(server.traceback, "print_exc"):
+                with socket.create_connection(("127.0.0.1", self.remote.server_address[1]), timeout=1) as client:
+                    client.sendall(start)
+                    deadline = server.time.time() + 3
+                    closed = False
+                    while server.time.time() < deadline and not closed:
+                        try:
+                            client.sendall(b"x")
+                            client.settimeout(0.05)
+                            closed = client.recv(4096) == b""
+                        except socket.timeout:
+                            pass
+                        except OSError:
+                            closed = True
+                    self.assertTrue(closed)
+
+    def test_a_signed_in_device_isnt_cut_off_by_the_limit(self):
+        cookie = self.signed_in()
+        with mock.patch.object(server.RemoteHandler, "sign_in_limit_s", 0.2):
+            with socket.create_connection(("127.0.0.1", self.remote.server_address[1]), timeout=2) as client:
+                client.sendall(f"GET / HTTP/1.1\r\nHost: {HOST}\r\nCookie: {server.COOKIE}={cookie}\r\n\r\n".encode())
+                reply = client.recv(4096)
+        self.assertIn(b"200", reply.split(b"\r\n")[0])
+
+    def test_a_failed_last_used_write_doesnt_sign_a_device_out(self):
+        cookie = self.signed_in()
+        with mock.patch.object(server.REMOTE, "changing", side_effect=OSError("disk full")):
+            self.assertEqual(self.request("GET", "/", cookie=cookie)[0], 200)
 
     def test_a_deeply_nested_body_gets_a_reply(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.remote.server_address[1], timeout=10)

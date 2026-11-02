@@ -133,7 +133,11 @@ class RemoteAccess:
         if not hmac.compare_digest(hashed(device_secret), device.get("hash", "")):
             return None
         if time.time() - device.get("lastSeen", 0) >= LAST_SEEN_EVERY_S:
-            self.changing(lambda fresh: fresh.get("devices", {}).get(device_id, {}).update(lastSeen=time.time()) if device_id in fresh.get("devices", {}) else None)
+            try:
+                self.changing(lambda fresh: fresh.get("devices", {}).get(device_id, {}).update(lastSeen=time.time()) if device_id in fresh.get("devices", {}) else None)
+            except OSError:
+                # Only bookkeeping, so a full disk mustn't sign anyone out.
+                pass
 
         return device_id
 

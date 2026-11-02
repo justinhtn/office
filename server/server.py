@@ -1931,6 +1931,27 @@ class RemoteHandler(Handler):
     device = None
     # Until sign-in shows who this is, so a silent connection can't hold a thread. Signed-in streams may pause.
     timeout = 10
+    # The timeout above is per read, so a slow drip also needs a limit on the whole request.
+    sign_in_limit_s = 10
+
+    def setup(self):
+        super().setup()
+        self.sign_in_limit = threading.Timer(self.sign_in_limit_s, self.close_connection_now)
+        self.sign_in_limit.daemon = True
+        self.sign_in_limit.start()
+
+    def finish(self):
+        self.sign_in_limit.cancel()
+        try:
+            super().finish()
+        except OSError:
+            pass
+
+    def close_connection_now(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def end_headers(self):
         self.send_header("X-Frame-Options", "DENY")
@@ -1962,6 +1983,7 @@ class RemoteHandler(Handler):
         self.guarded()
         self.device = REMOTE.device_for(self.sign_in_cookie())
         if self.device:
+            self.sign_in_limit.cancel()
             self.connection.settimeout(None)
 
     def page_token(self):
