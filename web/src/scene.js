@@ -1012,7 +1012,7 @@ function releaseLighting(group){
 // Furniture never moves once placed, so it's drawn in one go per material.
 function mergeFurniture(){
   world.updateMatrixWorld(true)
-  const skip=new Set(floors),shared=new Set(Object.values(mats));if(woodTop)shared.add(woodTop);if(bookAtlas)shared.add(bookAtlas);if(pageMaterial)shared.add(pageMaterial)
+  const skip=new Set(floors),shared=new Set(Object.values(mats));if(woodTop)shared.add(woodTop);if(bookAtlas)shared.add(bookAtlas);if(pageMaterial)shared.add(pageMaterial);shared.add(glassMat)
   actors.forEach(a=>a.g.traverse(o=>skip.add(o)))
   const piles=new Map()
   world.traverse(o=>{
@@ -1477,8 +1477,8 @@ function drawSpace(space,x0,z0){
     // The floor is a thin strip from a low camera, so the hover area also covers the desks and people.
     const volume=new THREE.Mesh(new THREE.BoxGeometry(W,TEAM_VOLUME_HEIGHT,D),new THREE.MeshBasicMaterial());volume.position.set(cx,TEAM_VOLUME_HEIGHT/2,cz);volume.visible=false;volume.spaceKey=key;world.add(volume);teamVolumes.push(volume)
     floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}))
-    box(world,W,1.3,.09,WHITE,cx,.65,z0);box(world,.09,1.3,D,WHITE,x0,.65,cz)
-    box(world,W,.09,.13,uniform.getHex(),cx,1.33,z0)
+    glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
+    box(world,W,.09,.13,uniform.getHex(),cx,2.5,z0)
     projector(team,x0,cz);spots[key].hasBoard=true
     const columns=Math.ceil(team.seats.length/2),isShared=team.seats.length>1
     rubberMat(world,cx,cz,columns*2.5+1.1,isShared?4.1:3)
