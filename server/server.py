@@ -96,6 +96,7 @@ TELEGRAM_QUIET_S = 10
 TELEGRAM_WAIT_S = 60
 TELEGRAM_CONNECT_S = 3
 TELEGRAM_STOP_S = 5
+TELEGRAM_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 TELEGRAM_NOTE = "The person has set themselves away and may text you on Telegram. Answer those texts with the Telegram reply tool. Reply to this note with only the word ready, without using any tools."
 SPEECH_DAILY_CAP = 20_000
 MODAL_CHECK_S = 60
@@ -244,7 +245,11 @@ def mia_copies():
         pid, _, command = line.strip().partition(" ")
         if TELEGRAM_CHANNEL not in command or "--resume" not in command or int(pid) == os.getpid():
             continue
-        folder = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=5).stdout
+        try:
+            folder = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError) as problem:
+            print(f"Couldn't check process {pid} for Telegram Mia: {problem}", file=sys.stderr, flush=True)
+            continue
         if f"n{FRONT_DESK.resolve()}" in folder.splitlines():
             copies.append(int(pid))
 
@@ -263,17 +268,20 @@ def signal_copy(pid, signal_number):
 
 
 def stop_mia_copies():
-    for signal_number in (signal.SIGTERM, signal.SIGKILL):
-        copies = mia_copies()
-        for pid in copies:
-            signal_copy(pid, signal_number)
-        deadline = time.time() + TELEGRAM_STOP_S
-        while copies and time.time() < deadline:
-            time.sleep(0.2)
+    try:
+        for signal_number in (signal.SIGTERM, signal.SIGKILL):
             copies = mia_copies()
-        if not copies:
-            return
-    print(f"Couldn't stop Telegram Mia: {copies}", file=sys.stderr, flush=True)
+            for pid in copies:
+                signal_copy(pid, signal_number)
+            deadline = time.time() + TELEGRAM_STOP_S
+            while copies and time.time() < deadline:
+                time.sleep(0.2)
+                copies = mia_copies()
+            if not copies:
+                return
+        print(f"Couldn't stop Telegram Mia: {copies}", file=sys.stderr, flush=True)
+    except (OSError, subprocess.SubprocessError) as problem:
+        print(f"Couldn't look for Telegram Mia: {problem}", file=sys.stderr, flush=True)
 
 
 def telegram_command(session):
@@ -281,7 +289,12 @@ def telegram_command(session):
     claude = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-chrome", "--settings", settings, "--resume", session, "--channels", TELEGRAM_CHANNEL]
 
     # The login shell finds claude and bun, which aren't on the background server's PATH. It runs the list as it is, without parsing it.
-    return [os.environ.get("SHELL", "/bin/zsh"), "-lic", 'exec "$@"', "telegram-mia", *claude]
+    # Only sh-style shells understand "$@", so fish and the like get zsh.
+    shell = os.environ.get("SHELL", "/bin/zsh")
+    if Path(shell).name not in TELEGRAM_SHELLS:
+        shell = "/bin/zsh"
+
+    return [shell, "-lic", 'exec "$@"', "telegram-mia", *claude]
 
 
 def is_away():
@@ -291,17 +304,25 @@ def is_away():
 def discard_telegram_mia():
     process = telegram_mia["process"]
     telegram_mia["process"] = None
+    # The copy this server holds stops even if looking for others fails.
+    if process is not None and process.poll() is None:
+        signal_copy(process.pid, signal.SIGTERM)
     stop_mia_copies()
-    if process is not None:
-        if process.stdin:
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
+    if process is None:
+        return
+    if process.stdin:
         try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
+            process.stdin.close()
+        except OSError:
             pass
+    try:
+        process.wait(timeout=TELEGRAM_STOP_S)
+    except subprocess.TimeoutExpired:
+        signal_copy(process.pid, signal.SIGKILL)
+        try:
+            process.wait(timeout=TELEGRAM_STOP_S)
+        except subprocess.TimeoutExpired:
+            print(f"Couldn't stop Telegram Mia: {process.pid}", file=sys.stderr, flush=True)
 
 
 def start_telegram_mia(transcript):

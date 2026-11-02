@@ -21,6 +21,18 @@ const FILES: Record<string, { real?: string; text?: string; size?: number }> = {
   [`${PROJECT}/env.py`]: { text: 'import os' },
   [`${PROJECT}/vars.txt`]: { text: 'export STRIPE_API_KEY=abcdefghijklmnop' },
   [`${PROJECT}/db.txt`]: { text: 'DB_PASSWORD: hunter2hunter2' },
+  [`${PROJECT}/k1.txt`]: { text: 'SECRET_KEY=abcdefghijklmnop12' },
+  [`${PROJECT}/k2.txt`]: { text: 'STRIPE_SECRET_KEY=sk_live_abcdefghijklmnopqrst' },
+  [`${PROJECT}/k3.txt`]: { text: 'JWT_SECRET_KEY: abcdefghijklmnop' },
+  [`${PROJECT}/k4.txt`]: { text: 'PRIVATE_KEY=abcdefghijklmnop' },
+  [`${PROJECT}/k5.txt`]: { text: 'password=hunter2' },
+  [`${PROJECT}/k6.txt`]: { text: 'google AIzaSyabcdefghijklmnopqrstuvwxyz01234' },
+  [`${PROJECT}/k7.txt`]: { text: 'stripe sk_live_abcdefghijklmnopqrst' },
+  [`${PROJECT}/credentials/prod.yaml`]: { text: 'a: 1' },
+  [`${PROJECT}/tokens/app.json`]: { text: '{}' },
+  [`${PROJECT}/secrets-prod/db.yaml`]: { text: 'a: 1' },
+  [`${PROJECT}/.env.d/app.conf`]: { text: 'a' },
+  [`${PROJECT}/.password-store/x.gpg`]: { text: 'a' },
   [`${PROJECT}/url.txt`]: { text: 'DATABASE_URL=postgres://user:pass@host/db' },
   [`${HOME}/code/infra/secrets/prod/db.yaml`]: { text: 'a: 1' },
   [`${PROJECT}/.claude/worktrees/w/plot.png`]: {},
@@ -33,6 +45,8 @@ const FILES: Record<string, { real?: string; text?: string; size?: number }> = {
 }
 const FOLDERS = [HOME, PROJECT, `${HOME}/code/infra/secrets/prod`, `${PROJECT}/.claude/worktrees/w`, `${HOME}/Documents`, `${HOME}/.agent-office/front-desk`, `${HOME}/scratch`]
 
+let isDeskMissing = false
+
 // Stands for the engine, with Mia running in her folder and one real project in the office.
 async function mia($: any, on: any, cwds = [PROJECT, `${PROJECT}/.claude/worktrees/w`, `${HOME}/code/infra/secrets/prod`, HOME, `${HOME}/Documents`, `${DATA}/front-desk`]) {
   const sent: unknown[] = []
@@ -42,6 +56,7 @@ async function mia($: any, on: any, cwds = [PROJECT, `${PROJECT}/.claude/worktre
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? HOME : undefined }))
   on('fs.exists', () => ({ value: false }))
   on('fs.stat', (_: unknown, e: { path: string }) => {
+    if (isDeskMissing && e.path.endsWith('/front-desk')) throw new Error('missing')
     if (FOLDERS.includes(e.path)) return { value: { kind: 'dir', size: 0, mtimeMs: 0, realPath: e.path } }
     const file = FILES[e.path]
     if (!file) throw new Error('missing')
@@ -110,6 +125,18 @@ for (const [why, file] of [
   ['named .envrc', `${PROJECT}/.envrc`],
   ['holding a prefixed key', `${PROJECT}/vars.txt`],
   ['holding a prefixed password', `${PROJECT}/db.txt`],
+  ['holding SECRET_KEY', `${PROJECT}/k1.txt`],
+  ['holding a prefixed SECRET_KEY', `${PROJECT}/k2.txt`],
+  ['holding JWT_SECRET_KEY', `${PROJECT}/k3.txt`],
+  ['holding PRIVATE_KEY', `${PROJECT}/k4.txt`],
+  ['holding a short password', `${PROJECT}/k5.txt`],
+  ['holding a Google key', `${PROJECT}/k6.txt`],
+  ['holding a Stripe key on its own', `${PROJECT}/k7.txt`],
+  ['in a credentials folder', `${PROJECT}/credentials/prod.yaml`],
+  ['in a tokens folder', `${PROJECT}/tokens/app.json`],
+  ['in a secrets-prod folder', `${PROJECT}/secrets-prod/db.yaml`],
+  ['in a .env.d folder', `${PROJECT}/.env.d/app.conf`],
+  ['in a .password-store folder', `${PROJECT}/.password-store/x.gpg`],
   ['holding a password in a URL', `${PROJECT}/url.txt`],
   ['when the session itself runs in a secrets folder', `${HOME}/code/infra/secrets/prod/db.yaml`],
   ['a relative path', 'plot.png'],
@@ -121,6 +148,18 @@ for (const [why, file] of [
     expect(JSON.stringify(answer)).toContain('Nothing was sent')
   })
 }
+
+test('if her folder cannot be found, the checks still apply', async ($, on) => {
+  isDeskMissing = true
+  try {
+    const sent = await mia($, on)
+    await send($, [`${HOME}/other/plot.png`])
+    await send($)
+    expect(sent).toEqual([undefined])
+  } finally {
+    isDeskMissing = false
+  }
+})
 
 test('one bad file stops the whole send', async ($, on) => {
   const sent = await mia($, on)

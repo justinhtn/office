@@ -73,8 +73,8 @@ What leaves your Mac through Telegram:
 The plugin checks each attachment in code, on the path it really leads to, so a symlink can't get around it. A refused send delivers nothing, and she tells you why. She can attach a file only if:
 
 - It's inside the folder of a session in the office, or the repo holding that session's worktree. Your home folder, top-level folders such as Documents, hidden folders in your home folder and `Library` don't count as project folders, and neither do no-folder sessions.
-- Its name and folders don't look like secrets, such as `.env`, `.git`, `.ssh`, keys, or anything with `token`, `secret`, `password` or `credential` in the name.
-- Its text doesn't contain something shaped like a private key, a token, or a password in a setting or URL. Source code that merely assigns a value to something called `token` can be refused too.
+- Its name and every folder below your home folder don't look like secrets, such as `.env`, `.git`, `.ssh`, keys, or anything with `token`, `secret`, `password` or `credential` in the name. That includes the project's own folder, so nothing can be attached from a project called `token-tools`.
+- Its text doesn't contain something shaped like a private key, a token, or a password in a setting or URL. Source code that mentions `token: string` or assigns a value to something called `token` is refused too.
 - It can be searched for those. A file too large to read (over 4 MB) is refused, unless it's an image, PDF, audio or video.
 - It's 50 MB or smaller.
 

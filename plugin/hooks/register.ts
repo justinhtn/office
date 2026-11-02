@@ -25,7 +25,7 @@ const SECRET_FOLDER = /^(\.git|\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.azure|\.gcl
 const SECRET_NAME =
   /^(\.env.*|.*\.env|env\.(production|prod|staging|dev|development|local|test)|\.dev\.vars|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfstate|tfvars)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.(netrc|npmrc|pypirc|git-credentials|htpasswd|pgpass)|.*(credential|secret|token|password|service-account|api[-_]?key).*)$/iu
 const SECRET_TEXT =
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}|\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b\d{8,10}:[A-Za-z0-9_-]{35}\b|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|(?<![a-z0-9])(api[-_]?key|access[-_]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?[^\s"']{8,}/i
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}|\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|\bAIza[0-9A-Za-z_-]{30,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b\d{8,10}:[A-Za-z0-9_-]{35}\b|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|(?<![a-z0-9])(private[-_]?key|api[-_]?key|access[-_]?key|secret|token|password|passwd)[a-z0-9_-]*["']?\s*[:=]\s*["']?[^\s"']{6,}/i
 // These can't be searched when too large or unreadable as text, and anything else unsearchable is refused.
 const MEDIA_FILE = /\.(png|jpe?g|gif|webp|heic|pdf|mp4|mov|m4v|webm|mp3|m4a|wav)$/iu
 // Too broad to count as one project, even if a session runs there.
@@ -452,7 +452,7 @@ async function checkAttachment($: EngineInterface, file: unknown, folders: strin
   const home = await realFolder($, (await $.env.get('HOME')) ?? '')
   const parts = real.slice((home ?? '').length + 1).replace(/\/\.claude\/worktrees\/[^/]+\//u, '/').split('/')
   const realName = parts.pop() ?? ''
-  if (!home || parts.some(isSecretFolder) || isSecretName(name) || isSecretName(realName)) {
+  if (!home || parts.some(part => isSecretFolder(part) || isSecretName(part)) || isSecretName(name) || isSecretName(realName)) {
     return { problem: `${name} looks like it holds secrets.` }
   }
   if (stat.size > MAX_ATTACHMENT_BYTES) return { problem: `${name} is over the 50 MB limit.` }
@@ -609,7 +609,9 @@ export const register: Register = on => {
     // Asked here rather than remembered, so a session.start hook that failed can't turn this off.
     const folder = `${await $.env.get('HOME')}/.agent-office`
     const here = await realFolder($, await $.session.cwd())
-    if (here !== (await realFolder($, `${folder}/front-desk`))) return next(e)
+    const desk = await realFolder($, `${folder}/front-desk`)
+    // If either can't be found, this might be her, so the checks below still apply.
+    if (here && desk && here !== desk) return next(e)
     dataFolder = folder
     const checked = await checkAttachments($, (e as unknown as { files?: unknown }).files)
     if ('problem' in checked) return { deny: `Nothing was sent. ${checked.problem}` }

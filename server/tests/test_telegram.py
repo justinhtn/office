@@ -15,6 +15,10 @@ class CommandTests(unittest.TestCase):
         self.assertIn("a b'; touch /tmp/no", command)
         self.assertEqual(command[command.index("--resume") + 1], "a b'; touch /tmp/no")
 
+    def test_a_shell_without_sh_syntax_gets_zsh(self):
+        with mock.patch.dict(server.os.environ, {"SHELL": "/opt/homebrew/bin/fish"}):
+            self.assertEqual(server.telegram_command("x")[0], "/bin/zsh")
+
     def test_a_shell_passes_arguments_through_unchanged(self):
         printer = [sys.executable, "-c", "import sys; print(sys.argv[1])", "a b'; $(x)"]
         output = subprocess.run(["/bin/sh", "-c", 'exec "$@"', "telegram-mia", *printer], capture_output=True, text=True, check=True).stdout
@@ -28,6 +32,7 @@ class FakeProcess:
             self.stdin.write.side_effect = BrokenPipeError()
         self.wait = mock.Mock()
         self.poll = mock.Mock(return_value=None)
+        self.pid = 1
 
 
 class SyncTests(unittest.TestCase):
@@ -47,12 +52,22 @@ class SyncTests(unittest.TestCase):
             patcher = mock.patch.object(server, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(server, "mia_session", return_value=self.transcript)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("mia_session", mock.Mock(return_value=self.transcript)), ("signal_copy", mock.Mock())):
+            patcher = mock.patch.object(server, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def away(self, is_on):
         server.write_json(server.AWAY_MODE, {"isOn": is_on})
+
+    def test_back_stops_the_copy_it_holds_even_when_it_cant_look_for_others(self):
+        self.away(False)
+        held = FakeProcess()
+        server.telegram_mia["process"] = held
+        with mock.patch.object(server, "mia_copies", side_effect=subprocess.TimeoutExpired("ps", 5)):
+            server.sync_telegram_mia()
+        server.signal_copy.assert_any_call(1, server.signal.SIGTERM)
+        self.assertIsNone(server.telegram_mia["process"])
 
     def test_back_stops_a_copy_this_server_never_started(self):
         self.away(False)
@@ -133,6 +148,20 @@ class RealProcessTests(unittest.TestCase):
         self.assertIsNotNone(old.wait(timeout=5))
         self.assertIsNotNone(older.wait(timeout=5))
         self.assertIsNone(elsewhere.poll())
+
+    def test_a_failed_folder_lookup_leaves_the_rest_to_be_found(self):
+        wanted = self.lookalike(server.FRONT_DESK)
+        other = self.lookalike(server.FRONT_DESK, "other")
+        real_run = subprocess.run
+
+        def flaky(command, **kwargs):
+            if command[0] == "lsof" and command[3] == str(wanted.pid):
+                raise subprocess.TimeoutExpired("lsof", 5)
+
+            return real_run(command, **kwargs)
+
+        with mock.patch.object(server.subprocess, "run", flaky):
+            self.assertEqual(server.mia_copies(), [other.pid])
 
     def test_a_copy_that_ignores_the_request_is_killed(self):
         code = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('up', flush=True); time.sleep(60)"
