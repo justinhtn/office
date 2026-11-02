@@ -59,6 +59,8 @@ The TV in your office lists your [Modal](https://modal.com) apps: what's running
 
 To save power, the room slows down after 30 seconds without input, dims after 30 minutes, and stops drawing while the page is hidden. Any input, or someone asking for you, brings it back. This doesn't affect alerts or voices, and it isn't the Sleep button.
 
+When testing the interface, add `?test` to the address. The room draws at low resolution and 5 frames a second, which is enough to check layout and take screenshots without working the fan. Small text on the TVs looks soft in this mode, and performance measurements should use the normal mode.
+
 ## Privacy and security
 
 - The server only listens on `127.0.0.1` and checks the host, origin and a token created at each start.

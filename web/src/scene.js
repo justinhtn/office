@@ -113,11 +113,13 @@ export function portrait(p) {
 }
 
 // The N64-style room. Everything else in the app is ordinary React.
+// ?test draws a small, slow room, enough to check layout without working the fan. Measure in normal mode.
+const TEST_MODE=new URLSearchParams(location.search).has('test'),TEST_PIXEL_RATIO=.6
 export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
 let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,modalTv=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
-renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2))
+renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
@@ -125,7 +127,7 @@ const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
 const camera = new THREE.PerspectiveCamera(46, 1, .1, 300)
 const hemi = new THREE.HemisphereLight(0xfffaf0, 0xc9b8a2, .62); scene.add(hemi)
-const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
+const sun = new THREE.DirectionalLight(0xfff0dc, .62); sun.castShadow = true; sun.shadow.autoUpdate = false; sun.shadow.mapSize.setScalar(TEST_MODE?512:2048); sun.shadow.bias = -.0006; sun.shadow.radius = 3; scene.add(sun)
 let world = new THREE.Group(); scene.add(world)
 
 const mats = {}
@@ -1712,7 +1714,7 @@ canvas.addEventListener('pointerup',e=>{drag=null;if(moved)return;const r=canvas
 canvas.addEventListener('wheel',e=>{e.preventDefault();isManual=true;view.zoom=Math.min(40,Math.max(-view.dist+6,view.zoom+e.deltaY*.02))},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 // Milliseconds between frames. Nothing is drawn while the page is hidden.
-const PACE_MS={active:33,watching:60,asleep:2000,hidden:0}
+const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
 function loop(){const t=clock.getElapsedTime()
@@ -1739,7 +1741,7 @@ function loop(){const t=clock.getElapsedTime()
   const fit=view.dist+view.zoom
   camera.position.set(view.center.x+Math.sin(view.az)*Math.cos(view.el)*fit,view.center.y+Math.sin(view.el)*fit,view.center.z+Math.cos(view.az)*Math.cos(view.el)*fit);camera.lookAt(view.center)
   marker.visible=false
-  const dt=Math.min(.1,t-lastTick);lastTick=t
+  const dt=Math.min(TEST_MODE?.25:.1,t-lastTick);lastTick=t
   actors.forEach(a=>{
     if(a.life?.undo)a.life.undo()
     if(a.mixer)a.mixer.update(dt)
