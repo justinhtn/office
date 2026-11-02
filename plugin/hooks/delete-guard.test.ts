@@ -151,6 +151,35 @@ const REFUSED: [string, string][] = [
   ['a cd that may fail', 'cd ~/.claude; cd /nonexistent/x; rm -rf projects'],
   ['a link made in the same command', 'ln -s ~/.claude /tmp/x/l; rm -rf /tmp/x/l/projects'],
   ['.. after a link', 'rm -rf /tmp/links/../projects'],
+  ['force with a pattern in ~/.claude', 'rm -f ~/.claude/projects/*/*.jsonl'],
+  ['plain rm with a pattern in ~/.claude', 'rm ~/.claude/projects/*/*'],
+  ['plain xargs rm', 'find ~/.claude/projects -type f | xargs rm'],
+  ['a heredoc end in ansi quotes', "cat <<$'EOF'\nx\nEOF\nrm -rf ~/.claude"],
+  ['a heredoc end split over two lines', 'cat <<EOF\nx\nEO\\\nF\nrm -rf ~/.claude'],
+  ['.. after a pattern', 'rm -rf n*/../../../.claude/projects'],
+  ['.. after a pattern in an absolute path', 'rm -rf /tmp/guard/*/../../../Users/me/.claude'],
+  ['trap with --', "trap -- 'rm -rf ~/.claude' EXIT"],
+  ['eval with --', "eval -- 'rm -rf ~/.claude'"],
+  ['bash -c with --', "bash -c -- 'rm -rf ~/.claude'"],
+  ['eval of a variable', `C='rm -rf ~/.claude'; eval "$C"`],
+  ['sh -c of a variable', `C='rm -rf ~/.claude'; sh -c "$C"`],
+  ['source from a here-string', "source /dev/stdin <<< 'rm -rf ~/.claude'"],
+  ['dot from a heredoc', ". /dev/stdin <<'EOF'\nrm -rf ~/.claude\nEOF"],
+  ['tcsh -c', "tcsh -c 'rm -rf ~/.claude'"],
+  ['csh -c', "csh -c 'rm -rf ~/.claude'"],
+  ['a changed HOME', 'HOME=~/.claude; rm -rf ~/projects'],
+  ['a changed CDPATH', 'CDPATH=~; cd .claude && rm -rf projects'],
+  ['chdir', 'chdir ~/.claude && rm -rf projects'],
+  ['env -C', 'env -C ~/.claude rm -rf projects'],
+  ['a stored rm with another flag first', 'R=rm; $R -v -rf ~/.claude'],
+  ['rm stored in an array', 'a=(rm -rf); "${a[@]}" ~/.claude'],
+  ['rm stored with set', 'set -- rm -rf ~/.claude; "$@"'],
+  ['arch', 'arch -arm64 rm -rf ~/.claude'],
+  ['repeat', 'repeat 1 rm -rf ~/.claude'],
+  ['env -S joined to its script', "env -S'rm -rf ~/.claude'"],
+  ['a split rm in unreadable syntax', '((1)); r${y}m -rf ~/.claude'],
+  ['find -delete through a launcher', 'arch -arm64 find ~/.claude -delete'],
+  ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
 for (const [why, command] of REFUSED) {
@@ -174,7 +203,6 @@ const ALLOWED: [string, string][] = [
   ['a literal name with a similar folder', 'rm -rf ~/.claude-old'],
   ['one file in ~/.claude without recursion', 'rm -f ~/.claude/old.json'],
   ['plain rm of a variable', 'rm "$f"'],
-  ['a variable in plain xargs rm', 'cat list | xargs rm'],
   ['single quotes that keep $ literal', "rm -rf 'cost$D'"],
   ['find -delete with a literal root', `find . -name '*.pyc' -delete`],
   ['find -delete with a variable name', 'find build -name "$pattern" -delete'],
@@ -192,6 +220,14 @@ const ALLOWED: [string, string][] = [
   ['an unrelated variable earlier', 'D=build; echo "$D"; rm -rf dist'],
   ['an unrelated broken quote', "echo don't"],
   ['an ordinary command', 'npm test && git status'],
+  ['a plain pattern in a project', 'rm *.log'],
+  ['force with a pattern in a temp folder', 'rm -f /tmp/*.log'],
+  ['a variable program that extracts', '"$TAR" -xf a.tar -C "$D"'],
+  ['a variable program that searches', '$GREP -rn foo "$DIR"'],
+  ['a variable program with a config', '"$HOME/bin/tool" -f "$CFG"'],
+  ['a variable program after a delete', 'rm -rf build && "$VENV/bin/python" x.py'],
+  ['find searching for the word rm', `find ~/.claude -name '*.jsonl' -exec grep -l 'rm -rf' {} +`],
+  ['an unrelated assignment beside a delete', 'X=1; rm -rf build'],
   ['a brace of literal paths', 'rm -rf build/{a,b}'],
   ['a brace in a temp folder', 'rm -rf /tmp/{a,b}'],
   ['ansi quotes elsewhere', "printf $'a\\n'"],
@@ -259,4 +295,19 @@ test('other commands still run when the check fails', async ($, on) => {
   const ran = recordRuns(on)
   await $.tool.call({ tool: 'Bash', command: 'git status' })
   expect(ran).toEqual(['git status'])
+})
+
+test('a cd in an earlier call still counts', async ($, on) => {
+  const cd = await bash($, on, 'cd ~/.agent-office')
+  expect(cd.deny).toBeUndefined()
+  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf front-desk' })
+  expect(rm.deny).toMatch(/agent-office/)
+})
+
+test('a cd that cannot be read in an earlier call still counts', async ($, on) => {
+  await bash($, on, 'cd "$D"')
+  const rm = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+  expect(rm.deny).toMatch(/isn't a literal path/)
+  const full = await $.tool.call({ tool: 'Bash', command: `rm -rf ${PROJECT}/build` })
+  expect(full.deny).toBeUndefined()
 })
