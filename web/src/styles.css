@@ -356,3 +356,33 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .team-list .voice-mode { padding: 0 6px; font-size: 11px; }
 .room-title { position: absolute; top: 48px; left: 12px; z-index: 3; padding: 5px 10px; font: 600 13px Inter, system-ui, sans-serif; color: #fff; background: rgba(14, 17, 24, .84); border-radius: 8px; box-shadow: 0 1px 6px rgba(0, 0, 0, .16); }
 .room-title button { color: inherit; font: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.presenting .corner, .presenting .room-title { display: none; }
+.presentation { position: absolute; top: 44px; left: 12px; bottom: 34px; z-index: 4; width: min(58%, 880px); display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; color: #e8e8ec; background: rgba(16, 18, 24, .96); border-radius: 12px; box-shadow: 0 6px 28px rgba(0, 0, 0, .35); font: 15px/1.5 Inter, system-ui, sans-serif; }
+.presentation-head { display: flex; align-items: center; gap: 10px; }
+.presentation-head > div { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.presentation-head small { color: #a1a1aa; }
+.presentation-head b { font-size: 18px; }
+.presentation-head .icon { color: #e8e8ec; }
+.presentation-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.presentation-page { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 34px 84px; background: #f7f6f2; color: #1f2024; border-radius: 8px; font: 18px/1.65 Georgia, serif; }
+.presentation-page p { margin: 0 0 14px; }
+.claim { display: inline; padding: 1px 2px; color: inherit; font: inherit; text-align: left; background: none; border: 0; border-bottom: 2px solid #3f9d6d; cursor: pointer; }
+.claim.flagged { border-bottom-color: #d4552f; background: rgba(212, 85, 47, .09); }
+.claim.unconfirmed { border-bottom: 2px dashed #b98a1e; background: rgba(185, 138, 30, .1); font-style: italic; }
+.claim.current { outline: 2px solid #128c8c; outline-offset: 1px; border-radius: 3px; }
+.claim-mark { display: inline-block; padding: 0 7px; font: 600 11px/18px Inter, system-ui, sans-serif; font-style: normal; white-space: nowrap; border-radius: 9px; color: #0e4a2f; background: #cfeedd; }
+.claim-mark.flagged { color: #7a2410; background: #f8d9ce; }
+.claim-mark.unconfirmed { color: #5f4508; background: #f4e3b4; }
+.presentation-pointer { position: absolute; top: 3px; right: calc(100% - 78px); display: flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; white-space: nowrap; color: #fff; font: 600 11px/18px Inter, system-ui, sans-serif; background: #128c8c; border-radius: 9px; pointer-events: none; transition: transform .45s ease; }
+.presentation-pointer i { width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid #fff; }
+.presentation-origin { margin: 0; color: #a1a1aa; font-size: 12px; }
+.presentation-step { display: flex; flex-direction: column; gap: 6px; min-height: 112px; }
+.presentation-line, .presentation-checked { margin: 0; }
+.presentation-checked { color: #c4c4cc; font-size: 13px; }
+.presentation-open { margin: 0; padding: 0; list-style: none; font-size: 13px; color: #c4c4cc; }
+.presentation-open li { margin-bottom: 3px; }
+.presentation-controls { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+.presentation-controls button { padding: 5px 14px; color: #e8e8ec; font: 600 13px Inter, system-ui, sans-serif; background: #2a2c34; border: 1px solid #3a3c46; border-radius: 7px; cursor: pointer; }
+.presentation-controls button:disabled { opacity: .45; cursor: default; }
+.presentation-controls button.primary, .presentation-controls button.chosen { color: #fff; background: #128c8c; border-color: #128c8c; }
+.presentation-controls small { color: #a1a1aa; margin-left: auto; }

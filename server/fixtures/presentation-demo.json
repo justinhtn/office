@@ -1,0 +1,246 @@
+{
+ "id": "agent-session-managers-excerpt",
+ "title": "Tools for managing many agent sessions",
+ "origin": "Excerpt from the research team's report, researched 2026-11-01",
+ "sourceName": "the report's comparison table",
+ "source": [
+  {
+   "tool": "Claude Code: desktop (Anthropic)",
+   "visualLevel": "1–2",
+   "form": "Sidebar filtered by status or project; split view; panes in a grid",
+   "stars": null
+  },
+  {
+   "tool": "Claude Code: agent view",
+   "visualLevel": "1",
+   "form": "Terminal list grouped by Pinned, Ready for review, Needs input, Working, Completed; colour-coded",
+   "stars": null
+  },
+  {
+   "tool": "Claude Code: agent teams",
+   "visualLevel": "0–2",
+   "form": "Panel below the prompt; split panes need tmux or iTerm2",
+   "stars": null
+  },
+  {
+   "tool": "Cursor",
+   "visualLevel": "2",
+   "form": "Agents Window with tiled panes; sidebar of agents (Secondhand)",
+   "stars": null
+  },
+  {
+   "tool": "Codex app (OpenAI)",
+   "visualLevel": "1",
+   "form": "Sidebar: Pinned, Projects, Recents; per-thread state (Secondhand)",
+   "stars": null
+  },
+  {
+   "tool": "Google Antigravity",
+   "visualLevel": "1?",
+   "form": "\"Command center\" for parallel local agents; layout not confirmed",
+   "stars": null
+  },
+  {
+   "tool": "GitHub Agent HQ",
+   "visualLevel": "1",
+   "form": "Agents tab; VS Code Agent sessions view",
+   "stars": null
+  },
+  {
+   "tool": "Conductor",
+   "visualLevel": "1",
+   "form": "\"At a glance\" (vendor); exact layout not found in pages read",
+   "stars": null
+  },
+  {
+   "tool": "Paradev (was Superset)",
+   "visualLevel": "1–2",
+   "form": "Workspaces with status and diff stats; groups for In Progress and Ready for Review",
+   "stars": "15.8k"
+  },
+  {
+   "tool": "cmux",
+   "visualLevel": "1–2",
+   "form": "Vertical tabs with notification text; panes \"light up\" when an agent needs attention",
+   "stars": "28.6k"
+  },
+  {
+   "tool": "herdr",
+   "visualLevel": "1",
+   "form": "Sidebar and tabs show working, done, waiting",
+   "stars": null
+  },
+  {
+   "tool": "workmux",
+   "visualLevel": "1",
+   "form": "tmux popup and sidebar: status, diff size, elapsed time",
+   "stars": "3.0k"
+  },
+  {
+   "tool": "Claude Squad",
+   "visualLevel": "1",
+   "form": "Terminal list with preview and diff tabs",
+   "stars": "8.7k"
+  },
+  {
+   "tool": "Gas Town",
+   "visualLevel": "0–1",
+   "form": "`gt convoy list` as \"dashboard\"",
+   "stars": "18.7k"
+  },
+  {
+   "tool": "Vibe Kanban",
+   "visualLevel": "3",
+   "form": "Board for planning, plus workspaces and diff comments",
+   "stars": "28.6k"
+  },
+  {
+   "tool": "Agor",
+   "visualLevel": "4",
+   "form": "Live 2D board of branches and sessions; zones fire prompts; live cursors",
+   "stars": "1.5k"
+  },
+  {
+   "tool": "Pixel Agents",
+   "visualLevel": "5",
+   "form": "(2D pixel art). Characters walk, type, read, show bubbles when waiting",
+   "stars": "10.0k"
+  },
+  {
+   "tool": "Agent Office",
+   "visualLevel": "5",
+   "form": "3D N64-style office; characters per session, rooms per team",
+   "stars": null
+  }
+ ],
+ "paragraphs": [
+  [
+   {
+    "claim": "list"
+   },
+   {
+    "text": " "
+   },
+   {
+    "claim": "vendors"
+   },
+   {
+    "text": " "
+   },
+   {
+    "claim": "boards"
+   },
+   {
+    "text": " "
+   },
+   {
+    "claim": "canvas"
+   },
+   {
+    "text": " "
+   },
+   {
+    "claim": "characters"
+   }
+  ],
+  [
+   {
+    "text": "Also left out because too little was found on them: Warp, Devin, "
+   },
+   {
+    "claim": "emdash"
+   },
+   {
+    "text": ", and many small dashboards."
+   }
+  ],
+  [
+   {
+    "text": "Biggest unknown. "
+   },
+   {
+    "claim": "unknown"
+   }
+  ]
+ ],
+ "claims": [
+  {
+   "id": "list",
+   "text": "Most of it is a list with status.",
+   "line": "Most of these tools are a list with status.",
+   "check": {
+    "type": "most_at_most",
+    "level": 2
+   }
+  },
+  {
+   "id": "vendors",
+   "text": "The big vendors have converged on a sidebar or a list grouped by state (needs input, working, ready for review), with split panes added.",
+   "line": "The big vendors have ended up with a sidebar or list.",
+   "check": {
+    "type": "rows_confirmed",
+    "tools": [
+     "Claude Code: desktop (Anthropic)",
+     "Cursor",
+     "Codex app (OpenAI)",
+     "Google Antigravity",
+     "GitHub Agent HQ"
+    ],
+    "phrase": "not confirmed"
+   }
+  },
+  {
+   "id": "boards",
+   "text": "Boards exist but are rarer.",
+   "line": "Boards exist, but far fewer tools have one.",
+   "check": {
+    "type": "rarer_than_lists",
+    "level": 3
+   }
+  },
+  {
+   "id": "canvas",
+   "text": "A 2D canvas exists in Agor.",
+   "line": "Agor is the one with a 2D canvas.",
+   "check": {
+    "type": "row_level",
+    "tools": [
+     "Agor"
+    ],
+    "level": 4
+   }
+  },
+  {
+   "id": "characters",
+   "text": "Characters in a room exist in Pixel Agents, and in Agent Office in 3D.",
+   "line": "Pixel Agents and this office both use characters in a room.",
+   "check": {
+    "type": "row_level",
+    "tools": [
+     "Pixel Agents",
+     "Agent Office"
+    ],
+    "level": 5
+   }
+  },
+  {
+   "id": "emdash",
+   "text": "Emdash (6.1k stars)",
+   "line": "Emdash has 6.1k stars.",
+   "check": {
+    "type": "row_stars",
+    "tool": "Emdash",
+    "stars": "6.1k"
+   }
+  },
+  {
+   "id": "unknown",
+   "text": "No one has compared list, board and spatial views for this job.",
+   "line": "Nobody has compared these views for this job.",
+   "check": {
+    "type": "none",
+    "why": "a table of tools can't show that a study doesn't exist"
+   }
+  }
+ ]
+}
