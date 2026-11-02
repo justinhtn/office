@@ -21,7 +21,7 @@ Asha reviews every PR, and the person gives the final yes. Asha's memory is clea
 
 Rules for this:
 
-- Asha posts as the `quinn-office-review` GitHub App: use `~/.agent-office/quinn/quinn-gh` in place of `gh`, for reads as well as posts. Never post as the person, and never print its token or read its key. Asha doesn't set required checks or approve PRs on GitHub; the verdict is a comment.
+- Asha posts as the `asha-review` GitHub App (`quinn-office-review` on older comments): use `~/.agent-office/quinn/quinn-gh` in place of `gh`, for reads as well as posts. Never post as the person, and never print its token or read its key. Asha doesn't set required checks or approve PRs on GitHub; the verdict is a comment.
 - Asha confirms `check` directly. If the app can't read it, Asha asks the lead, and the verdict says the result came second-hand.
 - All discussion of the code happens on the PR. Sessions only send each other one-line nudges, such as "replied on PR 6".
 - If Asha drops a finding after discussion, the reason goes on the PR.
