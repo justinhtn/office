@@ -10,7 +10,7 @@ const MAX_NESTING = 8
 const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'sleep', 'test', '[', 'mkdir', 'touch', 'cp', 'mv', 'cd', 'pushd', 'popd', 'git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'])
 // What these subcommands do with their arguments decides whether they can be vouched for.
 const RUNS_ARGUMENTS = /^(exec|x|dlx|explore)$/
-const PLAIN_GIT = /^(status|log|diff|show|add|commit|push|pull|fetch|branch|checkout|switch|merge|restore|reset|rm|mv|tag|stash|remote|rev-parse|ls-files|worktree|clone|init|blame)$/
+const PLAIN_GIT = /^(status|log|diff|show|add|commit|push|pull|fetch|branch|checkout|switch|merge|restore|reset|rm|mv|tag|stash|remote|rev-parse|ls-files|worktree|init|blame)$/
 const PLAIN_GH = /^(pr|issue|api|run|repo|release|auth)$/
 // Flags that make a listed program run another one.
 const RUNS_A_PROGRAM = /^--(pre|hostname-bin|compress-program|upload-pack|receive-pack|exec)\b/
@@ -22,8 +22,8 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
 const ADVICE = 'Run the delete as its own command with the full literal path, starting with /. Check it with ls first, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
 
 // Anything that could be a delete, once quotes are out of the way, including rm pieced together from variables.
-// A pattern or variable counts only as the program itself, perhaps after a wrapper, followed anywhere on its line by a flag rm could use.
-const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|(])\s*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|(])\s*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s)\S*[?*[]\S*(\s|$)|(^|[\n;&|(])\s*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=)(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
+// A pattern or variable counts only as the program itself, perhaps after a wrapper, !, { or a keyword, followed anywhere on its line by a flag rm could use.
+const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|(])\s*((!|\{|if|then|else|elif|do|while|until)\s+)*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|(])\s*((!|\{|if|then|else|elif|do|while|until)\s+)*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s)\S*[?*[]\S*(\s|$)|(^|[\n;&|(])\s*((!|\{|if|then|else|elif|do|while|until)\s+)*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=)(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
 
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
@@ -373,6 +373,8 @@ function checkCommand(words: Word[], home: string, targets: Target[]) {
     if (!command || !PLAIN_GIT.test(command.text)) return notVouched(`git ${command?.text ?? ''}`)
   }
   if (name === 'gh' && !PLAIN_GH.test(first)) return notVouched(`gh ${first}`)
+  // gh passes what follows -- to another program, such as git for gh repo clone.
+  if (name === 'gh' && args.some(arg => arg.text === '--')) return notVouched('gh ... --')
   if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return notVouched(`${name} exec`)
   if (name === 'docker' && !PLAIN_DOCKER.test(first)) return notVouched(`docker ${first}`)
 

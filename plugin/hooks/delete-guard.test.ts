@@ -251,6 +251,16 @@ const REFUSED: [string, string][] = [
   ['the same folder through the data volume', 'rm -rf /System/Volumes/Data/Users/me/.claude/projects'],
   ['a pattern program with no flags', '/bin/r? ~/.claude/projects/*/*.jsonl'],
   ['a substitution program with the flag later', "$(printf '\\162\\155') -v -r ~/.claude"],
+  ['a pattern program after !', '! /bin/r? -rf ~/.claude'],
+  ['a pattern program in a group', '{ /bin/r? -rf ~/.claude; }'],
+  ['a pattern program after then', 'if true; then /bin/r? -rf ~/.claude; fi'],
+  ['a variable program after !', "x=$(printf '\\x72m'); ! $x -rf ~/.claude"],
+  ['a pattern program after do', 'while true; do /bin/r? -r ~/.claude; done'],
+  ['a substitution program after !', '! $(printf r; printf m) -r ~/.claude'],
+  ['a substitution program after then', 'if true; then $(printf r; printf m) -r ~/.claude; fi'],
+  ['git clone --config', "git clone --config core.sshCommand='rm -rf ~/.claude #' git@github.com:a/b"],
+  ['git clone -u', "git clone --no-local -u 'rm -rf ~/.claude;' /tmp/repo x"],
+  ['gh repo clone passing flags to git', "gh repo clone a/b -- --config core.sshCommand='rm -rf ~/.claude #'"],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
@@ -306,6 +316,8 @@ const ALLOWED: [string, string][] = [
   ['a url that says soft-delete', 'curl https://x/soft-delete'],
   ['a test of a file beside a program', '[ -f /tmp/a ] && make'],
   ['git with -C beside a delete', 'git -C /tmp/x status && rm -f notes.txt'],
+  ['a test with ! and no delete', 'if ! [ -f /tmp/a ]; then echo /tmp/*.log -f; fi'],
+  ['gh pr create beside a delete', 'gh pr view 30 && rm -f notes.txt'],
   ['a program with an unrelated assignment', 'FOO=1 npm test'],
 ]
 
