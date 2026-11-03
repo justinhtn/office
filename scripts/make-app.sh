@@ -3,13 +3,14 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/scripts/port.sh"
 # The main Applications folder is where Finder, Launchpad and Spotlight look first.
 FOLDER=/Applications
 [ -w "$FOLDER" ] || FOLDER="$HOME/Applications"
 mkdir -p "$FOLDER"
 APP="$FOLDER/Agent Office.app"
 rm -rf "$APP"
-osacompile -o "$APP" -e 'do shell script "open -na \"Google Chrome\" --args --app=http://localhost:8794 --window-size=1400,850"'
+osacompile -o "$APP" -e "do shell script \"open -na \\\"Google Chrome\\\" --args --app=http://localhost:$PORT --window-size=1400,850\""
 cp "$ROOT/scripts/AgentOffice.icns" "$APP/Contents/Resources/applet.icns"
 # Newer macOS prefers the script editor icon in Assets.car, so remove it to use ours.
 rm -f "$APP/Contents/Resources/Assets.car"

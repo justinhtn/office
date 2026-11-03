@@ -3,7 +3,7 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-PORT=${AGENT_OFFICE_PORT:-8794}
+. "$ROOT/scripts/port.sh"
 DATA="$HOME/.agent-office"
 LABEL=com.agentoffice.server
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -54,7 +54,7 @@ else
 fi
 echo "Open a new Claude Code session so it starts feeding the office."
 
-"$(dirname "$0")/make-app.sh" || echo "Could not make the app icon. You can still open http://localhost:8794."
+AGENT_OFFICE_PORT=$PORT "$ROOT/scripts/make-app.sh" || echo "Could not make the app icon. You can still open http://localhost:$PORT."
 
 # Her session starts once you confirm the folder and press Enter in the app.
 LINK="$(python3 -c 'import os,urllib.parse as u;print("claude://code/new?"+u.urlencode({"folder":os.path.expanduser("~/.agent-office/front-desk"),"q":"Say hello in one short sentence and tell me who you are."}))')"
