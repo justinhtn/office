@@ -35,6 +35,7 @@ from remote_access import COOKIE, DEVICE_S, RemoteAccess  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
+PUBLIC = ROOT / "web" / "public"
 NO_INTERFACE_PAGE = """<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Agent Office</title>
 <body style="font:16px system-ui;margin:15vh auto;max-width:36em;padding:0 16px">
 <h1>The office isn't built yet</h1>
@@ -142,13 +143,17 @@ MEDIA_TYPES = {
 }
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 HIDDEN_TOOLS = re.compile(r"^(mcp__ccd_turn__|mcp__ccd_session__mark_chapter|ToolSearch$|mcp__visualize__read_me)")
+# What Vite names a built file: its name, a dash, then eight characters of its content hash.
+HASHED_ASSET = re.compile(r"^assets/[^/]+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$")
 ASSET_TYPES = {
     ".js": "text/javascript", ".css": "text/css", ".ttf": "font/ttf",
     ".svg": "image/svg+xml", ".woff2": "font/woff2",
     ".fbx": "application/octet-stream", ".jpg": "image/jpeg", ".png": "image/png", ".md": "text/plain",
     ".gltf": "model/gltf+json", ".glb": "model/gltf-binary", ".bin": "application/octet-stream", ".hdr": "application/octet-stream",
 }
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8794
+# scripts/port.sh and the plugin repeat this default, and a test keeps them the same.
+DEFAULT_PORT = 8794
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("AGENT_OFFICE_PORT") or DEFAULT_PORT)
 TOKEN = secrets.token_urlsafe(32)
 ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 ALLOWED_ORIGINS = {f"http://{host}" for host in ALLOWED_HOSTS}
@@ -188,7 +193,10 @@ SESSION_ID = re.compile(r"^local_[0-9a-f-]{36}$")
 JOB_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 '&/.+-]{0,31}$")
 FILLER_WORDS = {"a", "an", "and", "at", "for", "from", "in", "of", "on", "the", "to", "with", "btw:", "her", "his", "their", "my", "our"}
 AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
-SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12)|id_(rsa|ed25519)|credentials(\.json)?)$", re.I)
+# Only names that are almost always secret, since a wider net would hide files people want to read.
+SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|\.(netrc|npmrc|pypirc|git-credentials|htpasswd|pgpass))$|(^|/)\.ssh/", re.I)
+# Catches private keys with any name, such as an SSH key without the id_ prefix. A real key starts its line with this, unlike code that mentions it.
+PRIVATE_KEY = re.compile(rb"(?m)^-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 class Refused(Exception):
@@ -914,15 +922,26 @@ def file_list(session_id):
     return {"files": names[:2000]}
 
 
+def refuse_secret_name(relative, target):
+    """Checks the name asked for and the real path it leads to, since a link can give a secret an innocent name."""
+    if SECRET_FILE.search(relative) or SECRET_FILE.search(str(target)):
+        raise Refused(403, "Secret files aren't shown here.")
+
+
+def refuse_secret_text(*texts):
+    if any(PRIVATE_KEY.search(text) for text in texts):
+        raise Refused(403, "Secret files aren't shown here.")
+
+
 def file_text(session_id, relative):
     cwd = session_cwd(session_id).resolve()
     target = (cwd / relative).resolve()
     if not target.is_relative_to(cwd) or not target.is_file():
         raise Refused(404, "File not found in this session's folder.")
-    if SECRET_FILE.search(relative) or SECRET_FILE.search(target.name):
-        raise Refused(403, "Secret files aren't shown here.")
+    refuse_secret_name(relative, target)
     with target.open("rb") as handle:
         raw = handle.read(MAX_OUTPUT + 1)
+    refuse_secret_text(raw)
     if b"\0" in raw:
         return {"text": "This is a binary file.", "truncated": False}
 
@@ -954,10 +973,10 @@ def file_diff(session_id, relative):
     target = (cwd / relative).resolve()
     if not relative or not target.is_relative_to(cwd):
         raise Refused(404, "File not found in this session's folder.")
-    if SECRET_FILE.search(relative) or SECRET_FILE.search(target.name):
-        raise Refused(403, "Secret files aren't shown here.")
+    refuse_secret_name(relative, target)
     original, code = git(cwd, "show", f"HEAD:{relative}")
     modified = target.read_bytes()[:MAX_OUTPUT] if target.is_file() else b""
+    refuse_secret_text(original.encode(), modified)
     if "\0" in original or b"\0" in modified:
         return {"original": "", "modified": "This is a binary file."}
 
@@ -980,6 +999,14 @@ def asset(relative):
         raise Refused(404, "Not found.")
 
     return target.read_bytes(), kind
+
+
+def asset_cache(relative):
+    """The build names its own files after their contents, so those never change. Copied files keep their names, so they must be checked every time."""
+    if HASHED_ASSET.match(relative) and not (PUBLIC / relative).exists():
+        return "private, max-age=31536000, immutable"
+
+    return "no-store"
 
 
 def media_kind(path):
@@ -1168,7 +1195,10 @@ class Transcripts:
                             if tool_input.get("recap"):
                                 messages.append({"role": "recap", "body": str(tool_input["recap"]), "ask": str(tool_input.get("ask") or "")})
                         elif tool == "SendUserFile":
-                            files = [f for f in tool_input.get("files", []) if isinstance(f, str)]
+                            # Relative paths are from the session's folder, which Claude Code records on each line.
+                            folder = record.get("cwd")
+                            files = [str(Path(folder, os.path.expanduser(f))) if folder else os.path.expanduser(f) for f in tool_input.get("files", []) if isinstance(f, str)]
+                            files = [f for f in files if Path(f).is_absolute()]
                             shown = [media_item(session_id, f) for f in files if media_kind(f)]
                             if shown:
                                 messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
@@ -1669,12 +1699,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def reply(self, status, body, kind="application/json"):
+    def reply(self, status, body, kind="application/json", cache="no-store"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
@@ -1755,7 +1785,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path.startswith("/assets/"):
                 data, kind = asset(url.path.lstrip("/"))
-                self.reply(200, data, kind)
+                self.reply(200, data, kind, asset_cache(url.path.lstrip("/")))
                 return
             if url.path == "/media":
                 self.send_media({key: values[0] for key, values in parse_qs(url.query).items()})

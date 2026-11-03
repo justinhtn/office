@@ -13,12 +13,13 @@ SESSION = "local_00000000-0000-0000-0000-000000000001"
 
 class SecretFileTests(unittest.TestCase):
     def test_refuses_secret_names(self):
-        for path in (".env", ".env.local", "app/.ENV", "server.pem", "a/b/tls.key", "cert.P12", "id_rsa", ".ssh/id_ed25519", "credentials", "aws/credentials.json", "x/../.env"):
+        for path in (".env", ".env.local", "app/.ENV", "server.pem", "a/b/tls.key", "cert.P12", "id_rsa", ".ssh/id_ed25519", "credentials", "aws/credentials.json", "x/../.env",
+                     ".npmrc", "home/.netrc", ".git-credentials", "release.keystore", "app.jks", "id_ecdsa", ".ssh/deploy", "/Users/me/.ssh/config"):
             with self.subTest(path):
                 self.assertTrue(server.SECRET_FILE.search(path))
 
     def test_allows_ordinary_names(self):
-        for path in ("README.md", "env.py", ".environment", "keyboard.py", "key.txt", "credentials.py", "my_id_rsa", "pem/notes.txt", ".envs/notes.md"):
+        for path in ("README.md", "env.py", ".environment", "keyboard.py", "key.txt", "credentials.py", "my_id_rsa", "pem/notes.txt", ".envs/notes.md", "id_rsa.pub", "npmrc.md", "ssh/notes.txt", "token.ts"):
             with self.subTest(path):
                 self.assertFalse(server.SECRET_FILE.search(path))
 
@@ -58,6 +59,22 @@ class SessionFileTests(unittest.TestCase):
         self.assert_refused(server.file_text, "harmless.txt", 403)
         self.assert_refused(server.file_diff, "harmless.txt", 403)
 
+    def test_refuses_a_link_into_a_secret_folder(self):
+        (self.cwd / ".ssh").mkdir()
+        (self.cwd / ".ssh" / "deploy").write_text("KEY")
+        (self.cwd / "keys").symlink_to(self.cwd / ".ssh")
+        self.assert_refused(server.file_text, "keys/deploy", 403)
+        self.assert_refused(server.file_diff, "keys/deploy", 403)
+
+    def test_refuses_a_private_key_whatever_its_name(self):
+        (self.cwd / "deploy").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")
+        self.assert_refused(server.file_text, "deploy", 403)
+        self.assert_refused(server.file_diff, "deploy", 403)
+
+    def test_shows_code_that_only_mentions_a_private_key(self):
+        (self.cwd / "test_keys.py").write_text('KEY = "-----BEGIN OPENSSH PRIVATE KEY-----"\n')
+        self.assertFalse(server.file_text(SESSION, "test_keys.py")["truncated"])
+
     def test_refuses_paths_outside_the_folder(self):
         (self.cwd / "escape.txt").symlink_to(WORK / "outside.txt")
         for path in ("../outside.txt", str(WORK / "outside.txt"), "escape.txt"):
@@ -82,6 +99,16 @@ class SessionFileTests(unittest.TestCase):
             for path in ("beside.js", "assets/../beside.js", "assets/../../outside.js"):
                 with self.subTest(path), self.assertRaises(server.Refused):
                     server.asset(path)
+
+    def test_only_built_files_named_after_their_contents_are_cached(self):
+        public = WORK / "public"
+        (public / "assets").mkdir(parents=True)
+        (public / "assets" / "logo-abcdefgh.png").write_text("COPIED")
+        with mock.patch.object(server, "PUBLIC", public):
+            self.assertIn("immutable", server.asset_cache("assets/index-DX6ApQq_.js"))
+            for path in ("assets/app.js", "assets/icon-180.png", "assets/avatars/bob-abcdefgh.glb", "assets/logo-abcdefgh.png"):
+                with self.subTest(path):
+                    self.assertEqual(server.asset_cache(path), "no-store")
 
     def test_no_built_interface_shows_how_to_build_it(self):
         with mock.patch.object(server, "DIST", WORK / "no-dist"):
@@ -123,6 +150,8 @@ class RequestTests(unittest.TestCase):
         connection.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
         response = connection.getresponse()
 
+        self.headers = response.headers
+
         return response.status, response.read()
 
     def test_with_no_built_interface_the_page_explains_and_assets_are_missing(self):
@@ -131,6 +160,20 @@ class RequestTests(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertIn(b"update.sh", page)
             self.assertEqual(self.send("GET", "/assets/app.js")[0], 404)
+
+    def test_hashed_assets_are_cached_and_the_page_is_not(self):
+        dist = WORK / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("page")
+        (dist / "assets" / "index-DX6ApQqM.js").write_text("APP")
+        (dist / "assets" / "icon-180.png").write_text("ICON")
+        with mock.patch.object(server, "DIST", dist):
+            self.send("GET", "/")
+            self.assertEqual(self.headers["Cache-Control"], "no-store")
+            self.assertEqual(self.send("GET", "/assets/index-DX6ApQqM.js")[0], 200)
+            self.assertEqual(self.headers["Cache-Control"], "private, max-age=31536000, immutable")
+            self.send("GET", "/assets/icon-180.png")
+            self.assertEqual(self.headers["Cache-Control"], "no-store")
 
     def test_the_right_token_is_let_in(self):
         status, body = self.send("GET", "/api/sessions", token=server.TOKEN)
