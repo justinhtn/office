@@ -19,7 +19,7 @@ cd office
 ./scripts/install.sh
 ```
 
-To use another port, run it as `AGENT_OFFICE_PORT=9000 ./scripts/install.sh`. For `/office` in Claude Code to show that port too, set `AGENT_OFFICE_PORT` where Claude Code runs.
+To use another port, run it as `AGENT_OFFICE_PORT=9000 ./scripts/install.sh`. Running the install again keeps that port unless you set another. For `/office` in Claude Code to show that port too, set `AGENT_OFFICE_PORT` where Claude Code runs.
 
 Then open a new Claude Code session in the desktop app, and go to <http://localhost:8794>. Clicks in the office switch the Claude app's session, and you chat and approve there. The app's browser pane belongs to one session, so it hides when you switch; run the office in Chrome or Safari to keep it on screen.
 

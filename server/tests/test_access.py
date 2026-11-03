@@ -71,6 +71,10 @@ class SessionFileTests(unittest.TestCase):
         self.assert_refused(server.file_text, "deploy", 403)
         self.assert_refused(server.file_diff, "deploy", 403)
 
+    def test_shows_code_that_only_mentions_a_private_key(self):
+        (self.cwd / "test_keys.py").write_text('KEY = "-----BEGIN OPENSSH PRIVATE KEY-----"\n')
+        self.assertFalse(server.file_text(SESSION, "test_keys.py")["truncated"])
+
     def test_refuses_paths_outside_the_folder(self):
         (self.cwd / "escape.txt").symlink_to(WORK / "outside.txt")
         for path in ("../outside.txt", str(WORK / "outside.txt"), "escape.txt"):

@@ -8,7 +8,7 @@ ROOT = SERVER_PATH.parent.parent
 
 class PortTests(unittest.TestCase):
     def test_every_copy_of_the_default_port_is_the_same(self):
-        script = re.search(r"AGENT_OFFICE_PORT:-(\d+)", (ROOT / "scripts" / "port.sh").read_text()).group(1)
+        script = re.search(r":-(\d+)\}", (ROOT / "scripts" / "port.sh").read_text()).group(1)
         plugin = re.search(r"const DEFAULT_PORT = '(\d+)'", (ROOT / "plugin" / "hooks" / "register.ts").read_text()).group(1)
         self.assertEqual({int(script), int(plugin)}, {server.DEFAULT_PORT})
 

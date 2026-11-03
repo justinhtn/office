@@ -195,8 +195,8 @@ FILLER_WORDS = {"a", "an", "and", "at", "for", "from", "in", "of", "on", "the", 
 AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 # Only names that are almost always secret, since a wider net would hide files people want to read.
 SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|\.(netrc|npmrc|pypirc|git-credentials|htpasswd|pgpass))$|(^|/)\.ssh/", re.I)
-# Catches private keys with any name, such as an SSH key without the id_ prefix.
-PRIVATE_KEY = re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+# Catches private keys with any name, such as an SSH key without the id_ prefix. A real key starts its line with this, unlike code that mentions it.
+PRIVATE_KEY = re.compile(rb"(?m)^-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 class Refused(Exception):
@@ -1197,7 +1197,7 @@ class Transcripts:
                         elif tool == "SendUserFile":
                             # Relative paths are from the session's folder, which Claude Code records on each line.
                             folder = record.get("cwd")
-                            files = [str(Path(folder, f)) if folder else f for f in tool_input.get("files", []) if isinstance(f, str)]
+                            files = [str(Path(folder, os.path.expanduser(f))) if folder else os.path.expanduser(f) for f in tool_input.get("files", []) if isinstance(f, str)]
                             files = [f for f in files if Path(f).is_absolute()]
                             shown = [media_item(session_id, f) for f in files if media_kind(f)]
                             if shown:

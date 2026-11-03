@@ -116,6 +116,10 @@ class ToolTests(TranscriptCase):
         self.assertIn(server.media_signature(SESSION, "/x/project/out/a.png"), urls[0])
         self.assertIn(server.media_signature(SESSION, "/y/b.png"), urls[1])
 
+    def test_a_home_media_path_is_from_the_home_folder(self):
+        parsed = self.load(assistant(tool("f1", "SendUserFile", files=["~/shot.png"]), cwd="/x/project"))
+        self.assertIn(server.media_signature(SESSION, str(server.Path.home() / "shot.png")), parsed["messages"][0]["files"][0]["url"])
+
     def test_a_relative_media_path_without_a_folder_is_not_shown(self):
         self.assertEqual(self.load(assistant(tool("f1", "SendUserFile", files=["a.png"])))["messages"], [])
 
