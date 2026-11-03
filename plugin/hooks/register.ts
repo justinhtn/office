@@ -13,6 +13,8 @@ const SIDEBAR_MOVES_PER_PASS = 5
 const TITLE_CHANGES_PER_PASS = 5
 const FOCUS_MS = 2_000
 const USAGE_MS = 60_000
+// server/server.py and scripts/port.sh repeat this default, and a server test keeps them the same.
+const DEFAULT_PORT = '8794'
 const TEAM_TOOL = 'mcp__agent-office__team_status'
 const OFFICE_TOOL = 'mcp__agent-office__office_status'
 const NOTEBOOK_READ_TOOL = 'mcp__agent-office__notebook_read'
@@ -641,8 +643,8 @@ export const register: Register = on => {
     }
   })
 
-  on('command.run', { command: 'office' }, async () => ({
-    text: 'Agent Office is at http://localhost:8794',
+  on('command.run', { command: 'office' }, async $ => ({
+    text: `Agent Office is at http://localhost:${(await $.env.get('AGENT_OFFICE_PORT')) || DEFAULT_PORT}`,
   }))
 
   on('prompt.compose', async (_$, e, next) => {

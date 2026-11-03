@@ -1,5 +1,5 @@
 #!/bin/sh
-# Removes the plugin and background server. Pass --purge to also delete names and status.
+# Removes the plugin, background server and app. Pass --purge to also delete names and status.
 set -u
 
 LABEL=com.agentoffice.server
@@ -27,6 +27,21 @@ done
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 claude plugin uninstall agent-office@agent-office --scope user
 claude plugin marketplace remove agent-office
+
+# Only the app make-app.sh makes, and only if its script is still the one that opens the office.
+trash_app() {
+  [ -d "$1" ] || return 0
+  if ! osadecompile "$1/Contents/Resources/Scripts/main.scpt" 2>/dev/null | grep -q -e '--app=http://localhost:[0-9]*'; then
+    echo "Left $1 alone, because it doesn't look like the one Agent Office made." >&2
+  elif [ -x /usr/bin/trash ]; then
+    /usr/bin/trash "$1" || echo "Couldn't move $1 to the Trash. Drag it there to remove it." >&2
+  else
+    osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' -e 'end run' "$1" >/dev/null ||
+      echo "Couldn't move $1 to the Trash. Drag it there to remove it." >&2
+  fi
+}
+trash_app "/Applications/Agent Office.app"
+trash_app "$HOME/Applications/Agent Office.app"
 if [ "${1:-}" = --purge ]; then
   rm -rf "$HOME/.agent-office"
 fi
