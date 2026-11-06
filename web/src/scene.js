@@ -12,6 +12,7 @@ const cloneSkinned = model => SkeletonUtils.clone(model)
 
 import { api, teamsOf } from './api.js'
 import { SHARED_SPACES, hasRoom, keepPlaces, layoutStart, localLayout, parseLayout, shownSlots } from './officeLayout.js'
+import { labelRank, labelsToShow, roomNeeds, roomRank } from './labels.js'
 
 const AVATARS = '/assets/avatars'
 // The person's own avatar: one of the cast with red hair.
@@ -1080,6 +1081,8 @@ const SLEEP_REFLECTIONS=.06
 const NIGHT_REFLECTIONS=.45
 const REFLECTION_CHECK_S=2
 const OVERVIEW_TAG_SCALE=1.05
+// Closer than this, a person's tag shows everything even in the whole-office view.
+const FULL_TAG_DISTANCE=16
 const TABLE_TOP=1.055
 const COUNTER_TOP=1.06
 const BAR_LENGTH=3.7
@@ -1662,6 +1665,8 @@ function drawSpace(space,x0,z0){
     const {team}=space,uniform=new THREE.Color(uniformOf(team.lead.project)),isTeam=team.members.length>1
     spots[key].color=`#${uniform.getHexString()}`
     spots[key].teamName=spots[key].name=team.lead.teamName||team.lead.name
+    // In the whole-office view the room reads as its team and head count, even when its people's names don't fit.
+    addZoneTag(`${spots[key].name} · ${team.members.length}`,cx,z0-.2,key,roomNeeds(team.members))
     spots[key].team=team
     // The floor is a thin strip from a low camera, so the hover area also covers the desks and people.
     const volume=new THREE.Mesh(new THREE.BoxGeometry(W,TEAM_VOLUME_HEIGHT,D),new THREE.MeshBasicMaterial());volume.position.set(cx,TEAM_VOLUME_HEIGHT/2,cz);volume.visible=false;volume.spaceKey=key;world.add(volume);teamVolumes.push(volume)
@@ -1733,8 +1738,10 @@ function drawSpace(space,x0,z0){
     wallArt(world,cx+1.75,z0+.1)
   }
 }
-function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?a.p.readyLine||'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+function addZoneTag(name,x,z,key,needs={asking:0,ready:0}){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.rank=roomRank(needs)
+  if(needs.asking||needs.ready){const badge=document.createElement('b');badge.className='need-badge'+(needs.asking?' asks':'');badge.textContent=needs.asking?`${needs.asking} asking`:`${needs.ready} ready`;el.appendChild(badge)}
+  el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?a.p.readyLine||'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}if(a.p.request||a.p.isFinished){const need=document.createElement('b');need.className='need-badge'+(a.p.request?' asks':'');need.textContent=a.p.request?'Asking':'Ready';el.prepend(need)}el.rank=labelRank(a.p,isLead);el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 let viewShift=0
@@ -2212,7 +2219,23 @@ function loop(){const t=clock.getElapsedTime()
   const w=stage.clientWidth,h=stage.clientHeight
   let thoughtRoom=3
   const paneThoughts=new Map()
-  tags.forEach(({el,a,key,isZone})=>{if(split){placeSplitTag(el,a,isZone,key,paneThoughts);return}if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
+  tags.forEach(({el,a,key,isZone})=>{if(split){el.style.visibility='';el.classList.toggle('compact',false);placeSplitTag(el,a,isZone,key,paneThoughts);return}if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const away=camera.position.distanceTo(a.g.position),near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/away));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`;el.scale=near;el.classList.toggle('compact',!focusKey&&away>FULL_TAG_DISTANCE)}})
+  if(!split)fitOfficeLabels()
+}
+// In the whole-office view a person is just their name, and labels that would overlap are skipped: rooms first, then anyone who needs the person.
+function fitOfficeLabels(){
+  const boxes=[]
+  tags.forEach(({el,isZone})=>{
+    if(el.style.display==='none')return
+    if(!isZone&&!el.classList.contains('compact')){el.style.visibility='';return}
+    // Measured only when the tag changes, so a frame reads the page's layout once at most. A room cut to its badge keeps its full size here.
+    if(!el.classList.contains('badge-only')&&el.measuredAs!==el.className){el.size=[el.offsetWidth,el.offsetHeight];el.measuredAs=el.className}
+    const [w,h]=el.size,scale=isZone?1:el.scale||1,left=parseFloat(el.style.left),top=parseFloat(el.style.top)
+    boxes.push({el,left:left-w*scale/2,right:left+w*scale/2,top:top-h*scale,bottom:top,rank:el.rank??3})
+  })
+  const shown=labelsToShow(boxes)
+  // A room whose name doesn't fit still shows its badge when its team needs the person.
+  boxes.forEach(box=>{const {el}=box,isShown=shown.has(box),isBadge=!isShown&&el.classList.contains('zone-tag')&&el.rank<-1;el.classList.toggle('badge-only',isBadge);el.style.visibility=isShown||isBadge?'':'hidden'})
 }
 let pace='active',timer=setInterval(loop,PACE_MS.active)
 let signature=''
