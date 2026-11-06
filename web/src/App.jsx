@@ -1111,6 +1111,9 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
   )
 }
 
+// Under the Mac's CHALLENGE_S in server/passkeys.py.
+const FACE_ID_REFRESH_MS = 4 * 60 * 1000
+
 // For a device that skipped "Use Face ID next time" after its code. Hidden once it has a passkey, or where there are none.
 function FaceIdSetup() {
   const [stage, setStage] = useState('hidden')
@@ -1123,6 +1126,14 @@ function FaceIdSetup() {
       prepare()
     })
   }, [])
+  // A challenge lasts 5 minutes on the Mac, and the office stays open for hours, so keep a fresh one ready for the tap.
+  useEffect(() => {
+    if (stage !== 'ready' && stage !== 'problem') return
+    const timer = setInterval(prepare, FACE_ID_REFRESH_MS)
+    const onShow = () => { if (document.visibilityState === 'visible') prepare() }
+    document.addEventListener('visibilitychange', onShow)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onShow) }
+  }, [stage])
   useEffect(() => {
     if (stage !== 'done') return
     const timer = setTimeout(() => setStage('hidden'), 4000)

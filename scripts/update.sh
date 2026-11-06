@@ -35,7 +35,9 @@ update() {
   . "$ROOT/scripts/python-env.sh"
   office_python_env
   if [ "$(uname)" = Darwin ]; then
-    if [ "$(python3 "$ROOT/scripts/server-plist.py" use-python "$PLIST" "$OFFICE_PYTHON" "$ROOT/server/server.py")" = changed ]; then
+    # On its own line so set -e stops here, before any restart, if the job can't be read or changed.
+    CHANGED=$("$OFFICE_PYTHON" "$ROOT/scripts/server-plist.py" use-python "$PLIST" "$OFFICE_PYTHON" "$ROOT/server/server.py")
+    if [ "$CHANGED" = changed ]; then
       # A new Python only takes effect once launchd reloads the job.
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
     fi
