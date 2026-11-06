@@ -37,11 +37,18 @@ const fbx = url => new Promise((resolve, reject) => new FBXLoader().load(url, re
 const textures = new THREE.TextureLoader()
 const templates = new Map(), clips = new Map()
 
+// A texture that couldn't be fetched says so, so a face waiting for it fails at once instead of waiting it out.
+function avatarTexture(url) {
+  const texture = textures.load(url, undefined, undefined, () => { texture.userData.failed = true })
+  return texture
+}
+
 // The files carry a stray light and TGA textures the loader skips, so both are replaced.
 function template(id) {
   if (!templates.has(id)) {
     const folder = id === OWNER_AVATAR ? OWNER_BODY : id
-    templates.set(id, fbx(`${AVATARS}/${folder}/${folder}.fbx`).then(model => {
+    // A model that failed to load is forgotten, so a later ask can fetch it again.
+    templates.set(id, fbx(`${AVATARS}/${folder}/${folder}.fbx`).catch(failure => { templates.delete(id); throw failure }).then(model => {
       const strays = []
       model.traverse(o => { if (o.isLight || o.isCamera) strays.push(o) })
       strays.forEach(o => o.parent.remove(o))
@@ -54,11 +61,11 @@ function template(id) {
         const made = list.map(old => {
           const see = /_opacity$/.test(old.name)
           const isOwnerHead = id === OWNER_AVATAR && /_head$/.test(old.name)
-          const map = textures.load(isOwnerHead ? `${AVATARS}/owner_head_color.jpg` : id === OWNER_AVATAR && see ? `${AVATARS}/owner_opacity_color.png` : `${AVATARS}/${folder}/${old.name}_color.${see ? 'png' : 'jpg'}`)
+          const map = avatarTexture(isOwnerHead ? `${AVATARS}/owner_head_color.jpg` : id === OWNER_AVATAR && see ? `${AVATARS}/owner_opacity_color.png` : `${AVATARS}/${folder}/${old.name}_color.${see ? 'png' : 'jpg'}`)
           map.anisotropy = 8
           if (see) return new THREE.MeshLambertMaterial({ map, skinning: true, side: THREE.DoubleSide, alphaTest: .4 })
-          const normalMap = textures.load(`${AVATARS}/${folder}/${old.name}_normal.jpg`)
-          const specularMap = textures.load(`${AVATARS}/${folder}/${old.name}_specular.jpg`)
+          const normalMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_normal.jpg`)
+          const specularMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_specular.jpg`)
           return new THREE.MeshPhongMaterial({ map, normalMap, specularMap, normalScale: new THREE.Vector2(.9, .9), specular: 0x4a4a4a, shininess: 26, skinning: true })
         })
         o.material = made.length === 1 ? made[0] : made
@@ -97,10 +104,12 @@ const portraits = new Map()
 // The face is drawn only once its skin has arrived: without its textures a model draws as a dark silhouette, which would be kept
 // as the face. Everyone's textures load at once when the office opens, so on a slow connection this can take minutes.
 const PORTRAIT_TEXTURES_MS = 10 * 60 * 1000
-// A face that comes out unlit, or meets a lost context, is drawn again a few times, waiting longer each time.
+// A face that comes out unlit, or meets a lost context, is drawn again a few times, waiting longer each time. Nothing else is
+// redrawn, because another try can't mend it.
 const PORTRAIT_TRIES = 5
 const PORTRAIT_RETRY_MS = 3000
-async function texturesLoaded(model) {
+const worthRedrawing = message => Object.assign(new Error(message), { isWorthRedrawing: true })
+async function texturesLoaded(model, id) {
   const wanted = []
   model.traverse(o => {
     if (!o.isSkinnedMesh) return
@@ -111,6 +120,11 @@ async function texturesLoaded(model) {
   const isLoaded = texture => texture.image && (texture.image.complete !== false) && (texture.image.width || texture.image.naturalWidth)
   const deadline = Date.now() + PORTRAIT_TEXTURES_MS
   while (!wanted.every(isLoaded)) {
+    if (wanted.some(texture => texture.userData.failed)) {
+      // The model keeps its broken texture, so it's forgotten, and a later ask loads it afresh.
+      templates.delete(id)
+      throw new Error("One of the face's textures couldn't be fetched.")
+    }
     if (Date.now() > deadline) throw new Error("The face's textures didn't arrive.")
     await new Promise(resolve => setTimeout(resolve, 150))
   }
@@ -134,7 +148,7 @@ function isUnlit(pixels) {
 function drawPortrait(stage, lens) {
   if (roomRenderer) {
     // A lost context draws nothing and reads back zeros, which would be kept as a blank face, so it fails and is tried again later.
-    if (roomRenderer.getContext().isContextLost()) throw new Error("The room's WebGL context is lost.")
+    if (roomRenderer.getContext().isContextLost()) throw worthRedrawing("The room's WebGL context is lost.")
     // A renderer made before the room existed isn't needed any more, and its context counts against the phone's limit.
     if (portraitRenderer) {
       portraitRenderer.dispose()
@@ -152,7 +166,7 @@ function drawPortrait(stage, lens) {
       roomRenderer.setRenderTarget(before)
       target.dispose()
     }
-    if (isUnlit(pixels)) throw new Error('The face came out unlit.')
+    if (isUnlit(pixels)) throw worthRedrawing('The face came out unlit.')
     // WebGL's rows run bottom up, a picture's top down.
     const canvas = document.createElement('canvas')
     canvas.width = canvas.height = PORTRAIT_SIZE
@@ -169,11 +183,17 @@ function drawPortrait(stage, lens) {
     portraitRenderer.setSize(PORTRAIT_SIZE, PORTRAIT_SIZE, false)
   }
   portraitRenderer.render(stage, lens)
+  // The same backstop as above. The middle of the picture reads the same either way up.
+  const copy = document.createElement('canvas')
+  copy.width = copy.height = PORTRAIT_SIZE
+  const drawing = copy.getContext('2d')
+  drawing.drawImage(portraitRenderer.domElement, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE)
+  if (isUnlit(drawing.getImageData(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE).data)) throw worthRedrawing('The face came out unlit.')
 
-  return portraitRenderer.domElement.toDataURL()
+  return copy.toDataURL()
 }
 
-async function drawFace(source, p) {
+async function renderPortrait(source, id, p) {
   // A stage of its own, with fixed lights: nothing the room does, such as sleeping or night, reaches the face.
   const stage = new THREE.Scene()
   stage.background = new THREE.Color(uniformOf(p.project)).lerp(new THREE.Color(0xffffff), .7)
@@ -185,7 +205,7 @@ async function drawFace(source, p) {
   const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
   lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
   try {
-    await texturesLoaded(model)
+    await texturesLoaded(model, id)
     return drawPortrait(stage, lens)
   } finally {
     // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
@@ -199,19 +219,39 @@ export function portrait(p) {
     portraits.set(key, template(id).then(async source => {
       for (let attempt = 1; ; attempt++) {
         try {
-          return await drawFace(source, p)
+          return await renderPortrait(source, id, p)
         } catch (failure) {
-          if (attempt >= PORTRAIT_TRIES) throw failure
+          if (!failure.isWorthRedrawing || attempt >= PORTRAIT_TRIES) throw failure
           await new Promise(resolve => setTimeout(resolve, PORTRAIT_RETRY_MS * attempt))
         }
       }
     }).catch(failure => {
-      // Not remembered, so the face is tried again the next time it's shown.
+      // Not remembered, so the face is tried again the next time it's asked for.
       portraits.delete(key)
       throw failure
     }))
   }
   return portraits.get(key)
+}
+
+// For the room's faces that are drawn every frame: a face that failed is asked for again only after a wait that doubles,
+// from half a minute up to ten, so a face that keeps failing isn't asked for ten times a second. The entry's image is set once it's drawn.
+const FACE_RETRY_MS = 30000, FACE_RETRY_MAX_MS = 10 * 60 * 1000
+function askForFace(cache, key, person, onImage) {
+  const entry = cache.get(key)
+  if (entry && !(entry.retryAt && Date.now() >= entry.retryAt)) return entry
+  const asking = { image: null, wait: entry?.wait }
+  cache.set(key, asking)
+  portrait(person).then(url => {
+    const image = new Image()
+    image.onload = () => { asking.image = image; onImage?.(image) }
+    image.src = url
+  }, () => {
+    asking.wait = asking.wait ? Math.min(asking.wait * 2, FACE_RETRY_MAX_MS) : FACE_RETRY_MS
+    asking.retryAt = Date.now() + asking.wait
+  })
+
+  return asking
 }
 
 // The N64-style room. Everything else in the app is ordinary React.
@@ -293,8 +333,7 @@ const WHITE=0xf6f4ef,ORANGE=0xe0682f,WOOD=0x5c402c,CHARCOAL=0x2f3540,LEAF=0x2f8f
 const SCREEN_W=256,SCREEN_H=144,faces=new Map()
 function faceImage(person){
   const key=`${castOf(person)}|${person.project}`
-  if(!faces.has(key)){const entry={image:null};faces.set(key,entry);portrait(person).then(url=>{const image=new Image();image.onload=()=>{entry.image=image;actors.forEach(a=>{if(a.screen)a.screen.drawn=''})};image.src=url},()=>faces.delete(key))}
-  return faces.get(key).image
+  return askForFace(faces,key,person,()=>actors.forEach(a=>{if(a.screen)a.screen.drawn=''})).image
 }
 // The monitor on the person's own desk shows what's running and what it costs.
 function attachUsageScreen(mesh){
@@ -1532,7 +1571,7 @@ function drawBoard(board){
     g.fillStyle=UI.hover;roundRect(g,W-146,58,122,8,4);g.fill();if(done){g.fillStyle=UI.accent;roundRect(g,W-146,58,Math.max(8,122*done/total),8,4);g.fill()}
   }
   g.textAlign='left'
-  if(!isTeam)drawSoloRow(g,members[0],faces.get(members[0].id),W,H)
+  if(!isTeam)drawSoloRow(g,members[0],askForFace(faces,members[0].id,members[0],()=>drawBoard(board)).image,W,H)
   else{
   // Section label.
   const margin=24,right=W-24,nameX=margin+50,pillX=268,workX=420,ageX=right-16
@@ -1542,7 +1581,7 @@ function drawBoard(board){
   rows.forEach((p,i)=>{
     const top=123+i*54,y=top+27,status=statusOfRow(p),isIdle=status.rank===4
     if(p.id===lead.id){g.fillStyle=UI.soft;g.fillRect(margin,top+1,right-margin,52)}
-    const face=faces.get(p.id)
+    const face=askForFace(faces,p.id,p,()=>drawBoard(board)).image
     g.save();g.beginPath();g.arc(margin+22,y,17,0,7);g.clip();g.fillStyle=UI.hover;g.fillRect(margin+5,y-17,34,34);if(face)g.drawImage(face,margin+5,y-17,34,34);g.restore()
     g.fillStyle=isIdle?UI.muted:UI.text;g.font='600 16px '+boardFont;g.fillText(fit(p.name,pillX-nameX-14),nameX,isTeam&&p.id===lead.id?y-8:y)
     if(isTeam&&p.id===lead.id){g.fillStyle=UI.faint;g.font='12px '+boardFont;g.fillText('Lead',nameX,y+11)}
@@ -1597,7 +1636,6 @@ function projector(team,x0,cz){
   const g=canvas.getContext('2d');g.scale(2*size,2*size)
   const board={g,reflection,team,faces:new Map(),texture,live:m=>people.find(x=>x.id===m.id)||m,nextDraw:0,panel,spill}
   boards.push(board)
-  team.members.slice(0,12).forEach(m=>portrait(m).then(url=>{const image=new Image();image.onload=()=>{board.faces.set(m.id,image);drawBoard(board)};image.src=url},()=>{}))
   drawBoard(board)
 }
 // What an agent is on, from its task list or latest step. Never its private reasoning.
@@ -1882,9 +1920,7 @@ const mapNeedsYou=p=>Boolean(p.request||p.isFinished)
 const mapDotColor=p=>mapNeedsYou(p)?MAP_GOLD:p.isRunning||p.isWaiting?MAP_WORKING:MAP_IDLE
 const mapFaces=new Map()
 function mapFace(p){
-  // A face that couldn't be drawn is forgotten, so the map asks again on a later draw.
-  if(!mapFaces.has(p.id)){mapFaces.set(p.id,null);portrait(p).then(url=>{const image=new Image();image.onload=()=>mapFaces.set(p.id,image);image.src=url},()=>mapFaces.delete(p.id))}
-  return mapFaces.get(p.id)
+  return askForFace(mapFaces,p.id,p).image
 }
 function mapStatus(team){
   const members=team.members.map(m=>people.find(one=>one.id===m.id)||m),working=members.filter(m=>m.isRunning).length
