@@ -45,7 +45,7 @@ class Chat(unittest.TestCase):
         clean_slate()
         self.wanted = True
         self.copies = []
-        self.chat = mia_chat.MiaChat(DATA, WORK, mock.Mock(return_value=["true"]), lambda: self.wanted, find_copies=lambda _: list(self.copies))
+        self.chat = mia_chat.MiaChat(DATA, WORK, mock.Mock(return_value=["true"]), lambda: self.wanted, mock.Mock(return_value=["true"]), find_copies=lambda _: list(self.copies))
         self.chat.folder.mkdir()
         self.chat.notes.mkdir()
 
@@ -57,8 +57,9 @@ class Chat(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     def test_her_tools_are_limited_on_the_command_line(self):
         command = server.chat_command("abc", False)
-        # SendMessage is only there so the plugin can send an approved note. She isn't allowed to call it.
-        self.assertEqual(command[command.index("--tools") + 1], "ToolSearch,SendMessage")
+        self.assertEqual(command[command.index("--tools") + 1], "ToolSearch")
+        # dontAsk doesn't hold SendMessage back on its own, so it's denied outright, which removes it from her session.
+        self.assertEqual(json.loads(command[command.index("--settings") + 1])["permissions"]["deny"], ["SendMessage"])
         self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
         self.assertEqual(command[command.index("--allowedTools") + 1].split(","), server.CHAT_TOOLS)
         self.assertIn("--strict-mcp-config", command)
@@ -76,15 +77,51 @@ class CommandTests(unittest.TestCase):
     def test_every_chat_copy_carries_the_marker_the_stop_looks_for(self):
         self.assertIn(mia_chat.MARKER, " ".join(server.chat_command("abc", True)))
 
-    def test_away_mode_keeps_to_the_persons_own_conversation_with_her(self):
+    def test_the_test_plugin_switch_keeps_her_deny_rule(self):
+        with mock.patch.dict(server.os.environ, {"AGENT_OFFICE_TEST_PLUGIN": "/tmp/plugin"}):
+            command = server.chat_command("abc", False)
+        self.assertEqual(command.count("--settings"), 1)
+        settings = json.loads(command[command.index("--settings") + 1])
+        self.assertEqual((settings["permissions"]["deny"], settings["enabledPlugins"]), (["SendMessage"], {"agent-office@agent-office": False}))
+
+    def test_a_note_sender_gets_only_the_notes_id_and_a_fixed_prompt(self):
+        command = server.note_sender_command("11111111-2222-3333-4444-555555555555")
+        self.assertIn("AGENT_OFFICE_SEND_NOTE=11111111-2222-3333-4444-555555555555", command)
+        self.assertEqual(command[-1], server.NOTE_SENDER_PROMPT)
+        self.assertEqual(command[command.index("--tools") + 1], "SendMessage")
+        self.assertIn("--strict-mcp-config", command)
+        self.assertIn("--no-session-persistence", command)
+        for flag in ("--input-format", "--resume", "--allowedTools", "--append-system-prompt", "--channels"):
+            self.assertNotIn(flag, command)
+
+    def away_folder(self):
         clean_slate()
         folder = server.CLAUDE_PROJECTS / server.re.sub(r"[^A-Za-z0-9]", "-", str(server.FRONT_DESK.resolve()))
         folder.mkdir(parents=True)
         (folder / "desk.jsonl").write_text("")
         server.os.utime(folder / "desk.jsonl", (1, 1))
-        (folder / "chat.jsonl").write_text("")
         server.MIA_CHAT.folder.mkdir()
+        return folder
+
+    def test_away_mode_keeps_to_the_persons_own_conversation_with_her(self):
+        folder = self.away_folder()
+        (folder / "chat.jsonl").write_text("")
         mia_chat.write_json(server.MIA_CHAT.state_path, {"sessionId": "chat"})
+        self.assertEqual(server.mia_session().stem, "desk")
+
+    def test_away_mode_never_picks_a_chat_conversation_that_was_replaced(self):
+        folder = self.away_folder()
+        first = server.MIA_CHAT.new_session()
+        second = server.MIA_CHAT.new_session()
+        for session in (first, second):
+            (folder / f"{session}.jsonl").write_text("")
+        self.assertEqual(server.mia_session().stem, "desk")
+
+    def test_away_mode_knows_a_chat_conversation_even_if_its_record_is_lost(self):
+        folder = self.away_folder()
+        session = server.MIA_CHAT.new_session()
+        (folder / f"{session}.jsonl").write_text("")
+        server.MIA_CHAT.state_path.write_text("not json")
         self.assertEqual(server.mia_session().stem, "desk")
 
 
@@ -152,6 +189,12 @@ class AskTests(Chat):
 
 
 class NoteTests(Chat):
+    def setUp(self):
+        super().setUp()
+        self.popen = mock.patch.object(mia_chat.subprocess, "Popen", return_value=FakeProcess()).start()
+        self.addCleanup(mock.patch.stopall)
+        self.threads = mock.patch.object(mia_chat.threading, "Thread").start()
+
     def draft(self, lead=LEAD, status="draft"):
         note_id = str(mia_chat.uuid.uuid4())
         mia_chat.write_json(self.chat.notes / f"{note_id}.json", {"id": note_id, "leadId": lead, "leadName": "Zoe", "text": "Hi", "status": status, "at": 1})
@@ -165,6 +208,40 @@ class NoteTests(Chat):
         self.chat.decide(note_id, True, lambda lead: "engine-zoe" if lead == LEAD else None)
         self.assertEqual((self.note(note_id)["status"], self.note(note_id)["toSession"]), ("approved", "engine-zoe"))
         self.assertEqual(self.chat.view()["notes"][0]["status"], "approved")
+
+    def test_approving_starts_a_sender_given_only_the_notes_id(self):
+        note_id = self.draft()
+        self.chat.decide(note_id, True, lambda lead: "engine-zoe")
+        self.chat.send_command.assert_called_once_with(note_id)
+        options = self.popen.call_args.kwargs
+        # Nothing but the fixed command line reaches it: no stdin, and its own folder, not hers.
+        self.assertEqual(options["stdin"], mia_chat.subprocess.DEVNULL)
+        self.assertEqual(options["cwd"], self.chat.sender_folder.resolve())
+        self.assertTrue(options["start_new_session"])
+
+    def test_cancel_and_failure_start_no_sender(self):
+        self.chat.decide(self.draft(), False, lambda lead: "engine-zoe")
+        self.chat.decide(self.draft(), True, lambda lead: None)
+        self.popen.assert_not_called()
+
+    def test_a_note_its_sender_didnt_send_shows_as_failed(self):
+        for status in ("approved", "sending"):
+            with self.subTest(status):
+                note_id = self.draft(status=status)
+                self.chat.finish_sender(FakeProcess(), note_id)
+                self.assertEqual(self.note(note_id)["status"], "failed")
+
+    def test_a_sent_note_stays_sent(self):
+        note_id = self.draft(status="sent")
+        self.chat.finish_sender(FakeProcess(), note_id)
+        self.assertEqual(self.note(note_id)["status"], "sent")
+
+    def test_a_sender_that_hangs_is_stopped(self):
+        process = FakeProcess()
+        process.wait = mock.Mock(side_effect=[mia_chat.subprocess.TimeoutExpired("claude", 1)])
+        with mock.patch.object(mia_chat, "signal_copy") as signalled:
+            self.chat.finish_sender(process, self.draft(status="approved"))
+        signalled.assert_called_once_with(process.pid, mia_chat.signal.SIGKILL)
 
     def test_cancel_never_sends(self):
         note_id = self.draft()

@@ -27,6 +27,10 @@ QUICK_EXIT_S = 30
 FRESH_AFTER = 2
 # Every chat copy, and only a chat copy, names this tool on its command line, so leftovers can be found after a crash.
 MARKER = "mcp__agent-office__pass_note"
+# Every chat conversation's id starts with this, so Away mode can tell them from the person's own even if state.json is lost.
+CHAT_ID_PREFIX = "c4a7c4a7"
+# A note sender has this long to send its one note.
+SENDER_S = 120
 
 
 def read_json(path, fallback):
@@ -77,9 +81,12 @@ def signal_copy(pid, signal_number):
 
 
 class MiaChat:
-    def __init__(self, data, front_desk, command, is_wanted, find_copies=chat_copies):
+    def __init__(self, data, front_desk, command, is_wanted, send_command, find_copies=chat_copies):
         self.folder = Path(data) / "mia-chat"
         self.notes = self.folder / "notes"
+        self.sender_folder = self.folder / "sender"
+        self.send_command = send_command
+        self.senders = []
         self.state_path = self.folder / "state.json"
         self.history_path = self.folder / "history.json"
         self.log_path = Path(data) / "logs" / "mia-chat.log"
@@ -98,6 +105,19 @@ class MiaChat:
 
     def session_id(self):
         return read_json(self.state_path, {}).get("sessionId")
+
+    def is_chat_session(self, session):
+        state = read_json(self.state_path, {})
+
+        return session.startswith(CHAT_ID_PREFIX) or session in [state.get("sessionId"), *state.get("past", [])]
+
+    def new_session(self):
+        session = CHAT_ID_PREFIX + str(uuid.uuid4())[len(CHAT_ID_PREFIX):]
+        state = read_json(self.state_path, {})
+        past = [*state.get("past", []), *([state["sessionId"]] if state.get("sessionId") else [])]
+        write_json(self.state_path, {"sessionId": session, "past": past})
+
+        return session
 
     def history(self):
         kept = read_json(self.history_path, [])
@@ -151,7 +171,7 @@ class MiaChat:
                 self.reply = {"at": int(time.time() * 1000), "parts": {}, "order": [], "step": None}
 
     def decide(self, note_id, is_sent, lead_session):
-        """The person's tap on a draft. Only this turns a draft into something the plugin will send."""
+        """The person's tap on a draft. Only this turns a draft into something that can be sent, and starts the copy that sends it."""
         if not NOTE_ID.match(str(note_id)):
             raise ValueError("Bad note.")
         path = self.notes / f"{note_id}.json"
@@ -169,6 +189,39 @@ class MiaChat:
                 write_json(path, {**note, "status": "failed", "problem": "That lead isn't in the office any more."})
                 return
             write_json(path, {**note, "status": "approved", "toSession": session, "approvedAt": int(time.time() * 1000)})
+            self.start_sender(note_id)
+
+    def start_sender(self, note_id):
+        """A short-lived copy, given only the note's id, whose plugin sends that one stored note. Nothing else reaches it: no stdin, a fixed prompt."""
+        self.sender_folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.log_path.parent.mkdir(mode=0o700, exist_ok=True)
+        try:
+            with open(self.log_path, "ab") as output:
+                process = subprocess.Popen(self.send_command(note_id), cwd=self.sender_folder.resolve(), stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+        except OSError as problem:
+            log(f"Couldn't start a note sender: {problem}")
+            self.mark_unsent(note_id)
+            return
+        self.senders.append(process)
+        threading.Thread(target=self.finish_sender, args=(process, note_id), daemon=True).start()
+
+    def finish_sender(self, process, note_id):
+        try:
+            process.wait(timeout=SENDER_S)
+        except subprocess.TimeoutExpired:
+            signal_copy(process.pid, signal.SIGKILL)
+        with self.lock:
+            if process in self.senders:
+                self.senders.remove(process)
+        self.mark_unsent(note_id)
+
+    def mark_unsent(self, note_id):
+        """A note its sender didn't get to is shown as failed, not left looking as if it's on its way."""
+        path = self.notes / f"{note_id}.json"
+        with self.lock:
+            note = read_json(path, None)
+            if isinstance(note, dict) and note.get("status") in ("approved", "sending"):
+                write_json(path, {**note, "status": "failed", "problem": "It didn't go out. Ask Mia to draft it again."})
 
     def reply_text(self):
         return "\n\n".join(self.reply["parts"][key] for key in self.reply["order"] if self.reply["parts"][key].strip())
@@ -234,8 +287,7 @@ class MiaChat:
         # A conversation that keeps failing to resume is left behind, once, for a fresh one.
         is_new = not session or self.quick_exits == FRESH_AFTER
         if is_new:
-            session = str(uuid.uuid4())
-            write_json(self.state_path, {"sessionId": session})
+            session = self.new_session()
         self.stop_strays()
         with open(self.log_path, "ab") as output:
             process = subprocess.Popen(self.command(session, is_new), cwd=self.front_desk.resolve(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=output, start_new_session=True)
@@ -261,6 +313,10 @@ class MiaChat:
     def stop(self):
         with self.lock:
             process, self.process, self.reply, self.waiting = self.process, None, None, 0
+            senders = list(self.senders)
+        for sender in senders:
+            if sender.poll() is None:
+                signal_copy(sender.pid, signal.SIGKILL)
         # The copy this server holds stops even if looking for others fails.
         if process is not None:
             if process.poll() is None:

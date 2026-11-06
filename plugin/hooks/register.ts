@@ -45,7 +45,8 @@ const VOICE_NOTE =
 const ATTENTION_TOOL = 'mcp__agent-office__ask_for_attention'
 // Ask Mia: she drafts a note, the person taps Send in the office, and only then does this plugin send it, word for word.
 const PASS_NOTE_TOOL = 'mcp__agent-office__pass_note'
-const NOTES_MS = 2_000
+const PLUGIN_NAME = 'agent-office'
+const NOTE_ID = /^[0-9a-f-]{36}$/
 const MAX_NOTE_TEXT = 1500
 // Approval for anything risky comes from the person in the Claude app, so a note that reads like one, or mentions such a step, isn't drafted.
 const RISKY_NOTE =
@@ -101,7 +102,7 @@ let leadsTeam = false
 let isOnTeam = false
 let isFrontDesk = false
 let isMiaChat = false
-let isSendingNotes = false
+let isNoteSender = false
 
 // A worktree belongs to the repo that holds it, not to its own folder.
 function projectOf(session: Listed): string {
@@ -519,42 +520,37 @@ async function draftNote($: EngineInterface, input: { lead?: unknown; note?: unk
   return `Drafted a note to ${lead.name}. It's in the chat with Send and Cancel, and nothing goes out until the person taps Send. Tell them it's ready to check.`
 }
 
-// The office marks a note approved, with the lead's session, only when the person taps Send. Each one is sent once, as it was drafted.
-async function sendApprovedNotes($: EngineInterface): Promise<void> {
-  // One pass at a time, so a slow send can't let the next pass pick up the same note.
-  if (isSendingNotes) return
-  isSendingNotes = true
+// The note sender: a short-lived copy the office starts for one note the person approved, named only by its id. Its model reads
+// nothing but a fixed prompt and can use no tool; this plugin sends the stored text, once, if it's still approved and still fits.
+async function sendApprovedNote($: EngineInterface, id: string): Promise<void> {
+  if (!NOTE_ID.test(id)) return
+  const path = `${dataFolder}/mia-chat/notes/${id}.json`
+  let note: { id: string; leadId: string; leadName: string; text: string; status: string; toSession?: string }
   try {
-    const folder = `${dataFolder}/mia-chat/notes`
-    if (!(await $.fs.exists(folder))) return
-    for (const entry of await $.fs.list(folder)) {
-      if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-      const path = `${folder}/${entry.name}`
-      let note: { id: string; leadName: string; text: string; status: string; toSession?: string }
-      try {
-        note = JSON.parse(await $.fs.read(path)) as typeof note
-      } catch {
-        continue
-      }
-      if (note.status !== 'approved' || !note.toSession || `${note.id}.json` !== entry.name) continue
-      // Marked first, so a slow send or a restart can't send it twice.
-      await $.fs.write(path, JSON.stringify({ ...note, status: 'sending' }))
-      let sent: { isDelivered: boolean; reason?: string }
-      try {
-        sent = await $.session.send({ to: { sessionId: note.toSession }, text: `${RELAY_HEADER}\n\n${note.text}` })
-      } catch (problem) {
-        sent = { isDelivered: false, reason: String(problem) }
-      }
-      await $.fs.write(
-        path,
-        JSON.stringify({ ...note, status: sent.isDelivered ? 'sent' : 'failed', problem: sent.isDelivered ? undefined : sent.reason, sentAt: Date.now() }),
-      )
-    }
+    note = JSON.parse(await $.fs.read(path)) as typeof note
   } catch {
-    // A note that wasn't marked sending is tried again next time.
-  } finally {
-    isSendingNotes = false
+    return
   }
+  if (note.id !== id || note.status !== 'approved' || !note.toSession) return
+  // Marked first, so it can't go out twice.
+  await $.fs.write(path, JSON.stringify({ ...note, status: 'sending' }))
+  let sent: { isDelivered: boolean; reason?: string }
+  try {
+    // Checked again here, so a note that didn't come through pass_note can't go out in the person's name.
+    const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
+    const isLead = people.some(person => person.id === note.leadId && person.id === person.teamLeadId && !person.isAssistant)
+    sent = RISKY_NOTE.test(note.text)
+      ? { isDelivered: false, reason: 'It reads like approval or a risky step.' }
+      : !isLead
+        ? { isDelivered: false, reason: `${note.leadName} isn't a team lead in the office now.` }
+        : await $.session.send({ to: { sessionId: note.toSession }, text: `${RELAY_HEADER}\n\n${note.text}` })
+  } catch (problem) {
+    sent = { isDelivered: false, reason: String(problem) }
+  }
+  await $.fs.write(
+    path,
+    JSON.stringify({ ...note, status: sent.isDelivered ? 'sent' : 'failed', problem: sent.isDelivered ? undefined : sent.reason, sentAt: Date.now() }),
+  )
 }
 
 async function raiseRequest(
@@ -600,8 +596,10 @@ export const register: Register = on => {
         },
         isDeferred: false,
       })
-      $.clock.every(NOTES_MS, () => void sendApprovedNotes($))
     }
+    const noteToSend = (await $.env.get('AGENT_OFFICE_SEND_NOTE')) ?? ''
+    isNoteSender = Boolean(noteToSend) && (await $.session.cwd()) === `${dataFolder}/mia-chat/sender`
+    if (isNoteSender) $.clock.after(0, () => void sendApprovedNote($, noteToSend))
     if (isFrontDesk) {
       await $.tool.register({
         name: 'notebook_read',
@@ -725,24 +723,31 @@ export const register: Register = on => {
   })
 
   on('tool.check', async (_$, e, next) =>
-    isFrontDesk && (!FRONT_DESK_TOOLS.test(e.tool) || (e.tool === PASS_NOTE_TOOL && !isMiaChat))
-      ? { decision: 'deny' as const, reason: 'The front desk is read-only.' }
-      : next(e),
+    isNoteSender
+      ? // The host says who raised the check, so only this plugin's own send of the approved note gets through. Its model may use nothing.
+        e.tool === 'SendMessage' && next.origin.plugin === PLUGIN_NAME
+        ? next(e)
+        : { decision: 'deny' as const, reason: 'This copy only sends the one note the person approved.' }
+      : isFrontDesk && (!FRONT_DESK_TOOLS.test(e.tool) || (e.tool === PASS_NOTE_TOOL && !isMiaChat))
+        ? { decision: 'deny' as const, reason: 'The front desk is read-only.' }
+        : next(e),
   )
 
-  // Mia never writes to another session herself. Notes go out from this plugin, and only after the person taps Send.
+  // Mia and the note sender never write to another session themselves. Notes go out from this plugin, and only after the person taps Send.
   on('session.send', async ($, e, next) => {
     // Only a plugin's own send passes by itself. Anything else, including a send that doesn't say where it came from, is checked.
     if (e.origin?.kind === 'plugin') return next(e)
     const folder = (await $.env.get('AGENT_OFFICE_HOME')) || `${await $.env.get('HOME')}/.agent-office`
     const here = await realFolder($, await $.session.cwd())
     const desk = await realFolder($, `${folder}/front-desk`)
+    const sender = await realFolder($, `${folder}/mia-chat/sender`)
     // Without her folder there's no front desk. If only this session's folder can't be found, it might be her, so it's refused.
-    if (!desk || (here && here !== desk)) return next(e)
+    if (!desk || (here && here !== desk && here !== sender)) return next(e)
 
     return { isDelivered: false as const, reason: "The front desk can't message sessions. Draft a note with pass_note for the person to send." }
   }).catch(($, e, next) =>
-    next.called || !isFrontDesk ? next(e) : { isDelivered: false as const, reason: "Nothing was sent, because the front desk check didn't finish." },
+    // Fails closed: if the check didn't finish, only the plugin's own sends go out.
+    next.called || e.origin?.kind === 'plugin' ? next(e) : { isDelivered: false as const, reason: "Nothing was sent, because the front desk check didn't finish." },
   )
 
   on('session.compact', async ($, e, next) => {
