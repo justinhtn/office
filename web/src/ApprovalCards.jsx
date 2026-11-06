@@ -14,13 +14,14 @@ function MergeFacts({ card }) {
     <>
       <p className="card-title">
         <a href={card.url} target="_blank" rel="noreferrer">Pull request {card.pr} <ExternalLink size={12} /></a>
-        <span>{card.title}</span>
       </p>
       <ul className="card-facts" aria-label="What GitHub says">
         <li>In {card.repo}, at commit <code>{card.sha.slice(0, 7)}</code></li>
-        <li>The <code>check</code> passed on that commit</li>
-        {card.verdict && <li>{card.verdict.by}: “{card.verdict.line}”</li>}
+        <li>The <code>check</code> passed on that commit, which doesn't change the workflows</li>
+        {card.verdict && <li>The reviewer, {card.verdict.by}: “{card.verdict.line}”</li>}
       </ul>
+      {/* Whoever wrote the PR chose its title, so it's shown as their words, not as a fact. */}
+      <blockquote className="card-summary"><small>Its title, by its author</small>{card.title}</blockquote>
     </>
   )
 }

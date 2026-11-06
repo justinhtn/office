@@ -23,8 +23,10 @@ MAX_OPTION = 80
 REQUEST_ID = re.compile(r"^[0-9a-f-]{36}$")
 CARD_ID = re.compile(r"^[0-9a-f]{32}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
-# Asha and Grace post as this GitHub App, and end each verdict with a line saying which commit it covers.
-REVIEWERS = {"asha-review", "asha-review[bot]", "app/asha-review"}
+# Asha and Grace post as this GitHub App, and end each verdict with a line saying which commit it covers. Only an app's account
+# has "[bot]" in its login and the Bot type, and no one can register such a name, unlike the bare "asha-review".
+REVIEWER_APP = "asha-review"
+REVIEWER_LOGIN = f"{REVIEWER_APP}[bot]"
 VERDICT = re.compile(r"^\W*Verdict:\W*(.*)$", re.I | re.M)
 READY = re.compile(r"^ready for\W+([0-9a-f]{7,40})\b", re.I)
 REQUIRED_CHECK = "check"
@@ -43,17 +45,27 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def ready_verdict(comments, sha):
-    """The reviewer's latest verdict, if it says the PR is ready at exactly this commit. Their word, not proof."""
-    verdicts = [(comment, line) for comment in comments if (comment.get("author") or {}).get("login") in REVIEWERS for line in VERDICT.findall(comment.get("body") or "")]
+def one_line(text):
+    """The office's messages are single sentences, which the note sender checks them against, so nothing in them breaks a line."""
+    return " ".join(str(text).split())[:300]
+
+
+def from_reviewer(post):
+    """A comment or review the reviewers' app posted, and nobody has edited since."""
+    return post.get("login") == REVIEWER_LOGIN and post.get("type") == "Bot" and post.get("app") in (None, REVIEWER_APP) and not post.get("isEdited")
+
+
+def ready_verdict(posts, sha):
+    """The reviewer's latest verdict, in a comment or a review, if it says the PR is ready at exactly this commit. Their word, not proof."""
+    verdicts = [(post, line) for post in sorted(posts, key=lambda post: post.get("at") or "") if from_reviewer(post) for line in VERDICT.findall(post.get("body") or "")]
     if not verdicts:
         return None
-    comment, line = verdicts[-1]
+    post, line = verdicts[-1]
     ready = READY.match(line.strip())
     if not ready or not sha.startswith(ready.group(1).lower()):
         return None
 
-    return {"by": comment["author"]["login"], "url": comment.get("url"), "line": f"Verdict: {line.strip()}"[:200]}
+    return {"by": REVIEWER_APP, "url": post.get("url"), "line": f"Verdict: {line.strip()}"[:200]}
 
 
 def merge_problem(pull, sha=None):
@@ -69,10 +81,13 @@ def merge_problem(pull, sha=None):
         return "GitHub didn't say which commit it's at."
     if sha and head != sha:
         return "It has new commits since the card was made."
+    # A pull request's workflows run from its own branch, so one that changes them could make its own check pass.
+    if any(str(path).startswith(".github/") for path in pull.get("files") or []):
+        return "It changes the GitHub workflows, so its check can't be trusted here. Approve it in the Claude app."
     checks = [one for one in pull.get("statusCheckRollup") or [] if one.get("name") == REQUIRED_CHECK]
     if not checks or any(one.get("conclusion") != "SUCCESS" for one in checks):
         return "The check hasn't passed on its latest commit."
-    if not ready_verdict(pull.get("comments") or [], head):
+    if not ready_verdict(pull.get("posts") or [], head):
         return "No reviewer has said it's ready at its latest commit."
 
     return None
@@ -153,25 +168,44 @@ class Approvals:
             return
         with self.lock:
             state = self.expire(self.state())
+            due = []
             for path in sorted(self.requests.glob("*.json")):
                 if not REQUEST_ID.match(path.stem) or path.stem in state["seen"]:
                     continue
-                state["seen"].append(path.stem)
                 request = read_json(path, None)
-                card, problem = self.card_for(request, state) if isinstance(request, dict) and request.get("id") == path.stem else (None, "That request couldn't be read.")
-                if card:
-                    state["cards"].append(card)
-                    self.log(card, "shown")
-                write_json(path, {**(request if isinstance(request, dict) else {}), "outcome": "shown" if card else "refused", "problem": problem})
+                # Its outcome is written back into it, so a request handled long ago is never taken again, whatever "seen" still holds.
+                if isinstance(request, dict) and "outcome" in request:
+                    continue
+                state["seen"].append(path.stem)
+                due.append((path, request))
             self.save(state)
+        for path, request in due:
+            # GitHub is asked outside the lock, so a slow gh doesn't hold up the rest of the office.
+            card, problem = self.card_for(request) if isinstance(request, dict) and request.get("id") == path.stem else (None, "That request couldn't be read.")
+            if card:
+                with self.lock:
+                    state = self.expire(self.state())
+                    problem = self.no_room(card, state)
+                    if not problem:
+                        state["cards"].append(card)
+                        self.save(state)
+                        self.log(card, "shown")
+            write_json(path, {**(request if isinstance(request, dict) else {}), "outcome": "refused" if problem else "shown", "problem": problem})
 
-    def card_for(self, request, state):
+    def no_room(self, card, state):
+        """Why a card can't join those waiting, checked with the lock held."""
+        if sum(one["status"] == "open" for one in state["cards"]) >= MAX_OPEN:
+            return "Too many cards are already waiting."
+        if card["kind"] == "merge" and any(one["status"] == "open" and one.get("pr") == card["pr"] and one.get("sha") == card["sha"] for one in state["cards"]):
+            return f"There's already a card for pull request {card['pr']} at this commit."
+
+        return None
+
+    def card_for(self, request):
         """A card for a request that a team lead made and GitHub agrees with, or the reason there isn't one."""
         lead = self.lead_of(str(request.get("session", "")))
         if not lead:
             return None, "Only a team lead can ask for approval."
-        if sum(card["status"] == "open" for card in state["cards"]) >= MAX_OPEN:
-            return None, "Too many cards are already waiting."
         now = time.time()
         card = {
             "id": uuid.uuid4().hex,
@@ -190,9 +224,7 @@ class Approvals:
             problem = merge_problem(pull)
             if problem:
                 return None, f"Pull request {number}: {problem}"
-            if any(one["status"] == "open" and one.get("pr") == number and one.get("sha") == pull["headRefOid"] for one in state["cards"]):
-                return None, f"There's already a card for pull request {number} at this commit."
-            verdict = ready_verdict(pull["comments"], pull["headRefOid"])
+            verdict = ready_verdict(pull["posts"], pull["headRefOid"])
 
             return {**card, "kind": "merge", "repo": REPO, "pr": number, "sha": pull["headRefOid"], "title": str(pull.get("title", ""))[:200], "url": pull.get("url"), "checkPassed": True, "verdict": verdict}, None
         if request.get("kind") == "choice":
@@ -252,7 +284,7 @@ class Approvals:
             self.log(card, "merged" if ok else "not merged", card.get("device"), words)
         short = card["sha"][:7]
         self.notify(card["requestedBy"]["id"], f"The person approved merging pull request {card['pr']} at {short} with Face ID in the office, and the office merged it itself." if ok
-                    else f"The person approved merging pull request {card['pr']} at {short} with Face ID in the office, but the office didn't merge it: {words}")
+                    else f"The person approved merging pull request {card['pr']} at {short} with Face ID in the office, but the office didn't merge it: {one_line(words)}")
 
     def decline(self, card_id, device):
         with self.lock:
@@ -261,7 +293,7 @@ class Approvals:
             card.update(status="declined", decidedAt=time.time(), device=device, result="Declined.")
             self.save(state)
             self.log(card, "declined", device)
-        what = f"merging pull request {card['pr']}" if card["kind"] == "merge" else f"your question \"{card['question']}\""
+        what = f"merging pull request {card['pr']}" if card["kind"] == "merge" else f"your question \"{one_line(card['question'])}\""
         self.notify(card["requestedBy"]["id"], f"The person declined {what} in the office.")
 
     def answer(self, card_id, option, device):
@@ -273,4 +305,4 @@ class Approvals:
             card.update(status="done", decidedAt=time.time(), device=device, choice=option, result=f"Chose: {option}")
             self.save(state)
             self.log(card, "answered", device, option)
-        self.notify(card["requestedBy"]["id"], f"The person answered your question in the office. You asked: \"{card['question']}\" They chose: \"{option}\".")
+        self.notify(card["requestedBy"]["id"], f"The person answered your question in the office. You asked: \"{one_line(card['question'])}\" They chose: \"{one_line(option)}\".")

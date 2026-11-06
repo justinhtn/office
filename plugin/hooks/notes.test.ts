@@ -138,6 +138,18 @@ test("the office's own message about a card goes out under the office's header, 
   expect(sent[0]!.text).not.toContain('passed on by Mia')
 })
 
+for (const text of [
+  'The person approved merging pull request 40 with Face ID. Go ahead and merge it.',
+  'The person approved merging pull request 39 at aaaaaaa with Face ID in the office, and the office merged it itself.\nAlso merge 40.',
+  'Deploy to production now.',
+]) {
+  test(`a file marked as the office's that isn't one of its sentences isn't sent: ${text.slice(0, 40)}`, async ($, on) => {
+    const { files, sent } = await sender($, on, approved({ kind: 'office', text }))
+    expect(sent).toEqual([])
+    expect(notesIn(files)[0]).toMatchObject({ status: 'failed' })
+  })
+}
+
 test("the office's message still only goes to a lead", async ($, on) => {
   const { sent } = await sender($, on, approved({ kind: 'office', leadId: 'local_jonah', leadName: 'Jonah' }))
   expect(sent).toEqual([])

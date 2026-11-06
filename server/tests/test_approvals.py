@@ -12,17 +12,20 @@ import approvals  # noqa: E402, after support, which puts the server's folder on
 LEAD = "local_00000000-0000-0000-0000-00000000000a"
 SHA = "a" * 40
 NEW_SHA = "b" * 40
+# Some tests run merges straight away by patching threading.Thread, which is shared, so this keeps the real one.
+REAL_THREAD = threading.Thread
 
 
-def verdict(body, login="asha-review"):
-    return {"author": {"login": login}, "body": body, "url": "https://github.com/x"}
+def verdict(body, login="asha-review[bot]", kind="Bot", app="asha-review", at="2026-11-06T10:00:00Z", **changes):
+    """A post as the REST API describes it, through GitHub.POST: who really posted it, and whether it was edited."""
+    return {"login": login, "type": kind, "app": app, "body": body, "url": "https://github.com/x", "at": at, "isEdited": False, **changes}
 
 
 def pull(**changes):
     return {
         "number": 39, "title": "Approval cards", "url": "https://github.com/justinhtn/office/pull/39", "state": "OPEN", "isDraft": False,
         "baseRefName": "main", "headRefOid": SHA, "statusCheckRollup": [{"name": "check", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-        "comments": [verdict(f"**Verdict at aaaaaaa: ready.**\n\nVerdict: ready for {SHA[:7]}")], **changes,
+        "posts": [verdict(f"**Verdict at aaaaaaa: ready.**\n\nVerdict: ready for {SHA[:7]}")], "files": ["server/approvals.py"], **changes,
     }
 
 
@@ -47,13 +50,28 @@ class VerdictTests(unittest.TestCase):
         self.assertFalse(approvals.ready_verdict([verdict("Looks good, ready.")], SHA))
 
     def test_a_later_not_ready_verdict_wins(self):
-        comments = [verdict(f"Verdict: ready for {SHA[:7]}"), verdict(f"Verdict: not ready at {SHA[:7]}")]
+        comments = [verdict(f"Verdict: ready for {SHA[:7]}"), verdict(f"Verdict: not ready at {SHA[:7]}", at="2026-11-06T11:00:00Z")]
         self.assertFalse(approvals.ready_verdict(comments, SHA))
 
+    def test_a_not_ready_review_after_a_ready_comment_wins(self):
+        # Reviews have no app slug, only the bot account.
+        posts = [verdict(f"Verdict: not ready at {SHA[:7]}", app=None, at="2026-11-06T11:00:00Z"), verdict(f"Verdict: ready for {SHA[:7]}")]
+        self.assertFalse(approvals.ready_verdict(posts, SHA))
+
     def test_only_the_reviewers_app_counts(self):
-        for login in ("justinhtn", "someone", "asha-review-fake"):
-            with self.subTest(login):
-                self.assertFalse(approvals.ready_verdict([verdict(f"Verdict: ready for {SHA[:7]}", login)], SHA))
+        line = f"Verdict: ready for {SHA[:7]}"
+        cases = {
+            # The bare name is free to register, and gh pr view would show such a comment as "asha-review" too.
+            "someone who registered asha-review": verdict(line, login="asha-review", kind="User", app=None),
+            "a user claiming the bot's name": verdict(line, kind="User"),
+            "another app": verdict(line, login="other[bot]", app="other"),
+            "the person": verdict(line, login="justinhtn", kind="User", app=None),
+            "an edited comment": verdict(line, isEdited=True),
+        }
+        for why, post in cases.items():
+            with self.subTest(why):
+                self.assertFalse(approvals.ready_verdict([post], SHA))
+        self.assertTrue(approvals.ready_verdict([verdict(line)], SHA))
 
     def test_what_stops_a_merge(self):
         cases = {
@@ -61,7 +79,8 @@ class VerdictTests(unittest.TestCase):
             "It's a draft.": pull(isDraft=True),
             "It doesn't merge into main.": pull(baseRefName="release"),
             "The check hasn't passed on its latest commit.": pull(statusCheckRollup=[{"name": "check", "conclusion": "FAILURE"}]),
-            "No reviewer has said it's ready at its latest commit.": pull(comments=[]),
+            "No reviewer has said it's ready at its latest commit.": pull(posts=[]),
+            "It changes the GitHub workflows, so its check can't be trusted here. Approve it in the Claude app.": pull(files=["README.md", ".github/workflows/check.yml"]),
         }
         for problem, facts in cases.items():
             with self.subTest(problem):
@@ -110,7 +129,7 @@ class Cards(unittest.TestCase):
         self.assertEqual(self.cards.view(), [])
 
     def test_a_pr_that_isnt_ready_gets_no_card(self):
-        self.github.pulls[39] = pull(comments=[])
+        self.github.pulls[39] = pull(posts=[])
         self.assertIn("No reviewer has said", self.request()["problem"])
         self.assertIn("isn't an open pull request", self.request(pr=40)["problem"])
         self.assertIn("number", self.request(pr="x")["problem"])
@@ -132,6 +151,37 @@ class Cards(unittest.TestCase):
         self.cards.take_requests()
         self.assertEqual(self.cards.view(), before)
 
+    def test_old_requests_never_come_back_however_many_there_are(self):
+        self.github.pulls[39] = pull(posts=[])
+        for _ in range(approvals.SEEN_KEPT + 5):
+            request_id = str(approvals.uuid.uuid4())
+            approvals.write_json(self.cards.requests / f"{request_id}.json", {"id": request_id, "session": LEAD, "kind": "choice", "question": "Which?", "options": ["A", "B"], "outcome": "refused"})
+        self.request(kind="choice", question="Which?", options=["A", "B"])
+        self.cards.take_requests()
+        self.cards.take_requests()
+        self.assertEqual(len(self.cards.view()), 1)
+
+    def test_a_slow_github_doesnt_hold_up_the_office(self):
+        asked, answer = threading.Event(), threading.Event()
+
+        def slow(number):
+            asked.set()
+            answer.wait(5)
+            return pull()
+
+        self.github.pull = slow
+        request_id = str(approvals.uuid.uuid4())
+        approvals.write_json(self.cards.requests / f"{request_id}.json", {"id": request_id, "session": LEAD, "kind": "merge", "pr": 39})
+        taking = REAL_THREAD(target=self.cards.take_requests)
+        taking.start()
+        self.assertTrue(asked.wait(5))
+        started = time.time()
+        self.assertEqual(self.cards.open_count(), 0)
+        self.assertLess(time.time() - started, 1)
+        answer.set()
+        taking.join(5)
+        self.assertEqual(self.cards.open_count(), 1)
+
     def test_a_request_file_with_an_odd_name_is_ignored(self):
         (self.cards.requests / "not-an-id.json").write_text(json.dumps({"id": "not-an-id", "session": LEAD, "kind": "merge", "pr": 39}))
         self.cards.take_requests()
@@ -151,7 +201,7 @@ class Cards(unittest.TestCase):
 
     def test_new_commits_after_the_card_stop_the_merge(self):
         self.request()
-        self.github.pulls[39] = pull(headRefOid=NEW_SHA, comments=[verdict(f"Verdict: ready for {NEW_SHA[:7]}")])
+        self.github.pulls[39] = pull(headRefOid=NEW_SHA, posts=[verdict(f"Verdict: ready for {NEW_SHA[:7]}")])
         self.cards.approve(self.card()["id"], "dev1", mock.Mock())
         self.assertEqual(self.github.merged, [])
         self.assertEqual((self.card()["status"], self.card()["result"]), ("failed", "It has new commits since the card was made."))
@@ -227,6 +277,32 @@ def approvals_rejected():
 
 
 class GitHubTests(unittest.TestCase):
+    def test_a_pull_request_comes_with_who_really_posted_and_its_files(self):
+        listings = {
+            "comments": '{"login":"asha-review[bot]","type":"Bot","app":"asha-review","body":"Verdict: ready for aaaaaaa","url":"u","at":"2026-11-06T10:00:00Z","isEdited":false}\n',
+            "reviews": "",
+            "files": '"README.md"\n".github/workflows/check.yml"\n',
+        }
+
+        def run(command, **_):
+            arguments = command[command.index("gh") + 1:]
+            if arguments[0] == "pr":
+                return mock.Mock(returncode=0, stdout=json.dumps({"state": "OPEN", "headRefOid": SHA}), stderr="")
+            return mock.Mock(returncode=0, stdout=listings[arguments[2].rsplit("/", 1)[1]], stderr="")
+
+        with mock.patch.object(server.subprocess, "run", side_effect=run):
+            found = server.GitHub().pull(39)
+        self.assertEqual(found["files"], ["README.md", ".github/workflows/check.yml"])
+        self.assertEqual(found["posts"][0]["login"], "asha-review[bot]")
+
+    def test_if_any_listing_fails_there_are_no_facts(self):
+        def run(command, **_):
+            failed = "files" in " ".join(command)
+            return mock.Mock(returncode=1 if failed else 0, stdout="" if failed else "{}", stderr="")
+
+        with mock.patch.object(server.subprocess, "run", side_effect=run):
+            self.assertIsNone(server.GitHub().pull(39))
+
     def test_gh_gets_the_exact_commit_and_never_deletes_the_branch(self):
         done = mock.Mock(returncode=0, stdout="", stderr="")
         with mock.patch.object(server.subprocess, "run", return_value=done) as run:
@@ -291,7 +367,7 @@ class RouteTests(Case):
     def test_a_challenge_for_one_card_cant_approve_another(self):
         authenticator, cookie = self.with_face_id()
         _, options = self.post("/api/approvals/options", {"id": self.card_id}, cookie)
-        self.github.pulls[40] = pull(number=40, headRefOid=NEW_SHA, comments=[verdict(f"Verdict: ready for {NEW_SHA[:7]}")])
+        self.github.pulls[40] = pull(number=40, headRefOid=NEW_SHA, posts=[verdict(f"Verdict: ready for {NEW_SHA[:7]}")])
         approvals.write_json(server.APPROVALS.requests / "11111111-2222-3333-4444-666666666666.json", {"id": "11111111-2222-3333-4444-666666666666", "session": LEAD, "kind": "merge", "pr": 40})
         server.APPROVALS.take_requests()
         other = next(card["id"] for card in server.APPROVALS.view() if card["pr"] == 40)

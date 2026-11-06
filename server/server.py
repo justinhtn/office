@@ -515,19 +515,38 @@ def tell_lead(person_id, text):
 class GitHub:
     """The person's own gh, on this Mac. The office never reads or prints its token; gh keeps it."""
 
-    FIELDS = "number,title,url,state,isDraft,baseRefName,headRefOid,statusCheckRollup,comments"
+    FIELDS = "number,title,url,state,isDraft,baseRefName,headRefOid,statusCheckRollup"
+    # The REST API says who really posted: an app's account is "<slug>[bot]", of type Bot. gh pr view drops both.
+    POST = '{login: .user.login, type: .user.type, app: .performed_via_github_app.slug, body, url: .html_url, at: (.created_at // .submitted_at), isEdited: (.updated_at != null and .updated_at != .created_at)}'
 
     def run(self, *arguments):
         # The login shell finds gh, as it finds claude. GH_PROMPT_DISABLED keeps gh from waiting on a question nobody sees.
         command = in_login_shell("office-gh", ["env", "GH_PROMPT_DISABLED=1", "gh", *arguments])
         return subprocess.run(command, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
 
-    def pull(self, number):
-        done = self.run("pr", "view", str(int(number)), "--repo", APPROVALS_REPO, "--json", self.FIELDS)
+    def lines(self, path, jq):
+        """Every item of a paged REST listing, one per line, or None if gh couldn't get them all."""
+        done = self.run("api", "--paginate", path, "--jq", jq)
         try:
-            return json.loads(done.stdout) if done.returncode == 0 else None
+            return [json.loads(line) for line in done.stdout.splitlines() if line.strip()] if done.returncode == 0 else None
         except ValueError:
             return None
+
+    def pull(self, number):
+        number = int(number)
+        done = self.run("pr", "view", str(number), "--repo", APPROVALS_REPO, "--json", self.FIELDS)
+        try:
+            pull = json.loads(done.stdout) if done.returncode == 0 else None
+        except ValueError:
+            return None
+        comments = self.lines(f"repos/{APPROVALS_REPO}/issues/{number}/comments", f".[] | {self.POST}")
+        reviews = self.lines(f"repos/{APPROVALS_REPO}/pulls/{number}/reviews", f".[] | {self.POST}")
+        # gh prints a bare string without quotes, so each name is written out as JSON.
+        files = self.lines(f"repos/{APPROVALS_REPO}/pulls/{number}/files", ".[].filename | @json")
+        if not pull or comments is None or reviews is None or files is None:
+            return None
+
+        return {**pull, "posts": comments + reviews, "files": files}
 
     def merge(self, number, sha):
         done = self.run("pr", "merge", str(int(number)), "--repo", APPROVALS_REPO, "--squash", "--delete-branch=false", "--match-head-commit", sha)

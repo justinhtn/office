@@ -27,7 +27,7 @@ Rules for this:
 - All discussion of the code happens on the PR. Sessions only send each other one-line nudges, such as "replied on PR 6".
 - If a reviewer drops a finding after discussion, the reason goes on the PR.
 - If GitHub or a permission prompt blocks something, don't retry or find another way. Tell the lead, who brings it to the person.
-- Every verdict comment ends with one line that names the commit it covers: `Verdict: ready for <sha>` when it's ready, or `Verdict: not ready at <sha>` when it isn't. The office reads the latest such line from the `asha-review` app to decide whether an approval card can merge, so post a new one whenever the verdict changes.
+- Every verdict comment ends with one line that names the commit it covers: `Verdict: ready for <sha>` when it's ready, or `Verdict: not ready at <sha>` when it isn't. The office reads the latest such line posted by the `asha-review` app, in a comment or a review, to decide whether an approval card can merge. It ignores edited comments, so post a new one whenever the verdict changes rather than editing an old one.
 
 ## Approval cards
 
