@@ -295,6 +295,10 @@ const REFUSED: [string, string][] = [
   ['a variable program after an assignment with a blank in ${}', 'x=${a:-b c} $y -rf ~/.claude'],
   ['a variable program after an assignment with an escaped quote', 'x="a\\"b c" $y -rf ~/.claude'],
   ['a delete hidden in a grep pattern that is then run', "grep -E 'x' f; sh -c 'rm -rf ~/.claude'"],
+  ['python removing a file', `python3 -c "import os; os.remove('/Users/me/.claude/x')"`],
+  ['python from a heredoc running a shell', "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['ls'])\nEOF"],
+  ['node removing a folder', `node -e "require('fs').rmSync('/x', {recursive: true})"`],
+  ['perl running a shell in backticks', "perl -e 'print `ls`'"],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
@@ -374,6 +378,9 @@ const ALLOWED: [string, string][] = [
   ['a review comment about deletes', `~/.agent-office/quinn/quinn-gh api repos/a/b/pulls/30/comments -f body='Blocking: rm -rf ~/.claude/projects/"$D" still passes, and so does find ~/.claude -delete.'`],
   ['a review comment from a heredoc', `~/.agent-office/quinn/quinn-gh pr comment 30 --body-file - <<'EOF'\nThe guard refuses rm -rf "$D" and x=1 $y -rf ~/.claude.\nEOF`],
   ['a commit message with patterns and pipes', `git commit -m "Refuse rm -rf /tmp/*|x and \\$(printf rm) -r"`],
+  ['a python edit that names rm in its text', `python3 - <<'EOF'\nfrom pathlib import Path\np = Path('plugin/hooks/x.ts')\ns = p.read_text().replace("rm -rf build", "rm -rf /tmp/x/build")\np.write_text(s)  # no rm here, only text\nEOF`],
+  ['a python one-liner that prints rm', `python3 -c "print('rm -rf is refused')"`],
+  ['node reading a file that names rm', `node -e "console.log(require('fs').readFileSync('notes.txt', 'utf8').includes('rm -rf'))"`],
   ['a case arm with several patterns', 'case $f in *.txt|*.log) echo hi;; esac'],
   ['a case arm with several patterns and a flag', 'case $f in *.txt|*.log) ls -f;; esac'],
   ['an assignment before npm test', 'NODE_ENV=test npm test'],
