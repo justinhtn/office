@@ -2074,7 +2074,7 @@ class RemoteHandler(Handler):
             raise Refused(429, "Too many tries. Make a new code on your Mac.")
         if problem:
             raise Refused(403, "That code isn't right, or it has expired.")
-        self.cookies_to_set = [("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={DEVICE_S}; Secure; HttpOnly; SameSite=Strict")]
+        self.cookies_to_set = [("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={DEVICE_S}; Secure; HttpOnly; SameSite=Lax")]
         self.reply(200, {"status": "ok"})
 
 
