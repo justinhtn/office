@@ -572,6 +572,15 @@ p.bubble-text::after, .markdown > :last-child::after { content: ''; display: inl
 .mia-send { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .mia-send:disabled { opacity: .4; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .mia-sheet { animation: none; } }
+/* An agent's conversation on a phone: the Ask Mia thread, read-only, with each tool call as a small line on the agent's side. */
+.agent-chat { z-index: 32; }
+.chat-state.working { color: var(--chat-blue); }
+.chat-step { display: flex; align-items: baseline; gap: 5px; max-width: 84%; margin: 2px 0 0 6px; font-size: 13px; line-height: 1.3; color: var(--bubble-meta); overflow-wrap: anywhere; }
+.chat-step.first { margin-top: 8px; }
+.chat-step svg { flex: none; position: relative; top: 1px; }
+.chat-older { align-self: center; margin: 4px 0 8px; padding: 6px 14px; font-size: 14px; color: var(--chat-blue); background: var(--chat-pill); border-radius: 999px; }
+.chat-older:disabled { opacity: .6; }
+.chat-readonly { flex: none; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); font-size: 13px; color: var(--chat-pill-text); background: var(--chat-bar); border-top: .5px solid var(--chat-bar-line); }
 /* Approval cards: the same sheet as Ask Mia, holding a card per decision. GitHub's facts come first; the lead's words are shown as theirs. */
 .approval-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 12px; }
 .approval-card.open { border-color: var(--accent); background: var(--accent-wash); }

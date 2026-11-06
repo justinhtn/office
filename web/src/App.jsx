@@ -9,6 +9,7 @@ import {
   Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace, MessagesSquare,
 } from 'lucide-react'
 import AskMia from './AskMia.jsx'
+import AgentConversation from './AgentConversation.jsx'
 import ApprovalCards from './ApprovalCards.jsx'
 import { canSetUpFaceId, faceIdOptions, setUpFaceId } from './faceId.js'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
@@ -22,6 +23,7 @@ import ReactMarkdown from 'react-markdown'
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const statusOf = p => (p.request ? 'asks' : p.isRunning ? 'working' : p.isFinished ? 'finished' : 'idle')
 const STATUS_LABEL = { asks: 'Asking for you', working: 'Working', finished: 'Finished', idle: 'Idle' }
+const stateOf = p => (statusOf(p) !== 'idle' ? STATUS_LABEL[statusOf(p)] : p.prOutcome || `Idle ${age(p.lastActivityAt)}`)
 // Each font is only downloaded once someone picks it.
 async function loadBoardFont(family) {
   const id = `board-font-${family.replace(/ /g, '-')}`
@@ -1061,7 +1063,7 @@ function RequestBanner({ person, onShow }) {
   )
 }
 
-function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails, onClose, onPick, onHear }) {
+function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails, onClose, onPick, onHear, onConversation }) {
   const [showPath, setShowPath] = useState(null)
   const [stage, setStage] = useState(null)
   useEffect(() => setStage(null), [person.id])
@@ -1095,13 +1097,14 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
           </div>
         </header>
         <div className="section-state">
-          <span className={`pill ${statusOf(person)}`}>{statusOf(person) !== 'idle' ? STATUS_LABEL[statusOf(person)] : person.prOutcome || `Idle ${age(person.lastActivityAt)}`}</span>
+          <span className={`pill ${statusOf(person)}`}>{stateOf(person)}</span>
           <small className="session-title">{boss ? `For ${boss.name}` : ''}{person.prNumber ? ` · PR ${person.prNumber}` : ''}</small>
         </div>
         {!hasTv && person.title && !person.title.startsWith(person.label) && <p className="section-doing">{person.title}</p>}
         <Memory person={person} />
         {person.request && <RequestBanner person={person} onShow={show} />}
         <div className="section-actions">
+          {onConversation && <button className="section-action" onClick={onConversation}><MessagesSquare size={13} /> Conversation</button>}
           {SESSION_TABS.map(({ id, label, icon: Icon }) => (
             <button key={id} className="section-action" onClick={() => onOpen(id)}><Icon size={13} /> {label}</button>
           ))}
@@ -1455,6 +1458,7 @@ export default function App() {
   const [shutDown, setShutDown] = useState(false)
   const [canAskMia, setCanAskMia] = useState(false)
   const [isMiaOpen, setIsMiaOpen] = useState(false)
+  const [conversationId, setConversationId] = useState(null)
   const [approvalsWaiting, setApprovalsWaiting] = useState(0)
   const [isDevice, setIsDevice] = useState(false)
   const [isApprovalsOpen, setIsApprovalsOpen] = useState(false)
@@ -1558,6 +1562,7 @@ export default function App() {
   const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId || person.request)
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
+  const conversationOf = conversationId ? cast.find(other => other.id === conversationId) : null
 
   const floor = useMemo(() => active.filter(other => !other.isAssistant), [active])
   const teams = useMemo(() => officeTeams(floor), [floor])
@@ -1599,7 +1604,13 @@ export default function App() {
     else if (team) pick(team.lead.id)
     else goToPlace(key)
   }
-  const pickInRoom = (id, isMap) => (isMap && id === selected ? goToPlace(null) : pick(id))
+  const pickInRoom = (id, isMap) => (isMap && id === selected ? goToPlace(null) : pickAgent(id))
+  // On a signed-in phone, tapping someone opens what they're working on, over their card. Picking a room still opens only the card.
+  const canReadConversations = isPhone && isDevice
+  function pickAgent(id) {
+    pick(id)
+    if (canReadConversations && id !== presenterId) setConversationId(id)
+  }
   function pick(id) {
     // The demo opens the work, and doesn't switch the Claude app's session.
     if (id === presenterId) {
@@ -1689,7 +1700,8 @@ export default function App() {
               <Session
                 person={person} everyone={cast} teams={teams} tab={tab} isOpen={isDetailOpen}
                 onOpen={id => { setTab(id); setIsDetailOpen(true) }} onCloseDetails={() => setIsDetailOpen(false)}
-                onPick={pick} onHear={voices.hear} onClose={() => goToPlace(null)}
+                onPick={pickAgent} onHear={voices.hear} onClose={() => goToPlace(null)}
+                onConversation={canReadConversations ? () => setConversationId(person.id) : null}
               />
             )}
             <span className="voices">
@@ -1715,17 +1727,24 @@ export default function App() {
         <button className="away-button" onClick={() => setIsAwayOpen(true)}>{away.length} away</button>
       </footer>
 
-      {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
+      {isAwayOpen && <Away people={away} onPick={pickAgent} onClose={() => setIsAwayOpen(false)} />}
       {isClosedOpen && <ClosedRooms teams={closedTeams} closed={closed} onClose={() => setIsClosedOpen(false)} />}
       {isApprovalsOpen && <ApprovalCards isPhone={isPhone} isDevice={isDevice} onClose={() => setIsApprovalsOpen(false)} />}
       {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={38} /> : null} onClose={() => setIsMiaOpen(false)} />}
+      {conversationOf && (
+        <AgentConversation
+          person={conversationOf} state={stateOf(conversationOf)}
+          team={conversationOf.isAssistant ? 'Front desk' : conversationOf.isIndependent ? 'Independent' : conversationOf.teamName || 'Team'}
+          portrait={<Avatar person={conversationOf} size={38} />} onClose={() => setConversationId(null)}
+        />
+      )}
       {isPaletteOpen && (
         <Palette
           everyone={cast}
           rooms={[...new Set(everyone.map(other => other.project))]}
           onClose={() => setIsPaletteOpen(false)}
           onRoom={() => { setSelected(null); setIsPaletteOpen(false) }}
-          onPerson={target => pick(target.id)}
+          onPerson={target => pickAgent(target.id)}
         />
       )}
     </div>

@@ -292,6 +292,30 @@ SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|jks|keystore|
 PRIVATE_KEY = re.compile(rb"(?m)^-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
+def hidden_value(value):
+    """Keeps a quoted value's quotes, so JSON and code still read as they did."""
+    quote = value[0] if value[:1] in ("\"", "'") else ""
+
+    return f"{quote}[secret hidden]{quote}"
+
+
+# Things in a conversation that look like secrets, hidden before it reaches a phone. Each keeps the part that says what it was.
+SECRET_TEXT = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), "[private key hidden]"),
+    (re.compile(r"\b(?:sk-ant-[\w-]{10,}|sk-(?:proj-)?[\w-]{20,}|[sr]k_(?:live|test)_\w{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}|xapp-[\w-]{10,}|hf_\w{30,}|SG\.[\w-]{16,}\.[\w-]{16,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|npm_\w{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"), "[secret hidden]"),
+    (re.compile(r"(hooks\.slack\.com/(?:services|workflows|triggers)/)[\w/-]+"), r"\1[secret hidden]"),
+    (re.compile(r"(?i)\b((?:bearer|basic|token)\s+)[\w.~+/=-]{16,}"), r"\1[secret hidden]"),
+    # A name that says it holds a secret, then its value. A quoted value is hidden up to its closing quote, spaces and all.
+    (re.compile(r"(?i)(\b(?:[\w.-]*(?:api[_-]?key|token|secret|passw(?:or)?d|pwd|access[_-]?key|private[_-]?key|credential)[\w.-]*|[\w.-]*(?:key|pass|sig|signature))[\"']?\s*[:=]\s*)(?:\"[^\"\n]{4,}\"|'[^'\n]{4,}'|[^\s\"'`,;&]{6,})"),
+     lambda found: found.group(1) + hidden_value(found.group(0)[len(found.group(1)):])),
+    (re.compile(r"(://[^/\s:@]+:)[^/\s@]+@"), r"\1[secret hidden]@"),
+]
+# The conversation view loads this many items at a time, cuts long ones, and keeps each reply under a size a phone handles well.
+CONVERSATION_PAGE = 60
+CONVERSATION_TEXT = 4000
+CONVERSATION_BYTES = 200_000
+
+
 class Refused(Exception):
     def __init__(self, status, message):
         super().__init__(message)
@@ -1413,6 +1437,13 @@ class Transcripts:
 
     def parse(self, session_id, path):
         messages, seen_tools, artifacts = [], set(), {}
+        # What the conversation view shows: the same messages with their times, and a line for each tool call.
+        conversation = []
+
+        def add(message, at):
+            messages.append(message)
+            conversation.append({**message, "at": at})
+
         last_reply = ""
         plan, turn_started, last_peer = [], "", None
         helpers, jobs = {}, {}
@@ -1428,14 +1459,15 @@ class Transcripts:
                     # A message sent while the agent is busy is stored as a queued command.
                     if '"type":"attachment"' in line and "queued_command" in line:
                         try:
-                            attachment = json.loads(line).get("attachment") or {}
+                            queued_record = json.loads(line)
                         except ValueError:
-                            attachment = {}
+                            queued_record = {}
+                        attachment = queued_record.get("attachment") or {}
                         prompt = attachment.get("prompt") if attachment.get("type") == "queued_command" else None
                         cleaned = self.clean_user_text(prompt) if isinstance(prompt, str) else None
                         if cleaned and cleaned.get("role") in ("user", "peer") and (cleaned["role"], cleaned["body"]) not in queued:
                             queued.add((cleaned["role"], cleaned["body"]))
-                            messages.append(cleaned)
+                            add(cleaned, queued_record.get("timestamp", ""))
                     continue
                 if '"type":"user"' not in line and '"type":"assistant"' not in line:
                     continue
@@ -1461,14 +1493,14 @@ class Transcripts:
                         if cleaned and (cleaned["role"], cleaned.get("body")) in queued:
                             queued.discard((cleaned["role"], cleaned.get("body")))
                         elif cleaned:
-                            messages.append(cleaned)
+                            add(cleaned, record.get("timestamp", ""))
                             turn_started = record.get("timestamp", turn_started)
                             if cleaned["role"] == "user":
                                 last_reply = record.get("timestamp", last_reply)
                             if cleaned.get("fromId"):
                                 last_peer = {"id": cleaned["fromId"], "at": record.get("timestamp", "")}
                     elif kind == "text" and block.get("text", "").strip():
-                        messages.append({"role": "assistant", "body": block["text"].strip()})
+                        add({"role": "assistant", "body": block["text"].strip()}, record.get("timestamp", ""))
                     elif kind == "tool_result":
                         if block.get("is_error"):
                             jobs.pop(block.get("tool_use_id"), None)
@@ -1481,7 +1513,7 @@ class Transcripts:
                         published = artifacts.get(block.get("tool_use_id"))
                         address = published and not block.get("is_error") and ARTIFACT_URL.search(json.dumps(block.get("content")))
                         if address:
-                            messages.append({"role": "artifact", "title": published, "url": address.group(0)})
+                            add({"role": "artifact", "title": published, "url": address.group(0)}, record.get("timestamp", ""))
                     elif kind == "tool_use":
                         if block.get("id") in seen_tools:
                             continue
@@ -1495,7 +1527,7 @@ class Transcripts:
                         elif tool == "mcp__ccd_turn__wrap_up":
                             plan = [{**item, "status": "completed"} for item in plan]
                             if tool_input.get("recap"):
-                                messages.append({"role": "recap", "body": str(tool_input["recap"]), "ask": str(tool_input.get("ask") or "")})
+                                add({"role": "recap", "body": str(tool_input["recap"]), "ask": str(tool_input.get("ask") or "")}, record.get("timestamp", ""))
                         elif tool == "SendUserFile":
                             # Relative paths are from the session's folder, which Claude Code records on each line.
                             folder = record.get("cwd")
@@ -1503,16 +1535,27 @@ class Transcripts:
                             files = [f for f in files if Path(f).is_absolute()]
                             shown = [media_item(session_id, f) for f in files if media_kind(f)]
                             if shown:
-                                messages.append({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown})
+                                add({"role": "media", "caption": str(tool_input.get("caption", "")), "files": shown}, record.get("timestamp", ""))
                         elif not HIDDEN_TOOLS.match(tool):
                             if tool == "Artifact" and tool_input.get("action", "publish") == "publish":
                                 artifacts[block.get("id")] = str(tool_input.get("title") or Path(str(tool_input.get("file_path") or "Artifact")).stem)[:80]
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label = self.describe_tool(tool, tool_input)
-                            recent.append("Running a command" if tool == "Bash" and not tool_input.get("description") else label[:70])
+                            # A raw command is where an inline password is most likely, and a link can carry one in its query,
+                            # so the conversation view gets neither: a command needs its description, and a page shows its site.
+                            is_bare_command = tool == "Bash" and not tool_input.get("description")
+                            step = "Ran a command" if is_bare_command else label
+                            if tool == "WebFetch":
+                                try:
+                                    site = urlparse(str(tool_input.get("url", ""))).hostname
+                                except ValueError:
+                                    site = None
+                                step = f"Read a web page on {site}" if site else "Read a web page"
+                            conversation.append({"role": "step", "body": step[:1000], "at": record.get("timestamp", "")})
+                            recent.append("Running a command" if is_bare_command else label[:70])
 
-        return {"messages": messages, "plan": plan, "turnStartedAt": turn_started, "lastReply": last_reply, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
+        return {"messages": messages, "conversation": conversation, "plan": plan, "turnStartedAt": turn_started, "lastReply": last_reply, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
 
     def load(self, session_id):
         path = self.path_for(session_id)
@@ -1614,6 +1657,73 @@ class Transcripts:
 
 
 TRANSCRIPTS = Transcripts()
+
+
+def redacted(text):
+    for pattern, replacement in SECRET_TEXT:
+        text = pattern.sub(replacement, text)
+
+    return text.replace(TOKEN, "[secret hidden]")
+
+
+def viewable(item):
+    """One conversation item as plain text for the phone: who said it, what, and when. Links and file paths stay behind."""
+    role = item.get("role")
+    if role == "user":
+        kind, text = "person", item.get("body", "")
+    elif role == "peer":
+        kind, text = "peer", item.get("body", "")
+    elif role == "assistant":
+        kind, text = "agent", item.get("body", "")
+    elif role == "recap":
+        kind, text = "agent", "\n\n".join(part for part in (item.get("body", ""), item.get("ask", "")) if part)
+    elif role == "artifact":
+        kind, text = "step", f"Published {item.get('title', 'a page')}"
+    elif role == "media":
+        count = len(item.get("files") or [])
+        kind, text = "step", f"Shared {count} file{'s' if count != 1 else ''}" + (f": {item['caption']}" if item.get("caption") else "")
+    else:
+        kind, text = "step", item.get("body", "")
+    # Redacted before the cut, so a secret split by it can't slip under a pattern, and on a bounded piece, so a huge message stays cheap.
+    text = str(text)
+    is_long = len(text) > CONVERSATION_TEXT
+    text = redacted(text[:CONVERSATION_TEXT + 500])[:CONVERSATION_TEXT]
+    if is_long:
+        text = text.rstrip() + "…"
+    shown = {"role": kind, "text": text, "at": str(item.get("at", ""))[:40]}
+    if kind == "peer":
+        shown["from"] = redacted(str(item.get("from", "")))[:40]
+
+    return shown
+
+
+def conversation(session_id, before=None):
+    """A page of a session's conversation, newest last, ending just before `before` or at the newest."""
+    stamp, parsed = TRANSCRIPTS.load(session_id)
+    items = parsed["conversation"]
+    # A phone asks every few seconds, so each item is redacted once per version of the transcript.
+    cached = VIEWABLE.get(session_id)
+    if not cached or cached[0] != stamp:
+        cached = (stamp, {})
+        VIEWABLE[session_id] = cached
+    end = len(items) if before is None else max(0, min(before, len(items)))
+    shown, size = [], 0
+    for index in range(end - 1, max(0, end - CONVERSATION_PAGE) - 1, -1):
+        if index not in cached[1]:
+            cached[1][index] = {**viewable(items[index]), "index": index}
+        item = cached[1][index]
+        # Measured as the reply sends it, which escapes anything outside ASCII.
+        size += len(json.dumps(item))
+        if size > CONVERSATION_BYTES and shown:
+            break
+        shown.append(item)
+    shown.reverse()
+    start = shown[0]["index"] if shown else end
+
+    return {"messages": shown, "start": start, "hasOlder": start > 0, "total": len(items)}
+
+
+VIEWABLE = {}
 APPROVAL_ROUTES = ("/api/approvals/options", "/api/approvals/approve", "/api/approvals/decline", "/api/approvals/answer")
 MIA_CHAT = MiaChat(DATA, FRONT_DESK, chat_command, chat_is_wanted, note_sender_command)
 APPROVALS = Approvals(DATA, GitHub(), team_lead_name, tell_lead)
@@ -2170,6 +2280,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, presentation(json.loads(PRESENTATION_DEMO.read_text())))
             elif url.path == "/api/usage":
                 self.reply(200, usage_report())
+            elif url.path == "/api/conversation":
+                # Read-only, and only for a signed-in device: anything on the Mac can use its own port, agents included.
+                self.device_only("Reading a conversation")
+                known_session(session_id)
+                before = query.get("before")
+                if before is not None and not re.fullmatch(r"[0-9]{1,9}", before):
+                    raise Refused(400, "Bad position.")
+                self.reply(200, conversation(session_id, int(before) if before is not None else None))
             elif url.path == "/api/outputs":
                 known_session(session_id)
                 self.reply(200, TRANSCRIPTS.outputs(session_id))
