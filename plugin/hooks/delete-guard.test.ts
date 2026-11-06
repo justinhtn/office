@@ -364,6 +364,8 @@ const ALLOWED: [string, string][] = [
   ['three assignments before python', 'a=1 b=2 c=3 python3 -m unittest -f'],
   ['repeat before make', 'repeat 3 make -f Makefile'],
   ['repeat before curl', 'repeat 3 curl -fsSL https://x/y'],
+  ['a case arm with several patterns', 'case $f in *.txt|*.log) echo hi;; esac'],
+  ['a case arm with several patterns and a flag', 'case $f in *.txt|*.log) ls -f;; esac'],
   ['an assignment before npm test', 'NODE_ENV=test npm test'],
   ['gh pr create beside a delete', 'gh pr view 30 && rm -f notes.txt'],
   ['a program with an unrelated assignment', 'FOO=1 npm test'],
