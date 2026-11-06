@@ -644,7 +644,16 @@ const STILL_REFUSED: [string, string][] = [
   ['node -e requiring a file the line writes', `cp /dev/stdin /tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
   ['ruby -e loading a file the line writes', `cat > /tmp/x.rb <<'EOF'\nrequire "fileutils"; FileUtils.rm_rf("/Users/me/.claude")\nEOF\nruby -e 'load "/tmp/x.rb"'`],
   ['perl -e requiring a file written by echo', `echo 'system("rm -rf /Users/me/.claude");' > /tmp/x.pl; perl -e 'require "/tmp/x.pl"'`],
-  ['python -c running a module written by sort -o', `sort -o /tmp/m.py <<< 'import os; os.remove("/Users/me/.claude/x")'; python3 -c 'import runpy'`],  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
+  ['python -c running a module written by sort -o', `sort -o /tmp/m.py <<< 'import os; os.remove("/Users/me/.claude/x")'; python3 -c 'import runpy'`],
+  // From the third review: writes that the read-only list missed, followed by code that loads what they wrote.
+  ['sort -o attached to its file', `sort -o/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort -o in a cluster', `sort -no/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort with a shortened --output', `sort --outp=/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq writing its second operand', `uniq - /tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['cat into a read-write redirection', `cat 1<>/tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['less logging its input to a file', `less -o/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['gh downloading with -O attached', `gh run download 1 -O/tmp/evil.py; echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
+  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
 ]
 
 for (const [why, command] of STILL_REFUSED) {

@@ -265,9 +265,11 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
           if (isQuoted && !/^(['"]?)[\w.-]+\1$|^\\[\w.-]+$/.test(src.slice(startOfEnd, i))) throw unsure('an unusual heredoc end')
           heredocs.push({ end, stripsTabs, isQuoted, owners: fedCommands() })
         } else {
-          isOutput = c !== '<'
+          const from = i
           i += c === '&' ? 2 : 1
           while (src[i] === '>' || src[i] === '&' || src[i] === '|') i++
+          // Anything but plain input can write the file, including <> which opens it for both.
+          isOutput = src.slice(from, i).includes('>')
           skipsWord = true
         }
       } else if (c === '|' && src[i + 1] !== '|') {
@@ -567,9 +569,29 @@ const ownText = (words: Command) => `${words.text}\n${words.stdin}`
 const hasDynamic = (words: Command) => words.isFedDynamic || words.some(word => word.isDynamic)
 
 // Programs that only read and print, so they can't put code in a file that another part of the line runs.
-const READ_ONLY = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'test', '[', '[[', 'cd', 'less', 'more', 'gh', 'quinn-gh'])
-// What the read-only programs can do that writes a file: sort -o, uniq's second file, and gh downloading or checking out.
-const WRITES_A_FILE = /^(-[A-Za-z]*o|--output.*|clone|checkout|download|--dir.*)$/
+const READ_ONLY = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'diff', 'stat', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'test', '[', '[[', 'cd', 'gh', 'quinn-gh'])
+// The options through which a read-only program writes a file: its short letters, and its long names, which getopt
+// also accepts shortened, as in --outp=FILE.
+const WRITING_OPTIONS: Record<string, { short: string; long: string[] }> = {
+  sort: { short: 'o', long: ['output'] },
+  gh: { short: 'OD', long: ['output', 'dir', 'clone'] },
+  'quinn-gh': { short: 'OD', long: ['output', 'dir', 'clone'] },
+}
+// gh commands that write files: cloning, checking out, downloading, syncing, forking and installing.
+const GH_WRITES = /^(clone|checkout|download|sync|fork|install|upgrade|archive)$/
+
+// Whether any option writes a file, read as getopt reads them: a letter anywhere in a cluster of short flags, with or
+// without its value attached, and a long name or any start of it, with or without =. Nothing after -- is an option.
+function hasWritingOption(args: Word[], short: string, long: string[]) {
+  for (const { text } of args) {
+    if (text === '--') return false
+    const name = text.startsWith('--') ? text.slice(2).split('=')[0] : ''
+    if (name && long.some(each => each.startsWith(name))) return true
+    if (/^-[^-]/.test(text) && [...text.slice(1)].some(letter => short.includes(letter))) return true
+  }
+
+  return false
+}
 
 // Whether a command only reads: a read-only program, or only assignments, with no output to a file.
 function isReadOnly(words: Command) {
@@ -579,9 +601,12 @@ function isReadOnly(words: Command) {
   const name = nameOf(program)
   const args = words.slice(words.indexOf(program) + 1)
   if (program.isDynamic || !READ_ONLY.has(name)) return false
-  if (name === 'uniq' && args.filter(arg => !arg.text.startsWith('-')).length > 1) return false
+  // uniq writes its second operand, where - stands for its input.
+  if (name === 'uniq' && args.filter(arg => arg.text === '-' || !arg.text.startsWith('-')).length > 1) return false
+  if (GH.test(name) && args.some(arg => GH_WRITES.test(arg.text))) return false
+  const options = WRITING_OPTIONS[name]
 
-  return !((name === 'sort' || GH.test(name)) && args.some(arg => WRITES_A_FILE.test(arg.text)))
+  return !options || !hasWritingOption(args, options.short, options.long)
 }
 
 // What a shell or language at `k` among the launched programs could run: its own text only when its code is plainly an
