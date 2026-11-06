@@ -190,8 +190,9 @@ const toText = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).repl
 const toBytes = text => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), letter => letter.charCodeAt(0))
 const post = async (path, body) => {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
-  const answer = await response.json()
-  if (!response.ok) throw new Error(answer.error)
+  // A proxy's error page during a restart isn't JSON.
+  const answer = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(answer.error || "Couldn't reach the office.")
   return answer
 }
 // Asked for ahead of the tap, because Safari may refuse Face ID if the tap waits on the network first.
@@ -241,7 +242,7 @@ byId("add-face-id").onclick = async () => {
       timeout: 120000,
     } })
     const answer = credential.response
-    await post("/api/passkey/register", { id: credential.id, clientDataJSON: toText(answer.clientDataJSON), authenticatorData: toText(answer.getAuthenticatorData()), publicKey: toText(answer.getPublicKey()), publicKeyAlgorithm: answer.getPublicKeyAlgorithm() })
+    await post("/api/passkey/register", { id: credential.id, clientDataJSON: toText(answer.clientDataJSON), attestationObject: toText(answer.attestationObject) })
     return window.location.reload()
   } catch {
     problem.textContent = "Face ID wasn't set up. Try again, or choose Not now."
@@ -2183,13 +2184,14 @@ class RemoteHandler(Handler):
             raise Refused(403, "Sign in with a code first.")
         try:
             if step == "register-options":
-                name = REMOTE.devices().get(self.device, {}).get("name", "Device")
+                if REMOTE.devices().get(self.device, {}).get("passkey"):
+                    raise Refused(409, "This device already has Face ID.")
                 challenge = PASSKEY_CHALLENGES.new(("register", self.device))
-                self.reply(200, {"challenge": challenge, "rpId": host, "userId": passkeys.encoded(secrets.token_bytes(16)), "name": name})
+                self.reply(200, {"challenge": challenge, "rpId": host, "userId": REMOTE.passkey_user(), "name": "Agent Office"})
             elif step == "register":
                 credential, public_key, count = passkeys.registered(body, host, origin, PASSKEY_CHALLENGES, ("register", self.device))
                 if not REMOTE.add_passkey(self.device, credential, public_key, count):
-                    raise Refused(403, "Sign in with a code first.")
+                    raise Refused(409, "Sign in with a code to add Face ID.")
                 print(f"Face ID added for device {self.device}", file=sys.stderr, flush=True)
                 self.reply(200, {"status": "ok"})
             elif step == "sign-in-options":

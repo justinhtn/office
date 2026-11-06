@@ -120,6 +120,8 @@ After a code sign-in, the page offers "Use Face ID next time". That saves a pass
 
 Face ID needs the office's own Python environment at `~/.agent-office/python`, which `scripts/install.sh` and `scripts/update.sh` set up with the pinned packages in `server/requirements.txt`. Without it, the office works as before with codes only. The Mac keeps only each passkey's public key.
 
+A passkey lasts until you revoke it, unlike a device's 30-day sign-in. Only a device signed in with a code can add one, but a copied sign-in cookie could too, so check `devices` now and then and revoke passkeys you don't recognise.
+
 A signed-in device can do what the office can do on the Mac: read sessions, see their files and media, send messages, and start or stop Telegram Mia. Some buttons, such as opening a session in the Claude app, act on the Mac rather than the iPad.
 
 - See devices: `scripts/ipad-access.py devices`

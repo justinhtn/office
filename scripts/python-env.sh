@@ -10,8 +10,13 @@ office_python_env() {
     return 0
   fi
   if ! "$venv/bin/python3" -m pip install --quiet --disable-pip-version-check --require-hashes -r "$ROOT/server/requirements.txt"; then
-    echo "Couldn't install what server/requirements.txt lists, so Face ID sign-in is off. Run this again when you're online." >&2
-    return 0
+    # Offline, say, after a pin is raised: the versions already there still check Face ID.
+    if "$venv/bin/python3" -c 'import cryptography' 2>/dev/null; then
+      echo "Couldn't update what server/requirements.txt lists, so the server keeps the versions it has. Run this again when you're online." >&2
+    else
+      echo "Couldn't install what server/requirements.txt lists, so Face ID sign-in is off. Run this again when you're online." >&2
+      return 0
+    fi
   fi
   OFFICE_PYTHON="$venv/bin/python3"
 }

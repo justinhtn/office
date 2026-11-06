@@ -20,6 +20,24 @@ except ImportError:
     ec = None
 
 
+def to_cbor(value):
+    def head(major, number):
+        if number < 24:
+            return bytes([major << 5 | number])
+        size = next(size for size in (1, 2, 4, 8) if number < 1 << (8 * size))
+
+        return bytes([major << 5 | (24 + (1, 2, 4, 8).index(size))]) + number.to_bytes(size, "big")
+
+    if isinstance(value, int):
+        return head(0, value) if value >= 0 else head(1, -1 - value)
+    if isinstance(value, bytes):
+        return head(2, len(value)) + value
+    if isinstance(value, str):
+        return head(3, len(value.encode())) + value.encode()
+
+    return head(5, len(value)) + b"".join(to_cbor(key) + to_cbor(item) for key, item in value.items())
+
+
 class Authenticator:
     """Plays the part of the iPad: makes a passkey and answers challenges the way Safari passes them on."""
 
@@ -29,26 +47,29 @@ class Authenticator:
         self.rp_id = rp_id
         self.count = 0
 
-    def data(self, flags, attested=False):
-        data = hashlib.sha256(self.rp_id.encode()).digest() + bytes([flags | (0x40 if attested else 0)]) + self.count.to_bytes(4, "big")
-        if attested:
-            # A real one ends with the key in CBOR, which the server never reads: it takes the page's getPublicKey().
-            data += bytes(16) + len(self.credential).to_bytes(2, "big") + self.credential + b"\xa5cose"
+    def cose(self, changes=None):
+        """The public key as the authenticator writes it: EC2, ES256, P-256, then x and y."""
+        numbers = self.key.public_key().public_numbers()
+
+        return {1: 2, 3: -7, -1: 1, -2: numbers.x.to_bytes(32, "big"), -3: numbers.y.to_bytes(32, "big"), **(changes or {})}
+
+    def data(self, flags, cose=None):
+        data = hashlib.sha256(self.rp_id.encode()).digest() + bytes([flags | (0x40 if cose else 0)]) + self.count.to_bytes(4, "big")
+        if cose:
+            data += bytes(16) + len(self.credential).to_bytes(2, "big") + self.credential + to_cbor(cose)
 
         return data
 
     def client(self, kind, challenge, origin):
         return json.dumps({"type": kind, "challenge": challenge, "origin": origin, "crossOrigin": False}).encode()
 
-    def create(self, challenge, origin=ORIGIN, flags=0x05):
-        public_key = self.key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    def create(self, challenge, origin=ORIGIN, flags=0x05, cose=None):
+        attestation = {"fmt": "none", "attStmt": {}, "authData": self.data(flags, cose or self.cose())}
 
         return {
             "id": passkeys.encoded(self.credential),
             "clientDataJSON": passkeys.encoded(self.client("webauthn.create", challenge, origin)),
-            "authenticatorData": passkeys.encoded(self.data(flags, attested=True)),
-            "publicKey": passkeys.encoded(public_key),
-            "publicKeyAlgorithm": -7,
+            "attestationObject": passkeys.encoded(to_cbor(attestation)),
         }
 
     def get(self, challenge, origin=ORIGIN, flags=0x05, key=None):
@@ -126,11 +147,12 @@ class PasskeyTests(Case):
                 self.assertEqual(self.post("/api/passkey/sign-in", authenticator.get(self.challenge("sign-in")), origin=origin)[0], 403)
 
     def test_a_challenge_works_once_and_only_for_its_purpose(self):
-        authenticator, cookie = self.registered()
+        authenticator, _ = self.registered()
         challenge = self.challenge("sign-in")
         self.assertEqual(self.post("/api/passkey/sign-in", authenticator.get(challenge))[0], 200)
         self.assertEqual(self.post("/api/passkey/sign-in", authenticator.get(challenge))[0], 403)
         # One made for adding a passkey can't sign in, and one made for signing in can't add a passkey.
+        cookie = self.signed_in()
         self.assertEqual(self.post("/api/passkey/sign-in", authenticator.get(self.challenge("register", cookie)))[0], 403)
         self.assertEqual(self.post("/api/passkey/register", Authenticator().create(self.challenge("sign-in")), cookie=cookie)[0], 403)
         # Nor can another device's.
@@ -166,10 +188,14 @@ class PasskeyTests(Case):
         cases = {
             "another site's origin": lambda one, challenge: one.create(challenge, origin="https://evil.example"),
             "no Face ID": lambda one, challenge: one.create(challenge, flags=0x01),
-            "another algorithm": lambda one, challenge: {**one.create(challenge), "publicKeyAlgorithm": -257},
+            "another algorithm": lambda one, challenge: one.create(challenge, cose=one.cose({3: -257})),
+            "another curve": lambda one, challenge: one.create(challenge, cose=one.cose({-1: 2})),
+            "a short x": lambda one, challenge: one.create(challenge, cose=one.cose({-2: bytes(31)})),
+            "a point off the curve": lambda one, challenge: one.create(challenge, cose=one.cose({-2: bytes(31) + b"\x01", -3: bytes(31) + b"\x01"})),
             "a different id": lambda one, challenge: {**one.create(challenge), "id": passkeys.encoded(b"other")},
-            "a broken key": lambda one, challenge: {**one.create(challenge), "publicKey": passkeys.encoded(b"nope")},
-            "not text": lambda one, challenge: {**one.create(challenge), "publicKey": 5},
+            "broken CBOR": lambda one, challenge: {**one.create(challenge), "attestationObject": passkeys.encoded(b"\xa3\x63fmt")},
+            "deep CBOR": lambda one, challenge: {**one.create(challenge), "attestationObject": passkeys.encoded(b"\xa1\x00" * 1000)},
+            "not text": lambda one, challenge: {**one.create(challenge), "attestationObject": 5},
         }
         for name, make in cases.items():
             with self.subTest(name):
@@ -215,12 +241,29 @@ class PasskeyTests(Case):
         self.assertEqual(self.face_id(authenticator)[0], 403)
         self.assertFalse(server.REMOTE.revoke(passkey_id))
 
-    def test_a_new_passkey_replaces_the_devices_old_one(self):
+    def test_a_device_with_face_id_cant_add_another_passkey(self):
         first, cookie = self.registered()
-        second = Authenticator()
-        self.assertEqual(self.post("/api/passkey/register", second.create(self.challenge("register", cookie)), cookie=cookie)[0], 200)
+        _, _, response = self.face_id(first)
+        phone = self.cookie_from(response)
+        for name, device in (("added it", cookie), ("signed in with it", phone)):
+            with self.subTest(name):
+                self.assertEqual(self.post("/api/passkey/register-options", cookie=device)[0], 409)
+                self.assertFalse(server.REMOTE.add_passkey(device.split(".")[0], "credential", "key", 0))
         self.assertEqual(len(server.REMOTE.passkeys()), 1)
-        self.assertEqual(self.face_id(first)[0], 403)
+        self.assertEqual(len(server.REMOTE.devices()), 2)
+        self.assertEqual(self.face_id(first)[0], 200)
+
+    def test_every_passkey_gets_the_same_user_id_until_access_is_turned_off(self):
+        first = self.post("/api/passkey/register-options", cookie=self.signed_in())[1]["userId"]
+        self.assertEqual(self.post("/api/passkey/register-options", cookie=self.signed_in())[1]["userId"], first)
+        server.REMOTE.turn_off()
+        server.REMOTE.turn_on(HOST)
+        self.assertNotEqual(self.post("/api/passkey/register-options", cookie=self.signed_in())[1]["userId"], first)
+
+    def test_an_id_that_isnt_ascii_is_refused_cleanly(self):
+        authenticator, _ = self.registered()
+        answer = {**authenticator.get(self.challenge("sign-in")), "id": "café"}
+        self.assertEqual(self.post("/api/passkey/sign-in", answer)[0], 403)
 
     def test_revoking_all_and_turning_off_forget_passkeys(self):
         for forget in (server.REMOTE.revoke_all, server.REMOTE.turn_off):

@@ -114,12 +114,12 @@ class RemoteAccess:
         return self.changing(change)
 
     def add_passkey(self, device_id, credential, public_key, sign_count):
-        """Lets a signed-in device come back with this passkey. A device has one, so a new one replaces the old."""
+        """Lets a signed-in device come back with this passkey. Only one signed in with a code, which has none yet:
+        replacing one would sign out the other devices that use it."""
         def change(state):
             device = state.get("devices", {}).get(device_id)
-            if not state.get("host") or not device or time.time() >= device.get("expires", 0):
+            if not state.get("host") or not device or time.time() >= device.get("expires", 0) or device.get("passkey"):
                 return False
-            forget_passkey(state, device.get("passkey"))
             passkey_id = secrets.token_hex(4)
             state.setdefault("passkeys", {})[passkey_id] = {
                 "credential": credential,
@@ -142,6 +142,14 @@ class RemoteAccess:
     def passkeys(self):
         return self.read().get("passkeys", {})
 
+    def passkey_user(self):
+        """The same WebAuthn user id every time, so iCloud Keychain replaces this office's old passkey instead of
+        keeping one for every pairing. Turning access off makes a new one."""
+        def change(state):
+            return state.setdefault("passkeyUser", secrets.token_urlsafe(16))
+
+        return self.changing(change)
+
     def sign_in_with_passkey(self, credential, check):
         """Returns a cookie value, or None. check(passkey) raises if the answer is wrong, or returns the new sign count.
 
@@ -150,7 +158,7 @@ class RemoteAccess:
         def change(state):
             if not state.get("host"):
                 return None
-            found = [(key, one) for key, one in state.get("passkeys", {}).items() if hmac.compare_digest(one.get("credential", ""), str(credential))]
+            found = [(key, one) for key, one in state.get("passkeys", {}).items() if hmac.compare_digest(one.get("credential", "").encode(), str(credential).encode())]
             if not found:
                 return None
             passkey_id, passkey = found[0]
