@@ -7,7 +7,7 @@ type Target = { path: string; shown: string }
 
 const MAX_NESTING = 8
 // Programs that may share a command with a delete, because they don't run their arguments.
-const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'sleep', 'test', '[', 'mkdir', 'touch', 'cp', 'mv', 'cd', 'pushd', 'popd', 'git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'])
+const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'sleep', 'test', '[', '[[', 'mkdir', 'touch', 'cp', 'mv', 'cd', 'pushd', 'popd', 'git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'])
 // What these subcommands do with their arguments decides whether they can be vouched for.
 const RUNS_ARGUMENTS = /^(exec|x|dlx|explore)$/
 const PLAIN_GIT = /^(status|log|diff|show|add|commit|push|pull|fetch|branch|checkout|switch|merge|restore|reset|rm|mv|tag|stash|remote|rev-parse|ls-files|worktree|init|blame)$/
@@ -356,26 +356,37 @@ function checkFind(args: Word[], home: string, targets: Target[]) {
   return undefined
 }
 
+// Arguments that make a program run another program or text. Both steps read them the same way.
+function runsArguments(name: string, args: Word[]) {
+  const runner = args.find(arg => RUNS_A_PROGRAM.test(arg.text))
+  if (runner) return `${name} ${runner.text}`
+  if (name === 'git' && args.some(arg => GIT_RUNS_TEXT.test(arg.text))) return 'git with a command it runs'
+  if (GH.test(name) && args.some(arg => arg.text === '--' || GH_RUNS_TEXT.test(arg.text))) return `${name} with a command it runs`
+  if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return `${name} exec`
+  if (name === 'sed' && args.map(sedScript).some(text => !text.startsWith('-') && SED_RUNS.test(text))) return 'sed with its e command'
+  // A script read from a file can't be checked, so it's treated like one that runs a command.
+  if (name === 'sed' && args.some(arg => /^(-[nEsrzi]*f|--file)/.test(arg.text))) return 'sed with a script file'
+  if (name === 'docker' && !PLAIN_DOCKER.test(args[0]?.text ?? '')) return `docker ${args[0]?.text ?? ''}`
+
+  return undefined
+}
+
 function checkCommand(words: Word[], home: string, targets: Target[]) {
   const [program, ...args] = words
   if (ASSIGNMENT.test(program.text)) return notVouched(program.text)
-  if (program.isDynamic || (program.globAt >= 0 && program.text !== '[')) return notVouched(program.text)
+  if (program.isDynamic || (program.globAt >= 0 && !TESTS.has(program.text))) return notVouched(program.text)
   const name = nameOf(program)
   if (name === 'rm' || name === 'grm' || name === 'unlink') return checkRm(args, home, targets)
   if (name === 'find' || name === 'gfind') return checkFind(args, home, targets)
   if (!PLAIN_PROGRAMS.has(name)) return notVouched(program.text)
   const first = args[0]?.text ?? ''
-  const runner = args.find(arg => RUNS_A_PROGRAM.test(arg.text))
-  if (runner) return notVouched(`${name} ${runner.text}`)
+  const runner = runsArguments(name, args)
+  if (runner) return notVouched(runner)
   if (name === 'git') {
-    if (args.some(arg => arg.text === '-c' || arg.text.startsWith('--config-env'))) return notVouched('git -c')
     const command = args.find((arg, k) => !arg.text.startsWith('-') && args[k - 1]?.text !== '-C')
     if (!command || !PLAIN_GIT.test(command.text)) return notVouched(`git ${command?.text ?? ''}`)
   }
   if (name === 'gh' && !PLAIN_GH.test(first)) return notVouched(`gh ${first}`)
-  // gh passes what follows -- to another program, such as git for gh repo clone.
-  if (name === 'gh' && args.some(arg => arg.text === '--')) return notVouched('gh ... --')
-  if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return notVouched(`${name} exec`)
   if (name === 'docker' && !PLAIN_DOCKER.test(first)) return notVouched(`docker ${first}`)
 
   return undefined
@@ -386,19 +397,105 @@ const withoutQuotes = (command: string) => command.replace(/\\\n|['"\\]/g, '')
 const withQuotedWordsJoined = (command: string) =>
   withoutQuotes(command.replace(/(["'])(.*?)\1/gs, (_, quote: string, inner: string) => quote + inner.replace(/[\s;&|()<>]/g, '_') + quote))
 
+// The whole command read as text, quotes and all. It's used wherever quoted text might be run.
+const textMentionsDelete = (command: string) =>
+  command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)) || MENTIONS_DELETE.test(withQuotedWordsJoined(command))
+
+// Programs that only read their arguments as data, so delete words in quotes there don't count. Every other program
+// is read as text, so an unlisted program that runs its arguments fails closed.
+const DATA_PROGRAMS = new Set([...PLAIN_PROGRAMS, 'sed', 'curl', 'quinn-gh'])
+const SHELLS = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/
+// Other languages are read for calls that delete or start a shell, so code that only names rm in its text runs.
+const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
+// Calls that need parentheses, and the ones Perl and Ruby make without them.
+const CODE_DELETES =
+  /\b(rmtree|remove|removedirs|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|Popen|spawnSync|execSync|execFile|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\b(system|exec|unlink|spawn|popen)\s*[("'`$@]|\bunlink\s+glob\b|\brmtree\b|\breadpipe\b|\bOpen3\b|\bos\.spawn|\bexeca\b|Deno\.(Command|run)\b|\|\s*getline\b|subprocess|\bchild_process\b|\bos\.exec|posix_spawnp?\s*\(|\bqx\s*[^\w\s]|%x\s*[^\w\s]|`|\|\s*"/
+// GNU sed runs a shell with its e command, as an address's command or a flag of s.
+const SED_RUNS = /(^|[\d$;}\s])e(\s|$)|[^\w\s\\][gpiImMw\d]*e[gpiImM\d]*(w.*|\s*#.*)?\s*(;|}|$)/m
+// A script can be attached to its option, as in -e's/…/e' or --expression=….
+const sedScript = (arg: Word) => arg.text.replace(/^(-[nEsrz]*e|--expression=)/, '')
+// Keywords that come before the program without being one.
+const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
+const TESTS = new Set(['[', '[['])
+const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmtree', 'rimraf', '--recursive'])
+// A delete an assignment can hold for a variable to run later.
+const VALUE_DELETES = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete|\$'/
+// Words of git that make it run text it's given.
+const GIT_RUNS_TEXT = /^(-c|--config.*|-u|config|submodule|bisect|rebase|filter-branch|difftool|clone|-O.*|--open-files-in-pager.*)$/
+// quinn-gh is gh signed in as Asha, so it takes gh's rules.
+const GH = /^(gh|quinn-gh)$/
+const GH_RUNS_TEXT = /^(alias|extension)$/
+
+// find deletes through -delete or a program it runs, and a substitution or a variable among its predicates could supply either.
+function findMayDelete(args: Word[]) {
+  let hasPredicates = false
+  for (const [k, arg] of args.entries()) {
+    if (/^-(delete|exec|execdir|ok|okdir)$/.test(arg.text) || /\$\(|`/.test(arg.text)) return true
+    if (arg.isDynamic && hasPredicates && !FIND_VALUES.test(args[k - 1]?.text ?? '')) return true
+    if (arg.text.startsWith('-')) hasPredicates = true
+  }
+
+  return false
+}
+
+function wordsMentionDelete(words: Word[], command: string) {
+  let at = 0
+  while (at < words.length && (ASSIGNMENT.test(words[at].text) || BEFORE_PROGRAM.has(words[at].text))) {
+    // A value can hold a delete for a variable to run later.
+    if (ASSIGNMENT.test(words[at].text) && VALUE_DELETES.test(withoutQuotes(words[at].text.replace(ASSIGNMENT, '')))) return true
+    at++
+  }
+  if (words[at]?.text === 'function') at += 2
+  while (at < words.length && BEFORE_PROGRAM.has(words[at].text)) at++
+  const program = words[at]
+  if (!program) return false
+  const args = words.slice(at + 1)
+  const name = nameOf(program).replace(/^=/, '')
+  // A shell or language started by another program, such as uv run python, is read as that shell or language.
+  const launched = [name, ...args.map(nameOf)]
+  if (launched.some(each => LANGUAGES.test(each)) && CODE_DELETES.test(command)) return true
+  if (launched.some(each => SHELLS.test(each)) && textMentionsDelete(command)) return true
+  if (LANGUAGES.test(name)) return false
+  if (/^g?rm$|^unlink$/.test(name)) return true
+  if (/^g?find$/.test(name)) return findMayDelete(args)
+  // A program named by a variable or pattern could be rm. A pattern with no arguments is a case label.
+  if (program.isDynamic && args.some(arg => /^-[A-Za-z]*[rRf]|^--rec/.test(arg.text))) return true
+  if (program.globAt >= 0 && !TESTS.has(program.text) && (args.length > 0 || /[{/]/.test(program.text))) return true
+  if (args.some(arg => DELETE_WORDS.has(nameOf(arg)) || /^--?delete/.test(arg.text))) return true
+  if (program.isDynamic || runsArguments(name, args) || !DATA_PROGRAMS.has(name)) return textMentionsDelete(command)
+
+  return false
+}
+
+// Splits a command for both steps, or nothing if the reader can't.
+function read(command: string) {
+  try {
+    return lex(command)
+  } catch {
+    return undefined
+  }
+}
+
 // True if a command might delete something, which is what puts it under this check at all.
-export const mentionsDelete = (command: unknown) =>
-  typeof command === 'string' && (command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)) || MENTIONS_DELETE.test(withQuotedWordsJoined(command)))
+// Quoted text, heredoc bodies and patterns are arguments, so they count only where a program can run them.
+export function mentionsDelete(command: unknown) {
+  if (typeof command !== 'string') return false
+  const commands = read(command)
+
+  return commands ? commands.some(words => wordsMentionDelete(words, command)) : textMentionsDelete(command)
+}
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
-  if (!mentionsDelete(command)) return undefined
+  const commands = read(command)
+  const mentions = commands ? commands.some(words => wordsMentionDelete(words, command)) : textMentionsDelete(command)
+  if (!mentions) return undefined
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
   const targets: Target[] = []
-  for (const words of lex(command)) {
+  for (const words of commands ?? lex(command)) {
     const refusal = checkCommand(words, home, targets)
     if (refusal) return refusal
   }
