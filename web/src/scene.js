@@ -1901,7 +1901,7 @@ function placeCheckIn(){
   checkIn.hidden=false
 }
 // A live floor plan drawn straight onto the glass panel, cheap to redraw because nothing is rendered in 3D.
-const MAP_WIDTH=280,MAP_ROOMS_WIDTH=328,MAP_COLUMN=94,MAP_EDGE=46,MAP_ROW_SQUEEZE=.95,MAP_TOP=6,MAP_BOX_PAD=6,MAP_LABEL_ROOM=14,MAP_DRAW_S=.1,MAP_DOT=3,MAP_PIP=2.6,MAP_DOT_REACH=6,MAP_FACE=22,MAP_PIP_GAP=6,MAP_PIP_SPREAD=.62,MAP_AISLE=.7,MAP_PING_S=1.6,MAP_VIEW_REACH=24
+const MAP_WIDTH=280,MAP_ROOMS_WIDTH=328,MAP_COLUMN=94,MAP_EDGE=46,MAP_ROW_SQUEEZE=.95,MAP_TOP=6,MAP_BOX_PAD=6,MAP_LABEL_ROOM=14,MAP_DRAW_S=.1,MAP_DOT=3,MAP_PIP=2.6,MAP_DOT_REACH=6,MAP_FACE=22,MAP_TILE=78,MAP_ROW_GAP=12,MAP_PIP_GAP=6,MAP_PIP_SPREAD=.62,MAP_AISLE=.7,MAP_PING_S=1.6,MAP_VIEW_REACH=24
 const MAP_GOLD='#ffc824',MAP_WORKING='#54d1ff',MAP_IDLE='rgba(255,255,255,.42)',MAP_FURNITURE='rgba(255,255,255,.13)',MAP_FONT='Inter,system-ui,sans-serif'
 const map=Object.assign(document.createElement('canvas'),{className:'map'})
 map.setAttribute('aria-label','Map of the office')
@@ -1910,11 +1910,12 @@ function layoutMap(){
   const all=Object.values(spots);if(!all.length)return null
   const left=Math.min(...all.map(o=>o.x-o.W/2))-MAP_AISLE,right=Math.max(...all.map(o=>o.x+o.W/2))+MAP_AISLE,top=Math.min(...all.map(o=>o.z-o.D/2))-MAP_AISLE,bottom=Math.max(...all.map(o=>o.z+o.D/2))+MAP_AISLE
   const scale=MAP_ROOMS_WIDTH/(right-left),x=x=>(x-left)*scale,y=z=>(z-top)*scale
-  // Rooms draw in even columns, tighter than the real floor, so the panel can hug them.
-  const rows={},shift=new Map()
+  // Rooms draw in even columns and rows, tighter than the real floor, so the panel can hug them.
+  // Every row is at least one tile tall, so a team's name, face and status never overlap however wide the floor gets.
+  const rows={},shift=new Map(),tile=Math.max(MAP_TILE,...all.map(o=>o.D*scale*MAP_ROW_SQUEEZE))
   all.forEach(o=>(rows[Math.round((o.z-o.D/2)*10)]??=[]).push(o))
-  Object.values(rows).forEach(row=>row.sort((a,b)=>a.x-b.x).forEach((o,i)=>shift.set(o,{x:MAP_EDGE+i*MAP_COLUMN-x(o.x),y:y(o.z)*(MAP_ROW_SQUEEZE-1)+MAP_TOP})))
-  return {scale,height:(bottom-top)*scale*MAP_ROW_SQUEEZE+MAP_TOP*2,x,y,gather:o=>shift.get(o)||{x:0,y:0}}
+  Object.keys(rows).sort((a,b)=>a-b).forEach((key,row)=>rows[key].sort((a,b)=>a.x-b.x).forEach((o,i)=>shift.set(o,{x:MAP_EDGE+i*MAP_COLUMN-x(o.x),y:MAP_TOP+row*(tile+MAP_ROW_GAP)+tile/2-y(o.z)})))
+  return {scale,tile,height:Object.keys(rows).length*(tile+MAP_ROW_GAP)-MAP_ROW_GAP+MAP_TOP*2,x,y,gather:o=>shift.get(o)||{x:0,y:0}}
 }
 const mapNeedsYou=p=>Boolean(p.request||p.isFinished)
 const mapDotColor=p=>mapNeedsYou(p)?MAP_GOLD:p.isRunning||p.isWaiting?MAP_WORKING:MAP_IDLE
@@ -2009,15 +2010,16 @@ function drawMapDot(g,p,px,py,radius,now){
 }
 // A team is its lead's face, with everyone else as pips around it, like a party in a game.
 function drawMapTeam(g,o,members,x,y,now){
-  const near=mapFrame.gather(o),cx=x(o.x)+near.x,cy=y(o.z)+near.y,status=mapStatus(o.team),image=mapFace(o.team.lead),rh=o.D*mapFrame.scale,lead=people.find(one=>one.id===o.team.lead.id)||o.team.lead
+  const near=mapFrame.gather(o),cx=x(o.x)+near.x,cy=y(o.z)+near.y,status=mapStatus(o.team),image=mapFace(o.team.lead),rh=mapFrame.tile,lead=people.find(one=>one.id===o.team.lead.id)||o.team.lead
   if(mapNeedsYou(lead))drawMapPing(g,cx,cy,MAP_FACE,now)
   g.save();g.beginPath();g.arc(cx,cy,MAP_FACE,0,Math.PI*2);g.closePath();g.fillStyle=o.color||'rgba(255,255,255,.2)';g.fill();g.clip()
   if(image)g.drawImage(image,cx-MAP_FACE,cy-MAP_FACE,MAP_FACE*2,MAP_FACE*2)
   g.restore()
   g.strokeStyle=status.color;g.lineWidth=2;g.beginPath();g.arc(cx,cy,MAP_FACE,0,Math.PI*2);g.stroke()
   const others=members.filter(p=>p.id!==o.team.lead.id)
-  // Half on each side of the face, clear of the name above and status below.
-  others.forEach((p,i)=>{const side=i%2?1:-1,count=i%2?Math.floor(others.length/2):Math.ceil(others.length/2),row=Math.floor(i/2),tilt=(row-(count-1)/2)*MAP_PIP_SPREAD,reach=MAP_FACE+MAP_PIP_GAP;drawMapDot(g,p,cx+side*Math.cos(tilt)*reach,cy+Math.sin(tilt)*reach,MAP_PIP,now)})
+  // Half on each side of the face, and no higher or lower than the face, so a big team stays clear of the name above, the status below and the next tile.
+  const reach=MAP_FACE+MAP_PIP_GAP,most=Math.asin((MAP_FACE-MAP_PIP)/reach)
+  others.forEach((p,i)=>{const side=i%2?1:-1,count=i%2?Math.floor(others.length/2):Math.ceil(others.length/2),row=Math.floor(i/2),tilt=(row-(count-1)/2)*(count>1?Math.min(MAP_PIP_SPREAD,most*2/(count-1)):0);drawMapDot(g,p,cx+side*Math.cos(tilt)*reach,cy+Math.sin(tilt)*reach,MAP_PIP,now)})
   g.textAlign='center';g.textBaseline='bottom';g.fillStyle=status.color;g.font=`500 10px ${MAP_FONT}`;g.fillText(status.text,cx,cy+rh/2+1)
 }
 function drawMap(){
@@ -2031,7 +2033,7 @@ function drawMap(){
   const live=actors.map(a=>({a,p:people.find(one=>one.id===a.p.id)||a.p}))
   const rooms=Object.entries(spots),inRoom=(a,o)=>Math.abs(a.g.position.x-o.x)<o.W/2&&Math.abs(a.g.position.z-o.z)<o.D/2
   rooms.forEach(([key,o])=>{
-    const near=mapFrame.gather(o),rx=x(o.x)+near.x-MAP_COLUMN/2,ry=y(o.z-o.D/2)+near.y,rw=MAP_COLUMN,rh=o.D*scale
+    const near=mapFrame.gather(o),rx=x(o.x)+near.x-MAP_COLUMN/2,ry=y(o.z)+near.y-mapFrame.tile/2,rw=MAP_COLUMN,rh=mapFrame.tile
     // The same soft highlights as the panel's buttons.
     if(key===mapHover||key===focusKey){g.fillStyle=key===focusKey?'rgba(255,255,255,.2)':'rgba(255,255,255,.14)';g.beginPath();g.roundRect(rx,ry-MAP_BOX_PAD,rw,rh+MAP_BOX_PAD*2,10);g.fill()}
     const moved=mapFurnitureShift(key,o,scale);g.save();g.translate(near.x+moved.x,near.y+moved.y);drawMapFurniture(g,key,o,scale,x,y);g.restore()
@@ -2044,7 +2046,7 @@ function drawMap(){
   rooms.forEach(([,o])=>{
     const needsYou=live.some(({a,p})=>mapNeedsYou(p)&&inRoom(a,o))
     g.textAlign='center';g.textBaseline='top';g.fillStyle=needsYou?MAP_GOLD:'rgba(255,255,255,.94)';g.font=`600 11px ${MAP_FONT}`
-    const near=mapFrame.gather(o);g.fillText(o.name||'',x(o.x)+near.x,y(o.z-o.D/2)+1+near.y,MAP_COLUMN-2)
+    const near=mapFrame.gather(o);g.fillText(o.name||'',x(o.x)+near.x,y(o.z)+near.y-mapFrame.tile/2+1,MAP_COLUMN-2)
     if(!o.team)return
     const members=live.filter(({a,p})=>inRoom(a,o)&&o.team.members.some(m=>m.id===p.id))
     members.forEach(({p})=>seated.add(p.id))
@@ -2056,7 +2058,7 @@ function mapTarget(e){
   if(!mapFrame)return {}
   const r=map.getBoundingClientRect(),k=MAP_WIDTH/r.width,mx=(e.clientX-r.left)*k,my=(e.clientY-r.top)*k,{scale,x,y}=mapFrame
   const person=mapDots.find(dot=>Math.hypot(dot.x-mx,dot.y-my)<=MAP_DOT_REACH)
-  const space=Object.entries(spots).find(([,o])=>{const near=mapFrame.gather(o);return Math.abs(x(o.x)+near.x-mx)<=MAP_COLUMN/2&&Math.abs(y(o.z)+near.y-my)<=o.D*scale/2})
+  const space=Object.entries(spots).find(([,o])=>{const near=mapFrame.gather(o);return Math.abs(x(o.x)+near.x-mx)<=MAP_COLUMN/2&&Math.abs(y(o.z)+near.y-my)<=mapFrame.tile/2})
   return {person:person?.p,spaceKey:space?.[0]}
 }
 map.addEventListener('pointermove',e=>{
