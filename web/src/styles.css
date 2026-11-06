@@ -459,7 +459,12 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 /* Phone: two panes fill the width, and the side panel folds behind a button so it doesn't cover them. */
 .app.phone .corner { display: none; }
 .app.phone.panel-open .corner { display: flex; }
-.app.phone.panel-open .team-list { width: min(292px, calc(100vw - 20px)); }
+.app.phone.panel-open .corner { padding-left: calc(10px + env(safe-area-inset-left)); }
+.app.phone.panel-open .team-list { width: min(292px, calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))); }
+/* Each chip stays well short of the screen's width, so the next one shows and the strip reads as one to swipe. */
+.app.phone .needs { padding-left: calc(10px + env(safe-area-inset-left)); padding-right: calc(10px + env(safe-area-inset-right)); gap: 6px; }
+.app.phone .need { flex: none; max-width: 72vw; min-width: 0; overflow: hidden; }
+.app.phone .need small { min-width: 0; max-width: 110px; white-space: nowrap; }
 .app.phone.dragging .corner { opacity: 0; pointer-events: none; }
 .app.phone .split { top: calc(46px + env(safe-area-inset-top)); bottom: calc(84px + env(safe-area-inset-bottom)); left: calc(6px + env(safe-area-inset-left)); right: calc(6px + env(safe-area-inset-right)); }
 .panel-button { position: absolute; z-index: 4; right: calc(12px + env(safe-area-inset-right)); bottom: calc(34px + env(safe-area-inset-bottom)); color: #fff; background: rgba(14, 17, 24, .72); border-radius: 9px; }
