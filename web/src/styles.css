@@ -357,7 +357,10 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .tag.compact > span { padding: 2px 7px; font-size: 11px; border-radius: 9px; }
 .tag.compact .need-badge { display: block; margin-bottom: 2px; padding: 1px 6px; border-radius: 8px; background: #ffc824; color: #2b1d3a; font: 700 9px/1.3 Inter, system-ui, sans-serif; text-transform: uppercase; letter-spacing: .03em; }
 .tag.compact .need-badge.asks, .zone-tag .need-badge.asks { background: #e0342c; color: #fff; }
-.zone-tag.badge-only { padding: 0; font-size: 0; background: none; box-shadow: none; }
+/* A room's short label: a shorter name, and only the number on its badge. */
+.zone-tag .room-short, .zone-tag.short .room-full, .zone-tag.short .need-word { display: none; }
+.zone-tag.short .room-short { display: inline; }
+.zone-tag.short { padding: 1px 6px; font-size: 10px; }
 .zone-tag .need-badge { display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 7px; background: #ffc824; color: #2b1d3a; font: 700 9px/1.4 Inter, system-ui, sans-serif; text-transform: uppercase; vertical-align: 1px; }
 .newsroom-body { display: flex; flex-direction: column; gap: 8px; }
 .newsroom-topic { display: flex; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
