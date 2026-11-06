@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { busiestTeams, clearPane, firstPanes, placeTeam, shownPanes } from './split.js'
+import { busiestTeams, clearPane, firstPanes, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { parseSplitLayout } from './savedView.js'
 
 const team = (id, member = {}) => ({ lead: { id }, members: [{ id, ...member }] })
@@ -31,6 +31,14 @@ test('clearing a pane empties only that pane', () => {
 
 test('a team that has gone shows as an empty pane', () => {
   assert.deepEqual(shownPanes(['a', 'gone', null, 'b'], office).map(one => one?.lead.id ?? null), ['a', null, null, 'b'])
+})
+
+test('a screen showing fewer panes shows a run of slots, wrapping round', () => {
+  assert.deepEqual(visibleSlots(4), [0, 1, 2, 3])
+  assert.deepEqual(visibleSlots(2, 2), [2, 3])
+  assert.deepEqual(visibleSlots(2, 3), [3, 0])
+  assert.deepEqual(visibleSlots(1, 1), [1])
+  assert.deepEqual(visibleSlots(9), [0, 1, 2, 3])
 })
 
 test('a saved layout must be four team keys or empty panes', () => {

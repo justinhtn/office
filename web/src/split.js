@@ -21,6 +21,13 @@ export function firstPanes(teams) {
   return [...keys, ...Array(PANE_COUNT - keys.length).fill(null)]
 }
 
+// Which slots are on screen when only some fit, as on a phone: a run of them from the one shown first, wrapping round.
+export function visibleSlots(count, first = 0) {
+  const shown = Math.min(Math.max(1, count), PANE_COUNT)
+
+  return Array.from({ length: shown }, (_, i) => (first + i) % PANE_COUNT)
+}
+
 // A team already on screen moves rather than showing twice, and whatever was in the pane takes its old place.
 export function placeTeam(panes, key, index) {
   const next = [...panes], from = next.indexOf(key)

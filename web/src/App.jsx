@@ -9,9 +9,9 @@ import {
   Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
-import { isTouchDevice } from './device.js'
+import { isTablet, isTouchDevice } from './device.js'
 import { readSplitLayout, writeSplitLayout } from './savedView.js'
-import { clearPane, firstPanes, placeTeam, shownPanes } from './split.js'
+import { PANE_COUNT, clearPane, firstPanes, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import ReactMarkdown from 'react-markdown'
 
@@ -221,6 +221,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     const observer = new ResizeObserver(measure)
     observer.observe(stage.current)
     observer.observe(panes.current)
+    panes.current.querySelectorAll('.pane').forEach(pane => observer.observe(pane))
 
     return () => observer.disconnect()
   }, [splitKeys])
@@ -251,7 +252,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   return (
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
-      {split && <div className="split" ref={panes}>{children}</div>}
+      {split && <div className="split" data-panes={split.length} ref={panes}>{children}</div>}
       <div className="tags" ref={tags} />
       <div className={`zoom-controls ${split ? 'is-split' : ''}`} role="group" aria-label="Zoom the office" onMouseUp={event => event.target.closest('button')?.blur()}>
         {onSplit && <button className={`split-toggle ${split ? 'on' : ''}`} aria-label={split ? 'Back to the whole office' : 'Split view: four teams at once'} aria-pressed={Boolean(split)} title={split ? 'Back to the whole office' : 'Split view: four teams at once'} onClick={onSplit}><Grid2x2 size={15} /></button>}
@@ -1143,12 +1144,14 @@ function teamStatus(team) {
 }
 const teamNameOf = team => team.lead.teamName || team.lead.name
 
-// Four rooms at once. Each pane's header names its team and can be dragged onto another pane to swap them.
-function SplitPanes({ panes, teams, drag, onDragStart, onPlace, onClear, onOpen }) {
+// Rooms side by side, one per slot on screen. Each pane's header names its team and can be dragged onto another pane to swap them.
+// The four slots are the layout; a smaller screen can show fewer of them at a time.
+function SplitPanes({ panes, slots, teams, drag, onDragStart, onPlace, onClear, onOpen }) {
   const spare = teams.filter(team => !panes.includes(team.lead.id)).slice(0, SPARE_TEAMS)
+  const teamIn = shownPanes(panes, teams)
 
-  return shownPanes(panes, teams).map((team, index) => {
-    const status = team && teamStatus(team)
+  return slots.map(index => {
+    const team = teamIn[index], status = team && teamStatus(team)
 
     return (
       <div key={index} data-pane={index} className={`pane ${team ? '' : 'empty'} ${drag?.over === index ? 'drop' : ''}`}>
@@ -1421,10 +1424,12 @@ export default function App() {
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
-  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: false, panes: null })
+  // An iPad opens in split view until the person turns it off there.
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: isTablet, panes: null })
   useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
   const isSplit = splitLayout.isOn && !isShowing && active.length > 0
   const panes = splitLayout.panes ?? firstPanes(teams)
+  const slots = visibleSlots(PANE_COUNT)
   const setPanes = next => setSplitLayout(layout => ({ ...layout, panes: next }))
   const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))
   const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => setPanes(placeTeam(panes, key, index)))
@@ -1497,8 +1502,8 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? shownPanes(panes, teams).map(team => team?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
-              <SplitPanes panes={panes} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => shownPanes(panes, teams)[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+              <SplitPanes panes={panes} slots={slots} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
             </Room>
           : !problem && <Empty text="Waiting for session data…" />}
         {drag && createPortal(<div className="drag-chip" style={{ left: drag.x, top: drag.y }}>{drag.name}</div>, document.body)}

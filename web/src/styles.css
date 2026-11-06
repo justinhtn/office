@@ -440,6 +440,10 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .touch .pane-head { padding: 4px 4px 4px 11px; font-size: 13px; }
 .touch .pane-head .icon { width: 36px; height: 36px; }
 .touch .pane-spare button { min-height: 40px; padding: 8px 14px; }
+/* Fewer panes on screen: one fills the space, and two sit side by side, or stacked when the space is tall. */
+.split[data-panes="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.split[data-panes="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+@media (orientation: portrait) { .split[data-panes="2"] { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
 /* A narrow pane keeps the team's name and buttons, and drops the status. */
 @container (max-width: 280px) { .pane-head small { display: none; } }
 /* Too narrow to keep the list beside the panes, so the panes take the width and the list floats over them. */
