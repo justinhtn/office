@@ -83,6 +83,10 @@ class ContentTests(ConversationCase):
         self.assertNotIn(b"TOOL-OUTPUT", body)
         self.assertEqual([(m["role"], m["text"]) for m in json.loads(body)["messages"]], [("person", "Check"), ("step", "Read notes.md"), ("step", "List files")])
 
+    def test_a_command_without_a_description_isnt_shown(self):
+        self.write(assistant(tool("t1", "Bash", command="mysql -uroot -pS3cretPass db")))
+        self.assertEqual(self.texts(), [("step", "Ran a command")])
+
     def test_another_session_shows_who_it_is(self):
         self.write(user('<cross-session-message from="local_abc-1" from-name="Zoe">Status?</cross-session-message>'))
         message = self.read()["messages"][0]
@@ -156,6 +160,11 @@ class SizeTests(ConversationCase):
         message = self.read()["messages"][0]
         self.assertEqual(len(message["text"]), server.CONVERSATION_TEXT + 1)
         self.assertTrue(message["text"].endswith("…"))
+
+    def test_a_secret_split_by_the_cut_is_still_hidden(self):
+        secret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123"
+        self.write(assistant(text("x" * (server.CONVERSATION_TEXT - 8) + " " + secret + " more")))
+        self.assertNotIn("ghp_AbC", self.read()["messages"][0]["text"])
 
     def test_pages_go_back_from_the_newest(self):
         self.write(*[user(f"m{i}") for i in range(150)])

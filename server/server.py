@@ -1530,7 +1530,9 @@ class Transcripts:
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label = self.describe_tool(tool, tool_input)
-                            conversation.append({"role": "step", "body": label[:200], "at": record.get("timestamp", "")})
+                            # A raw command is where an inline password is most likely, so it isn't shown on its own.
+                            step = "Ran a command" if tool == "Bash" and not tool_input.get("description") else label
+                            conversation.append({"role": "step", "body": step[:1000], "at": record.get("timestamp", "")})
                             recent.append("Running a command" if tool == "Bash" and not tool_input.get("description") else label[:70])
 
         return {"messages": messages, "conversation": conversation, "plan": plan, "turnStartedAt": turn_started, "lastReply": last_reply, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
@@ -1662,9 +1664,12 @@ def viewable(item):
         kind, text = "step", f"Shared {count} file{'s' if count != 1 else ''}" + (f": {item['caption']}" if item.get("caption") else "")
     else:
         kind, text = "step", item.get("body", "")
-    text = redacted(str(text))
-    if len(text) > CONVERSATION_TEXT:
-        text = text[:CONVERSATION_TEXT].rstrip() + "…"
+    # Redacted before the cut, so a secret split by it can't slip under a pattern, and on a bounded piece, so a huge message stays cheap.
+    text = str(text)
+    is_long = len(text) > CONVERSATION_TEXT
+    text = redacted(text[:CONVERSATION_TEXT + 500])[:CONVERSATION_TEXT]
+    if is_long:
+        text = text.rstrip() + "…"
     shown = {"role": kind, "text": text, "at": str(item.get("at", ""))[:40]}
     if kind == "peer":
         shown["from"] = redacted(str(item.get("from", "")))[:40]

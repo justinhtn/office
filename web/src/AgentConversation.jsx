@@ -33,6 +33,8 @@ export default function AgentConversation({ person, state, team, portrait, onClo
   const keepFromBottom = useRef(null)
   const isBusy = useRef(person.isRunning)
   isBusy.current = person.isRunning
+  const shownId = useRef(person.id)
+  shownId.current = person.id
 
   useEffect(() => {
     let isStopped = false
@@ -69,6 +71,8 @@ export default function AgentConversation({ person, state, team, portrait, onClo
     setIsLoadingOlder(true)
     try {
       const page = await api(withId('/api/conversation', person.id, { before: String(messages[0].index) }))
+      // Someone else's conversation may be showing by now.
+      if (shownId.current !== person.id) return
       // Older messages go in above, so the one being read stays where it was.
       keepFromBottom.current = list.current ? list.current.scrollHeight - list.current.scrollTop : null
       setMessages(known => merge(known, page))
