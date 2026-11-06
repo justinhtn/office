@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""Posts a reviewer's work on an Agent Office pull request, as the asha-review GitHub App.
+
+Each body is read from a file, never from the command line, so no review text passes through the shell.
+
+    office-review status <pr>                                         head, check, mergeable, reviews and comments
+    office-review reply <pr> <comment-id> --file <path>               a reply in a review thread
+    office-review comment <pr> --file <path>                          a comment on the PR
+    office-review review <pr> --file <review.json>                    one review with inline comments
+    office-review verdict <pr> --ready|--not-ready --sha <sha> --file <path>
+
+review.json holds {"body": "...", "comments": [{"path": "...", "line": 12, "body": "..."}]}, and a comment may also
+give "side", "start_line" and "start_side". A review is always a comment: reviewers never approve on GitHub.
+
+It runs only from a reviewer's worktree, listed in ~/.agent-office/reviewers.json as {"worktrees": ["/path", ...]},
+which only the person edits. It posts through ~/.agent-office/quinn/quinn-gh, and refuses bodies that are too large
+or look like they hold a secret.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = "justinhtn/office"
+MAX_FILE = 64 * 1024
+CHECK_NAME = "check"
+# Things a review never needs to say. Each would leak a credential if it were posted.
+SECRETS = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\b(?:sk-ant-[\w-]{10,}|sk-(?:proj-)?[\w-]{20,}|[sr]k_(?:live|test)_\w{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}|hf_\w{30,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|npm_\w{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"),
+    re.compile(r"(?i)\b(?:bearer|token)\s+[\w.~+/=-]{24,}"),
+    # A name that says it holds a secret, then a value: the whole word, dots and all, so a sentence's last word counts,
+    # unless it's a call such as os.environ.get("X") or read_key().
+    re.compile(r"(?i)\b[\w.-]*(?:api[_-]?key|secret|passw(?:or)?d|access[_-]?key|private[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?[\w.~+/=-]{12,}(?![\w.~+/=(-])"),
+    re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
+]
+COMMENT_KEYS = {"path", "line", "side", "start_line", "start_side", "body"}
+SHA = re.compile(r"^[0-9a-f]{40}$")
+# The server's own pattern for a verdict, in server/approvals.py. Its latest match in anything the App posts counts.
+VERDICT_LINE = re.compile(r"^\W*Verdict:", re.I | re.M)
+PAGE = 100
+
+
+class Refused(Exception):
+    """Something this won't post, with the reason to give the reviewer."""
+
+
+def number(text, what):
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", text):
+        raise argparse.ArgumentTypeError(f"{what} must be a plain number, not {text!r}")
+
+    return int(text)
+
+
+def reviewer_worktrees(home):
+    config = home / ".agent-office" / "reviewers.json"
+    try:
+        worktrees = json.loads(config.read_text())["worktrees"]
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Refused(f"{config} doesn't list any reviewer worktrees. Ask the person to add yours there.")
+    if not isinstance(worktrees, list) or not all(isinstance(each, str) and each.startswith("/") for each in worktrees):
+        raise Refused(f"{config} must hold {{\"worktrees\": [full paths]}}. Ask the person to fix it.")
+
+    return [Path(each).resolve() for each in worktrees]
+
+
+def check_worktree(cwd, home):
+    here = Path(cwd).resolve()
+    if not any(here == each or here.is_relative_to(each) for each in reviewer_worktrees(home)):
+        raise Refused(f"{here} isn't a reviewer's worktree. Run this from yours, or ask the person to list it in ~/.agent-office/reviewers.json.")
+
+
+def check_text(text, what):
+    if not text.strip():
+        raise Refused(f"{what} is empty.")
+    if any(pattern.search(text) for pattern in SECRETS):
+        raise Refused(f"{what} looks like it holds a secret, so it wasn't posted. Take the secret out and try again.")
+    # The office reads any such line as the verdict, so only the verdict subcommand writes one, for the current head.
+    if VERDICT_LINE.search(text):
+        raise Refused(f"{what} has a Verdict line. Leave it out: only office-review verdict writes one, for the PR's current head.")
+
+
+def read_file(path, what):
+    file = Path(path)
+    if not file.is_file():
+        raise Refused(f"{what} {path} isn't a file.")
+    if file.stat().st_size > MAX_FILE:
+        raise Refused(f"{what} {path} is larger than {MAX_FILE // 1024} KB. Keep a review shorter, or split it.")
+    try:
+        text = file.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise Refused(f"{what} {path} isn't UTF-8 text.")
+    check_text(text, f"{what} {path}")
+
+    return text
+
+
+def run_quinn_gh(home, args, payload=None):
+    program = home / ".agent-office" / "quinn" / "quinn-gh"
+    if not program.is_file():
+        raise Refused(f"{program} is missing, so nothing can be posted as the review App.")
+    done = subprocess.run([str(program), *args], input=payload, capture_output=True, text=True)
+    if done.returncode != 0:
+        raise Refused(f"GitHub refused it: {done.stderr.strip() or done.stdout.strip()}")
+
+    return done.stdout
+
+
+class GitHub:
+    """Reads and posts through quinn-gh's api command, sending every body as JSON on its input."""
+
+    def __init__(self, run):
+        self.run = run
+
+    def get(self, path):
+        return json.loads(self.run(["api", f"repos/{REPO}/{path}"]) or "null")
+
+    def get_all(self, path):
+        """Every page of a list, which GitHub gives oldest first, so the newest would otherwise drop off a long PR."""
+        items = []
+        for page in range(1, 51):
+            batch = self.get(f"{path}?per_page={PAGE}&page={page}")
+            items.extend(batch)
+            if len(batch) < PAGE:
+                return items
+
+        raise Refused(f"{path} has more than {50 * PAGE} entries, which is more than this will read.")
+
+    def post(self, path, fields):
+        return json.loads(self.run(["api", "-X", "POST", f"repos/{REPO}/{path}", "--input", "-"], json.dumps(fields)) or "null")
+
+    def head(self, pr):
+        return self.get(f"pulls/{pr}")["head"]["sha"]
+
+
+def first_line(text, width=100):
+    line = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+
+    return line if len(line) <= width else f"{line[:width - 1]}…"
+
+
+def status(github, pr):
+    info = github.get(f"pulls/{pr}")
+    head = info["head"]["sha"]
+    runs = [run for run in github.get(f"commits/{head}/check-runs?check_name={CHECK_NAME}")["check_runs"] if run["name"] == CHECK_NAME]
+    check = (runs[0]["conclusion"] or runs[0]["status"]) if runs else "not run"
+    lines = [
+        f"PR {pr}: {info['title']} ({info['state']}{', merged' if info.get('merged') else ''})",
+        f"head {head}",
+        f"check: {check}",
+        f"mergeable: {info.get('mergeable')} ({info.get('mergeable_state')})",
+        "",
+        "reviews:",
+    ]
+    for review in github.get_all(f"pulls/{pr}/reviews"):
+        lines.append(f"  {review['id']} {review['user']['login']} {review['state']} at {review['commit_id'][:7]}: {first_line(review['body'])}")
+    lines.append("review comments (reply to one by its id):")
+    for comment in github.get_all(f"pulls/{pr}/comments"):
+        where = f"{comment['path']}:{comment.get('line') or comment.get('original_line')}"
+        reply = f" reply to {comment['in_reply_to_id']}" if comment.get("in_reply_to_id") else ""
+        lines.append(f"  {comment['id']} {comment['user']['login']} {where}{reply}: {first_line(comment['body'])}")
+    lines.append("comments:")
+    for comment in github.get_all(f"issues/{pr}/comments"):
+        lines.append(f"  {comment['id']} {comment['user']['login']}: {first_line(comment['body'])}")
+
+    return "\n".join(lines)
+
+
+def review_fields(text, head):
+    try:
+        review = json.loads(text)
+    except ValueError as error:
+        raise Refused(f"The review file isn't JSON: {error}")
+    if not isinstance(review, dict) or set(review) - {"body", "comments", "event", "commit_id"}:
+        raise Refused('The review file must hold {"body": "...", "comments": [...]} and nothing else.')
+    if review.get("event", "COMMENT") != "COMMENT":
+        raise Refused("Reviewers never approve or request changes on GitHub. A review is a comment, and the verdict is its own comment.")
+    if review.get("commit_id", head) != head:
+        raise Refused(f"The review is for {review['commit_id']}, but the PR's head is now {head}.")
+    body = review.get("body", "")
+    comments = review.get("comments", [])
+    if not isinstance(body, str) or not isinstance(comments, list):
+        raise Refused("A review's body must be text and its comments a list.")
+    check_text(body or "-", "The review's body")
+    for k, comment in enumerate(comments):
+        if not isinstance(comment, dict) or set(comment) - COMMENT_KEYS or not {"path", "line", "body"} <= set(comment):
+            raise Refused(f"Comment {k + 1} must give path, line and body, and may give side, start_line and start_side.")
+        if not isinstance(comment["body"], str) or not isinstance(comment["line"], int):
+            raise Refused(f"Comment {k + 1} needs a text body and a whole-number line.")
+        check_text(comment["body"], f"Comment {k + 1}")
+
+    return {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments}
+
+
+def verdict_body(text, is_ready, sha):
+    return f"{text.rstrip()}\n\nVerdict: {'ready for' if is_ready else 'not ready at'} {sha}"
+
+
+def parse(argv):
+    parser = argparse.ArgumentParser(prog="office-review", description="Post a review on an Agent Office PR as the review App.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    pr = lambda text: number(text, "The PR")
+    one = commands.add_parser("status", help="head, check, mergeable, reviews and comments")
+    one.add_argument("pr", type=pr)
+    one = commands.add_parser("reply", help="reply in a review thread")
+    one.add_argument("pr", type=pr)
+    one.add_argument("comment", type=lambda text: number(text, "The comment id"))
+    one.add_argument("--file", required=True)
+    one = commands.add_parser("comment", help="comment on the PR")
+    one.add_argument("pr", type=pr)
+    one.add_argument("--file", required=True)
+    one = commands.add_parser("review", help="one review with inline comments, from a JSON file")
+    one.add_argument("pr", type=pr)
+    one.add_argument("--file", required=True)
+    one = commands.add_parser("verdict", help="the verdict for the PR's current head")
+    one.add_argument("pr", type=pr)
+    choice = one.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--ready", action="store_true")
+    choice.add_argument("--not-ready", action="store_true")
+    one.add_argument("--sha", required=True)
+    one.add_argument("--file", required=True)
+
+    return parser.parse_args(argv)
+
+
+def main(argv, cwd, home, run=None):
+    """Does what the arguments say, and returns what to print."""
+    args = parse(argv)
+    check_worktree(cwd, home)
+    github = GitHub(run or (lambda command, payload=None: run_quinn_gh(home, command, payload)))
+    if args.command == "status":
+        return status(github, args.pr)
+    if args.command == "reply":
+        posted = github.post(f"pulls/{args.pr}/comments/{args.comment}/replies", {"body": read_file(args.file, "The reply")})
+    elif args.command == "comment":
+        posted = github.post(f"issues/{args.pr}/comments", {"body": read_file(args.file, "The comment")})
+    elif args.command == "review":
+        text = read_file(args.file, "The review")
+        posted = github.post(f"pulls/{args.pr}/reviews", review_fields(text, github.head(args.pr)))
+    else:
+        if not SHA.match(args.sha):
+            raise Refused("--sha must be the full 40-character commit, as status prints it.")
+        head = github.head(args.pr)
+        if args.sha != head:
+            raise Refused(f"PR {args.pr}'s head is {head}, not {args.sha}. Review the latest commit before giving a verdict.")
+        body = verdict_body(read_file(args.file, "The verdict"), args.ready, args.sha)
+        posted = github.post(f"issues/{args.pr}/comments", {"body": body})
+
+    return f"Posted: {posted.get('html_url', '')}"
+
+
+if __name__ == "__main__":
+    try:
+        print(main(sys.argv[1:], Path.cwd(), Path.home()))
+    except Refused as refused:
+        print(f"office-review: {refused}", file=sys.stderr)
+        sys.exit(2)
