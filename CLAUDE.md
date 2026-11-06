@@ -10,9 +10,9 @@ Use the `dev-workflow` skill for any change to this repo. `main` is protected, s
 
 ## Review
 
-Two reviewers, Asha and Grace, review every PR, and the person gives the final yes. Each PR has one reviewer from its first round to its end. The reviewer keeps their memory between rounds of that PR and is cleared when it's merged or closed, so every PR's review starts blank. Anyone can open a PR.
+There are two reviewers, Asha and Grace. One of them reviews each PR, and the person gives the final yes. Each PR has one reviewer from its first round to its end. The reviewer keeps their memory between rounds of that PR and is cleared when it's merged or closed, so every PR's review starts blank. Anyone can open a PR.
 
-1. **Open:** the author tells the lead, who sends only the PR link to whichever reviewer is free. If both are busy, PRs wait in the order they became ready. A reviewer waiting on an author's fixes still holds that PR.
+1. **Open:** the author tells the lead, who sends only the PR link to whichever reviewer is free. A reviewer who holds a PR, including one waiting on an author's fixes, isn't free until that PR is merged or closed. If both are busy, PRs wait in the order they became ready.
 2. **Review:** once `check` has passed, the reviewer runs `/code-review` without `--comment`, posts findings on the relevant lines, each marked blocking or non-blocking, with an overall verdict. The reviewer then nudges the author, or the lead if the verdict is ready.
 3. **Respond:** for each blocking finding, the author fixes it or replies in its thread saying why not, pushes any fixes, then nudges the reviewer. Non-blocking findings get fixed if they're easy; otherwise they stay on the PR for the person to see.
 4. **Look again:** once `check` has passed on any new commit, the same reviewer checks it, replies in the threads and restates the verdict for the latest commit. If it's ready, the reviewer nudges the lead. If not, repeat from step 3. After three rounds without agreement, stop and tell the lead, who brings it to the person.
