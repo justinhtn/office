@@ -10,7 +10,7 @@ type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDy
 // The whole command as sent, its commands, whether any of them is fed by a pipe, heredoc or here-string, and the
 // spellings of the one office-review it trusts.
 type Line = { text: string; commands: Command[]; isFed: boolean; trusted: string[] }
-type Target = { path: string; shown: string }
+type Target = { path: string; shown: string; isRecursive: boolean }
 
 const MAX_NESTING = 8
 // Programs that may share a command with a delete, because they don't run their arguments.
@@ -19,8 +19,8 @@ const PLAIN_PROGRAMS = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 
 const RUNS_ARGUMENTS = /^(exec|x|dlx|explore)$/
 const PLAIN_GIT = /^(status|log|diff|show|add|commit|push|pull|fetch|branch|checkout|switch|merge|restore|reset|rm|mv|tag|stash|remote|rev-parse|ls-files|worktree|init|blame)$/
 const PLAIN_GH = /^(pr|issue|api|run|repo|release|auth)$/
-// Flags that make a listed program run another one.
-const RUNS_A_PROGRAM = /^--(pre|hostname-bin|compress-program|upload-pack|receive-pack|exec)\b/
+// Flags that make a listed program run another one, including npm's shell for scripts and an editor, browser or pager.
+const RUNS_A_PROGRAM = /^--(pre|hostname-bin|compress-program|upload-pack|receive-pack|exec|script-shell|shell|editor|browser|pager)\b/
 // Predicates of find whose value is only compared, so it may be a variable.
 const FIND_VALUES = /^-(name|iname|path|ipath|regex|iregex|newer|size|mtime|mmin|type|maxdepth|mindepth|user|group|perm)$/
 const PLAIN_DOCKER = /^(rm|rmi|ps|images|logs|stop)$/
@@ -322,10 +322,42 @@ function normalize(path: string) {
 // macOS treats differently cased and composed spellings as the same file.
 const fold = (path: string) => path.normalize('NFC').toLowerCase()
 
-function protectedAs(path: string, home: string) {
+// A path written out, with . and .. worked out, from the folder it's relative to.
+function resolve(path: string, from: string) {
+  const parts: string[] = []
+  for (const part of (path.startsWith('/') ? path : `${from}/${path}`).split('/')) {
+    if (part === '..') parts.pop()
+    else if (part && part !== '.') parts.push(part)
+  }
+
+  return `/${parts.join('/')}`
+}
+
+// Where a delete runs: the home folder, the folder relative paths start from, or nothing when a cd made that unclear,
+// and the session's own worktree, if it's in one. Every other session's worktree is off limits.
+type Scope = { home: string; base: string | undefined; ownWorktree: string | undefined }
+const WORKTREE = /^(.*\/\.claude\/worktrees\/[^/]+)(?:\/|$)/
+const worktreeOf = (path: string) => WORKTREE.exec(fold(path))?.[1]
+
+// Another session's worktree, for any delete. For a recursive one, also a folder that holds worktrees: a repo's .claude
+// or .claude/worktrees, or the repo holding the session's own worktree, or anything above it.
+function otherWorktree(p: string, scope: Scope, isRecursive: boolean) {
+  const tree = WORKTREE.exec(p)?.[1]
+  if (tree && tree !== scope.ownWorktree) return "another session's worktree"
+  if (!isRecursive) return undefined
+  if (/\/\.claude(\/worktrees)?$/.test(p)) return "every session's worktrees"
+  const repo = scope.ownWorktree?.replace(/\/\.claude\/worktrees\/[^/]+$/, '')
+  if (repo && (p === repo || repo.startsWith(`${p}/`))) return "every session's worktrees"
+
+  return undefined
+}
+
+function protectedAs(path: string, scope: Scope, isRecursive = true) {
   // On macOS this prefix reaches the same files, and resolving links doesn't remove it.
   const p = fold(path).replace(/^\/system\/volumes\/data(?=\/)/, '')
-  const h = fold(normalize(home))
+  const worktrees = otherWorktree(p, scope, isRecursive)
+  if (worktrees || !isRecursive) return worktrees
+  const h = fold(normalize(scope.home))
   if (p === '/' || p.lastIndexOf('/') === 0) return 'a top-level folder'
   if (p === h || h.startsWith(`${p}/`)) return 'your home folder'
   for (const name of ['.claude', '.agent-office', 'Library/Application Support/Claude']) {
@@ -340,22 +372,41 @@ const notLiteral = (shown: string) =>
   `Agent Office blocked this delete because \`${shown}\` isn't a plain literal path. A variable, pattern or relative path can reach a folder nobody meant to delete. ${ADVICE}`
 
 const tooBroad = (shown: string, what: string) =>
-  `Agent Office blocked this recursive delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
+  `Agent Office blocked this delete because \`${shown}\` reaches ${what}. ${ADVICE} If it really must go, ask the person to run it themselves.`
 
 const notVouched = (shown: string) =>
   `Agent Office blocked this command because it mentions a delete and also uses \`${shown}\`, which the safety check can't vouch for. ${ADVICE}`
 
-function checkTarget(word: Word, home: string, targets: Target[]) {
+function checkTarget(word: Word, scope: Scope, targets: Target[]) {
   if (!word.text.startsWith('/') || /(^|\/)\.\.?(\/|$)/.test(word.text)) return notLiteral(word.text)
-  const what = protectedAs(normalize(word.text), home)
+  const what = protectedAs(normalize(word.text), scope)
   if (what) return tooBroad(word.text, what)
-  targets.push({ path: word.text, shown: word.text })
+  targets.push({ path: word.text, shown: word.text, isRecursive: true })
+
+  return undefined
+}
+
+// A place the shell knows but the guard doesn't: the last or current folder, another account's home, or a place in the
+// folder stack, as with ~-, ~+, ~user, +1 and -1. And .. goes up from wherever a link led, which reading the path
+// can't tell, so it's unclear too.
+const UNCLEAR_PLACE = /^(~(?!\/|$)|[+-]\d|-$)|(^|\/)\.\.(\/|$)/
+const expandHome = (text: string, home: string) => text.replace(/^~(?=\/|$)/, home)
+
+// A delete that isn't recursive can only remove what it names, so only another session's worktree is off limits.
+// A relative name counts from the folder the line's cd commands lead to, and can't be checked after an unclear one.
+function checkFile(word: Word, scope: Scope, targets: Target[]) {
+  const text = expandHome(word.text, scope.home)
+  if (UNCLEAR_PLACE.test(word.text) || (!text.startsWith('/') && !scope.base)) return notLiteral(word.text)
+  const path = resolve(text, scope.base ?? '/')
+  const what = protectedAs(path, scope, false)
+  if (what) return tooBroad(word.text, what)
+  targets.push({ path, shown: word.text, isRecursive: false })
 
   return undefined
 }
 
 // Also for programs that take a folder whole, such as trash and git worktree remove, which count as recursive.
-function checkRm(args: Word[], home: string, targets: Target[], isAlwaysRecursive = false) {
+function checkRm(args: Word[], scope: Scope, targets: Target[], isAlwaysRecursive = false) {
   const unclear = args.find(arg => arg.isDynamic || arg.globAt >= 0)
   if (unclear) return notLiteral(unclear.text)
   const paths: Word[] = []
@@ -367,17 +418,15 @@ function checkRm(args: Word[], home: string, targets: Target[], isAlwaysRecursiv
     else if (arg.text.startsWith('--')) isRecursive ||= '--recursive'.startsWith(arg.text)
     else isRecursive ||= /[rR]/.test(arg.text)
   }
-  // Without recursion, literal names can only remove the files they name.
-  if (!isRecursive) return undefined
   for (const path of paths) {
-    const refusal = checkTarget(path, home, targets)
+    const refusal = isRecursive ? checkTarget(path, scope, targets) : checkFile(path, scope, targets)
     if (refusal) return refusal
   }
 
   return undefined
 }
 
-function checkFind(args: Word[], home: string, targets: Target[]) {
+function checkFind(args: Word[], scope: Scope, targets: Target[]) {
   let at = 0
   while (at < args.length && /^-[HLPEXdsx]+$/.test(args[at].text)) at++
   const roots: Word[] = []
@@ -400,7 +449,7 @@ function checkFind(args: Word[], home: string, targets: Target[]) {
   if (!roots.length) return notLiteral('.')
   for (const root of roots) {
     if (root.globAt >= 0) return notLiteral(root.text)
-    const refusal = checkTarget(root, home, targets)
+    const refusal = checkTarget(root, scope, targets)
     if (refusal) return refusal
   }
 
@@ -425,14 +474,39 @@ function runsArguments(name: string, args: Word[]) {
   return undefined
 }
 
-function checkCommand(words: Word[], home: string, targets: Target[]) {
+// Follows a cd, pushd or popd, so relative names are read from where they lead. A cd to somewhere unclear leaves no base.
+function followCd(words: Word[], scope: Scope) {
+  const name = nameOf(words[0])
+  if (!/^(cd|pushd|popd|chdir)$/.test(name)) return
+  // Only -L, -P and -- are known flags. Any other flag, such as zsh's -q and -s, and a second word, as in zsh's
+  // cd old new, which swaps old for new in the current path, leave the folder unclear.
+  const targets: Word[] = []
+  let isPastFlags = false
+  let isKnown = true
+  for (const word of words.slice(1)) {
+    if (isPastFlags || !word.text.startsWith('-')) targets.push(word)
+    else if (word.text === '--') isPastFlags = true
+    else if (!/^-[LP]+$/.test(word.text)) isKnown = false
+  }
+  // A bare cd goes home. A bare pushd swaps the stack, and popd leaves for wherever the stack says.
+  if (isKnown && !targets.length && /^(cd|chdir)$/.test(name)) {
+    scope.base = normalize(scope.home)
+    return
+  }
+  const target = targets.length === 1 && isKnown ? targets[0] : undefined
+  const isClear = name !== 'popd' && target && !target.isDynamic && target.globAt < 0 && !UNCLEAR_PLACE.test(target.text)
+  const text = isClear ? expandHome(target.text, scope.home) : ''
+  scope.base = !isClear ? undefined : text.startsWith('/') ? resolve(text, '/') : scope.base && resolve(text, scope.base)
+}
+
+function checkCommand(words: Word[], scope: Scope, targets: Target[]) {
   const [program, ...args] = words
   if (ASSIGNMENT.test(program.text)) return notVouched(program.text)
   if (program.isDynamic || (program.globAt >= 0 && !TESTS.has(program.text))) return notVouched(program.text)
   const name = nameOf(program)
-  if (REMOVERS.test(name)) return checkRm(args, home, targets)
-  if (name === 'trash') return checkRm(args, home, targets, true)
-  if (name === 'find' || name === 'gfind') return checkFind(args, home, targets)
+  if (REMOVERS.test(name)) return checkRm(args, scope, targets)
+  if (name === 'trash') return checkRm(args, scope, targets, true)
+  if (name === 'find' || name === 'gfind') return checkFind(args, scope, targets)
   if (!PLAIN_PROGRAMS.has(name)) return notVouched(program.text)
   const first = args[0]?.text ?? ''
   const runner = runsArguments(name, args)
@@ -441,7 +515,7 @@ function checkCommand(words: Word[], home: string, targets: Target[]) {
     const at = gitCommandAt(args)
     const command = args[at]
     if (!command || !PLAIN_GIT.test(command.text)) return notVouched(`git ${command?.text ?? ''}`)
-    if (isWorktreeRemove(args, at)) return checkRm(args.slice(at + 2), home, targets, true)
+    if (isWorktreeRemove(args, at)) return checkRm(args.slice(at + 2), scope, targets, true)
   }
   if (name === 'gh' && !PLAIN_GH.test(first)) return notVouched(`gh ${first}`)
   if (name === 'docker' && !PLAIN_DOCKER.test(first)) return notVouched(`docker ${first}`)
@@ -755,19 +829,105 @@ function refuseOfficeReview(commands: Command[] | undefined, command: string, ho
   return undefined
 }
 
+// Settings that make a trusted tool run a program later, when the guard can't see what it runs: gh's browser for --web,
+// its pager and editor, git's pager, editor, hooks, helpers, drivers, tools and aliases, and npm's shells and editor.
+// It's defense in depth: the same settings can be written straight into .git/config, gh's config.yml or .npmrc.
+const GH_PROGRAM_KEYS = /^(browser|pager|editor)$/i
+const GIT_PROGRAM_KEYS =
+  /^(core\.(pager|editor|sshcommand|fsmonitor|askpass|gitproxy|hookspath|alternaterefscommand)|pager\..+|sequence\.editor|diff\.external|(diff|merge)\..+\.(textconv|command|driver)|(mergetool|difftool)\..+\.(cmd|path)|trailer\..+\.(command|cmd)|filter\..+\.(clean|smudge|process)|credential\.(.+\.)?helper|gpg\.(.+\.)?program|alias\..+|remote\..+\.(uploadpack|receivepack|proxy)|(web|browser|man|instaweb|sendemail)\..+|uploadpack\..+|receive\..+|interactive\.difffilter|include\.path|includeif\..+\.path)$/i
+const NPM_PROGRAM_KEYS = /^(script-shell|shell|editor|browser|git|viewer|node-gyp|yarn-?path)$/i
+// git config's flags that take the next word as their value.
+const GIT_CONFIG_VALUES = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/
+const STORED_ADVICE = "The safety check can't see what it would run later. Ask the person to change that setting themselves."
+
+// The settings a command stores: the key of each config set it makes, and whether a variable or pattern hides one.
+function storedSettings(words: Word[]) {
+  const at = words.findIndex(word => !ASSIGNMENT.test(word.text) && !BEFORE_PROGRAM.has(word.text))
+  const name = at < 0 ? '' : nameOf(words[at])
+  const args = words.slice(at + 1)
+  const positional = (from: Word[], values: RegExp) =>
+    from.filter((word, k) => !word.text.startsWith('-') && !values.test(from[k - 1]?.text ?? ''))
+  if (GH.test(name) && args[0]?.text === 'config' && args[1]?.text === 'set') {
+    const [key] = positional(args.slice(2), /^(-h|--host)$/)
+
+    return key ? [{ tool: name, key, keys: GH_PROGRAM_KEYS }] : []
+  }
+  // A shell alias, or one starting with !, runs its text through a shell whenever it's used.
+  // An expansion read from a file or input, with alias import or alias set … -, could be one too.
+  if (GH.test(name) && args[0]?.text === 'alias' && /^(set|import)$/.test(args[1]?.text ?? '')) {
+    const isShell = args[1].text === 'import' || args.slice(2).some(arg => /^(-s|--shell|-)$/.test(arg.text) || arg.text.startsWith('!'))
+
+    return isShell ? [{ tool: name, key: newWord('a shell alias'), keys: /./ }] : []
+  }
+  if (['npm', 'pnpm', 'yarn'].includes(name)) {
+    const first = positional(args, /(?!)/)
+    const isSet = first[0]?.text === 'set' || (first[0]?.text === 'config' && first[1]?.text === 'set')
+    if (!isSet) return []
+    // Each pair is key=value or key value, and one set can take several.
+    const keys: Word[] = []
+    const pairs = first.slice(first[0]?.text === 'set' ? 1 : 2)
+    for (let k = 0; k < pairs.length; k++) {
+      keys.push(Object.assign({}, pairs[k], { text: pairs[k].text.split('=')[0] }))
+      if (!pairs[k].text.includes('=')) k++
+    }
+
+    return keys.map(key => ({ tool: name, key, keys: NPM_PROGRAM_KEYS }))
+  }
+  if (name === 'git') {
+    const command = gitCommandAt(args)
+    if (args[command]?.text !== 'config') return []
+    const rest = args.slice(command + 1)
+    const READS_OR_REMOVES = /^(--(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|show-origin|show-scope|edit)|-l|-e)$/
+    if (rest.some(word => READS_OR_REMOVES.test(word.text))) return []
+    const [first, ...others] = positional(rest, GIT_CONFIG_VALUES)
+    const isNewForm = /^(set|get|list|unset|edit|rename-section|remove-section)$/.test(first?.text ?? '')
+    const [key, value] = isNewForm ? (first.text === 'set' ? others : []) : [first, others[0]]
+    if (!key || !value) return []
+    // The repo's own hooks folder, which this repo's setup asks for, stores nothing new.
+    if (/^core\.hookspath$/i.test(key.text) && value.text === '.githooks' && !value.isDynamic) return []
+
+    return [{ tool: 'git', key, keys: GIT_PROGRAM_KEYS }]
+  }
+
+  return []
+}
+
+function refuseStoredProgram(commands: Command[] | undefined, command: string) {
+  if (!commands) return /\b(gh|quinn-gh|git|npm|pnpm|yarn)\b[^;&|\n]*\b(config|set)\b/.test(command) ? `Agent Office blocked this command because its safety check couldn't read whether it stores a program for a tool to run. ${STORED_ADVICE}` : undefined
+  for (const words of commands) {
+    for (const { tool, key, keys } of storedSettings(words)) {
+      if (key.isDynamic || key.globAt >= 0 || keys.test(key.text)) {
+        return `Agent Office blocked this command because it sets \`${key.text}\`, which makes ${tool} run a program later. ${STORED_ADVICE}`
+      }
+    }
+  }
+
+  return undefined
+}
+
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
   const commands = read(command)
+  const stored = refuseStoredProgram(commands, command)
+  if (stored) return stored
   const reviewHome = /office-review/i.test(command) ? await $.env.get('HOME') : undefined
   const review = refuseOfficeReview(commands, command, reviewHome)
   if (review) return review
   if (!anyMentionDelete(commands, command, trustedReview(reviewHome))) return undefined
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
+  // Without its folder, a session has no worktree of its own and no base for relative names.
+  // The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
+  // worktree can't make it look like its own. Relative names still count from where the shell is.
+  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
+  const root = await Promise.resolve($.session.root()).catch(() => undefined)
+  const base = cwd ? normalize(cwd) : undefined
+  const scope: Scope = { home, base, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
   const targets: Target[] = []
   for (const words of commands ?? lex(command)) {
-    const refusal = checkCommand(words, home, targets)
+    const refusal = checkCommand(words, scope, targets)
     if (refusal) return refusal
+    followCd(words, scope)
   }
 
   // Links can lead a harmless spelling somewhere protected, or make the home folder look like somewhere else.
@@ -780,7 +940,7 @@ export async function refuseDelete($: EngineInterface, command: string): Promise
     if (!landed) continue
     const path = normalize(followsLast ? landed : `${landed}/${target.path.slice(cut + 1)}`)
     for (const each of homes) {
-      const what = protectedAs(path, each)
+      const what = protectedAs(path, { ...scope, home: each }, target.isRecursive)
       if (what) return tooBroad(target.shown, what)
     }
   }

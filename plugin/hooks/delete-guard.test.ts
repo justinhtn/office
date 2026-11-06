@@ -6,12 +6,16 @@ const PROJECT = `${HOME}/code/app`
 const LINKS: Record<string, string> = {
   '/tmp/links': `${HOME}/.claude/projects`,
   '/tmp/links/sub': `${HOME}/.claude/projects/sub`,
+  '/tmp/links-to-theirs': `${PROJECT}/.claude/worktrees/theirs`,
+  [`${PROJECT}/.claude/worktrees/mine/lnk`]: `${PROJECT}/.claude/worktrees/theirs/sub`,
 }
 
-async function bash($: any, on: any, command: string, opts: { home?: string; cwd?: string } = {}) {
+// The root is where the session belongs, which a shell cd doesn't move. Without one given, it's the session's folder.
+async function bash($: any, on: any, command: string, opts: { home?: string; cwd?: string; root?: string } = {}) {
   const ran: string[] = []
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? (opts.home ?? HOME) : undefined }))
   on('session.cwd', () => ({ value: opts.cwd ?? PROJECT }))
+  on('session.root', () => ({ value: opts.root ?? opts.cwd ?? PROJECT }))
   on('fs.stat', (_: unknown, e: { path: string }) => {
     const realPath = LINKS[e.path]
     if (!realPath) throw new Error('missing')
@@ -362,12 +366,13 @@ for (const [why, command] of REFUSED) {
   test(`refuses ${why}`, async ($, on) => {
     const { ran, deny } = await bash($, on, command)
     expect(ran).toEqual([])
-    expect(deny).toMatch(/trash folder/)
+    // A git alias that stores a delete is refused sooner, as a program stored for git to run later.
+    expect(deny).toMatch(/trash folder|run a program later/)
   })
 }
 
 const ALLOWED: [string, string][] = [
-  ['a full literal path in a worktree', `rm -rf ${PROJECT}/.claude/worktrees/w/build`],
+  ['a full literal path in the project', `rm -rf ${PROJECT}/build`],
   ['several full literal paths', '/bin/rm -rf /tmp/guard-test/a /tmp/guard-test/b'],
   ['a full literal path with spaces', 'rm -rf "/tmp/guard test/old build"'],
   ['a full path with a similar name', `rm -rf ${HOME}/.claude-old`],
@@ -683,8 +688,111 @@ for (const command of ['git clean -nd && scripts/update.sh', 'git clean -fdn', '
   })
 }
 
-test('git worktree remove of a full literal path is checked like rm -rf', async ($, on) => {
-  const { deny } = await bash($, on, `git worktree remove ${PROJECT}/.claude/worktrees/w`)
+// Each session's worktree is its own. A session may delete inside its own, but nothing in another's.
+const OWN = `${PROJECT}/.claude/worktrees/mine`
+const OTHER = `${PROJECT}/.claude/worktrees/theirs`
+const OWN_WORKTREE_ALLOWED: [string, string][] = [
+  ['a recursive delete in its own worktree', `rm -rf ${OWN}/build`],
+  ['a file in its own worktree by full path', `rm -f ${OWN}/notes.txt`],
+  ['a relative file in its own worktree', 'rm notes.txt'],
+  ['a relative file after a cd into its own subfolder', 'cd web && rm -f dist/old.js'],
+  ['a file after a cd to its own worktree by full path', `cd ${OWN}/web && rm -f old.js`],
+  ['a file after cd -P and -- into its own subfolder', 'cd -P -- web && rm -f old.js'],
+  ['find -delete in its own worktree', `find ${OWN}/build -name '*.pyc' -delete`],
+  ['trash in its own worktree', `trash ${OWN}/old`],
+  ['rmdir in its own worktree', `rmdir ${OWN}/empty`],
+  ['a file outside every worktree', 'rm -f /tmp/guard-test/x.log'],
+  ['a recursive delete outside every worktree', 'rm -rf /tmp/guard-test/build'],
+  ['a file in ~/.claude without recursion, as before', 'rm -f ~/.claude/old.json'],
+]
+
+for (const [why, command] of OWN_WORKTREE_ALLOWED) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
+  })
+}
+
+const OTHER_WORKTREE_REFUSED: [string, string][] = [
+  ["a recursive delete in another session's worktree", `rm -rf ${OTHER}/build`],
+  ["one file in another session's worktree", `rm -f ${OTHER}/notes.txt`],
+  ["one file in another session's worktree without flags", `rm ${OTHER}/notes.txt`],
+  ["another session's whole worktree", `rm -rf ${OTHER}`],
+  ["another session's worktree by a different case", `rm -f ${PROJECT}/.claude/worktrees/THEIRS/notes.txt`],
+  ["a relative file reached through ..", 'rm -f ../theirs/notes.txt'],
+  ['a relative file after a cd into another worktree', `cd ${OTHER} && rm -f notes.txt`],
+  ['a relative file after a cd through ..', 'cd ../theirs && rm notes.txt'],
+  ['a relative file after a cd to somewhere unclear', 'cd "$W" && rm -f notes.txt'],
+  ['a relative file after popd', 'popd && rm -f notes.txt'],
+  ["unlink in another session's worktree", `unlink ${OTHER}/notes.txt`],
+  ["rmdir in another session's worktree", `rmdir ${OTHER}/empty`],
+  ["shred in another session's worktree", `shred -u ${OTHER}/notes.txt`],
+  ["trash of another session's worktree", `trash ${OTHER}`],
+  ["find -delete in another session's worktree", `find ${OTHER} -name '*.log' -delete`],
+  ["git worktree remove of another session's worktree", `git worktree remove ${OTHER}`],
+  ['the folder holding every worktree', `rm -rf ${PROJECT}/.claude/worktrees`],
+  ["the project's .claude folder", `rm -rf ${PROJECT}/.claude`],
+  ['the repo holding its own worktree', `rm -rf ${PROJECT}`],
+  ['a folder above the repo', `rm -rf ${HOME}/code`],
+  ['a link into another worktree', 'rm -f /tmp/links-to-theirs/notes.txt'],
+  ['a pattern in its own worktree, as anywhere', `rm -f ${OWN}/*.log`],
+  // From the first review: places the shell knows but a path doesn't show.
+  ['~+ for the current folder, then ..', 'rm -f ~+/../theirs/notes.txt'],
+  ['~- for the last folder', `cd ${OTHER} && cd ${OWN} && rm -f ~-/notes.txt`],
+  ["another account's home", 'rm -f ~other/notes.txt'],
+  ['a cd to the last folder with ~-', `cd ${OTHER} && cd ${OWN} && cd ~- && rm -f notes.txt`],
+  ['a cd to the last folder with -', `cd ${OTHER} && cd ${OWN} && cd - && rm -f notes.txt`],
+  ['a pushd to a place in the stack', `pushd ${OTHER} && pushd ${OWN} && pushd +1 && rm -f notes.txt`],
+  ['a cd to a place in the stack', `pushd ${OTHER} && cd -1 && rm -f notes.txt`],
+  ['a bare pushd that swaps the stack', `pushd ${OTHER} && pushd ${OWN} && pushd && rm -f notes.txt`],
+  ['.. after a link into another worktree', `rm -f ${OWN}/lnk/../notes.txt`],
+  ['.. after a cd through a link', `cd ${OWN}/lnk && rm -f ../notes.txt`],
+  ['a cd -P through a link and ..', `cd -P ${OWN}/lnk/.. && rm -f notes.txt`],
+  ['a file through a link into another worktree', `rm -f ${OWN}/lnk/notes.txt`],
+  ['a relative file after a cd through a link', `cd ${OWN}/lnk && rm -f notes.txt`],
+  // From the second review: zsh's cd flags and its two-word form.
+  ["a cd with zsh's -q", `cd -q ${OTHER} && rm -f notes.txt`],
+  ["a cd with zsh's -s", `cd -s ${OTHER} && rm -f notes.txt`],
+  ['a cd with -q among other flags', `cd -qP ${OTHER} && rm -f notes.txt`],
+  ['a pushd with -q', `pushd -q ${OTHER} && rm -f notes.txt`],
+  ["zsh's cd old new", 'cd mine theirs && rm -f notes.txt'],
+]
+
+for (const [why, command] of OTHER_WORKTREE_REFUSED) {
+  test(`refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/trash folder/)
+  })
+}
+
+test("a session outside every worktree can't delete in one either", async ($, on) => {
+  const { ran, deny } = await bash($, on, `rm -f ${OWN}/notes.txt`)
+  expect(ran).toEqual([])
+  expect(deny).toMatch(/another session's worktree/)
+})
+
+for (const command of [`rm -rf ${OTHER}/build`, 'rm -f notes.txt', `rm -f ${OTHER}/notes.txt`]) {
+  test(`a cd into another session's worktree doesn't make it the session's own: ${command}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OTHER, root: PROJECT })
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/another session's worktree/)
+  })
+}
+
+test("a session's own worktree is still its own after a cd elsewhere", async ($, on) => {
+  const { deny } = await bash($, on, `rm -rf ${OWN}/build`, { cwd: '/tmp/guard-test', root: OWN })
+  expect(deny).toBeUndefined()
+})
+
+test('a bare cd goes home', async ($, on) => {
+  const { deny } = await bash($, on, 'cd && rm -f notes.txt', { cwd: OWN })
+  expect(deny).toBeUndefined()
+})
+
+test('a session deep inside its own worktree still owns all of it', async ($, on) => {
+  const { deny } = await bash($, on, `rm -rf ${OWN}/build`, { cwd: `${OWN}/web/src` })
   expect(deny).toBeUndefined()
 })
 
@@ -792,5 +900,94 @@ for (const [why, command] of REVIEW_REFUSED) {
     const { ran, deny } = await bash($, on, command)
     expect(ran).toEqual([])
     expect(deny).toMatch(/office-review/)
+  })
+}
+
+// A setting that makes a trusted tool run a program later is refused whether or not the line deletes anything, since
+// the guard can't see what that program does when it runs, as with gh's browser and gh … --web.
+const STORED_REFUSED: [string, string][] = [
+  ["gh's browser", 'gh config set browser /tmp/x/evil.sh'],
+  ["gh's browser, then --web", 'gh config set browser /tmp/x/evil.sh && gh pr view 50 --web'],
+  ["gh's browser for one host", 'gh config set -h github.com browser /tmp/x/evil.sh'],
+  ["gh's pager", 'gh config set pager /tmp/x/evil.sh'],
+  ["gh's editor", 'gh config set editor /tmp/x/evil.sh'],
+  ["quinn-gh's browser", `${QUINN} config set browser /tmp/x/evil.sh`],
+  ['a gh setting named by a variable', 'gh config set "$KEY" /tmp/x/evil.sh'],
+  ["git's pager", 'git config core.pager /tmp/x/evil.sh'],
+  ["git's pager globally", 'git config --global core.pager /tmp/x/evil.sh'],
+  ["git's editor in the new form", 'git config set core.editor /tmp/x/evil.sh'],
+  ["git's ssh command", "git config core.sshCommand 'ssh -o ProxyCommand=/tmp/x/evil.sh'"],
+  ["git's hooks folder", 'git config core.hooksPath /tmp/x/hooks'],
+  ['a git pager for one command', 'git config pager.log /tmp/x/evil.sh'],
+  ['a git alias', "git config alias.st '!/tmp/x/evil.sh'"],
+  ['a git diff driver', 'git config diff.x.textconv /tmp/x/evil.sh'],
+  ['a git filter', 'git config filter.x.smudge /tmp/x/evil.sh'],
+  ['a git credential helper', 'git config credential.helper /tmp/x/evil.sh'],
+  ['a git included config file', 'git config include.path /tmp/x/evil.conf'],
+  ['a git setting in another folder', 'git -C /tmp/x config core.fsmonitor /tmp/x/evil.sh'],
+  ['a git setting named by a variable', 'git config "$KEY" /tmp/x/evil.sh'],
+  ["npm's script shell", 'npm config set script-shell /tmp/x/evil.sh'],
+  ["npm's script shell with =", 'npm config set script-shell=/tmp/x/evil.sh'],
+  ["npm's editor with set", 'npm set editor /tmp/x/evil.sh'],
+  ["pnpm's shell", 'pnpm config set shell /tmp/x/evil.sh'],
+  ["yarn's own path", 'yarn config set yarnPath /tmp/x/evil.js'],
+  ['a setting in a line it can\'t read', '((1)); gh config set browser /tmp/x/evil.sh'],
+  // From the first review: more settings that run a program, and npm's several pairs at once.
+  ["npm's script shell after another pair with =", 'npm config set fund=false script-shell=/tmp/x/evil.sh'],
+  ["npm's script shell after another pair", 'npm config set fund false script-shell /tmp/x/evil.sh'],
+  ['a git merge tool', "git config mergetool.x.cmd '/tmp/x/evil.sh'"],
+  ['a git diff tool', "git config difftool.x.cmd '/tmp/x/evil.sh'"],
+  ["git's alternate refs command", 'git config core.alternateRefsCommand /tmp/x/evil.sh'],
+  ['a git trailer command', 'git config trailer.x.command /tmp/x/evil.sh'],
+  ['a gh shell alias', "gh alias set x --shell '/tmp/x/evil.sh'"],
+  ['a gh alias starting with !', "gh alias set x '!/tmp/x/evil.sh'"],
+  ['gh aliases imported from a file', 'gh alias import /tmp/x/aliases.yml'],
+  ['a gh alias read from input', 'gh alias set x - < /tmp/x/expansion.txt'],
+]
+
+for (const [why, command] of STORED_REFUSED) {
+  test(`refuses storing ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/run a program later|stores a program/)
+  })
+}
+
+const STORED_ALLOWED: [string, string][] = [
+  ['reading a gh setting', 'gh config get browser'],
+  ['another gh setting', 'gh config set git_protocol ssh'],
+  ['opening a PR in the browser', 'gh pr view 50 --web'],
+  ['reading a git setting', 'git config --get core.pager'],
+  ['reading a git setting by its key alone', 'git config core.pager'],
+  ['listing git settings', 'git config --list'],
+  ['removing a git pager', 'git config --unset core.pager'],
+  ["the git author's name", 'git config user.name "June"'],
+  ["this repo's own hooks folder, from its setup", 'git config core.hooksPath .githooks'],
+  ['an npm setting', 'npm config set fund false'],
+  ['reading an npm setting', 'npm config get script-shell'],
+  ['several ordinary npm settings', 'npm config set fund=false audit=false'],
+  ['a gh alias for another gh command', "gh alias set co 'pr checkout'"],
+]
+
+for (const [why, command] of STORED_ALLOWED) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
+  })
+}
+
+// A program for one command is like running that program, so it can't share a line with a delete.
+const ONE_SHOT_REFUSED: [string, string][] = [
+  ['npm with its own script shell', 'npm --script-shell=/tmp/x/evil.sh run test && rm -f /tmp/guard-test/x.log'],
+  ['git with a pager for one command', 'git -c core.pager=/tmp/x/evil.sh log && rm -f /tmp/guard-test/x.log'],
+  ['gh with a browser for one command', 'GH_BROWSER=/tmp/x/evil.sh gh pr view 50 --web && rm -f /tmp/guard-test/x.log'],
+]
+
+for (const [why, command] of ONE_SHOT_REFUSED) {
+  test(`refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/trash folder/)
   })
 }
