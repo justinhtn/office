@@ -7,12 +7,15 @@ const LINKS: Record<string, string> = {
   '/tmp/links': `${HOME}/.claude/projects`,
   '/tmp/links/sub': `${HOME}/.claude/projects/sub`,
   '/tmp/links-to-theirs': `${PROJECT}/.claude/worktrees/theirs`,
+  [`${PROJECT}/.claude/worktrees/mine/lnk`]: `${PROJECT}/.claude/worktrees/theirs/sub`,
 }
 
-async function bash($: any, on: any, command: string, opts: { home?: string; cwd?: string } = {}) {
+// The root is where the session belongs, which a shell cd doesn't move. Without one given, it's the session's folder.
+async function bash($: any, on: any, command: string, opts: { home?: string; cwd?: string; root?: string } = {}) {
   const ran: string[] = []
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? (opts.home ?? HOME) : undefined }))
   on('session.cwd', () => ({ value: opts.cwd ?? PROJECT }))
+  on('session.root', () => ({ value: opts.root ?? opts.cwd ?? PROJECT }))
   on('fs.stat', (_: unknown, e: { path: string }) => {
     const realPath = LINKS[e.path]
     if (!realPath) throw new Error('missing')
@@ -733,6 +736,20 @@ const OTHER_WORKTREE_REFUSED: [string, string][] = [
   ['a folder above the repo', `rm -rf ${HOME}/code`],
   ['a link into another worktree', 'rm -f /tmp/links-to-theirs/notes.txt'],
   ['a pattern in its own worktree, as anywhere', `rm -f ${OWN}/*.log`],
+  // From the first review: places the shell knows but a path doesn't show.
+  ['~+ for the current folder, then ..', 'rm -f ~+/../theirs/notes.txt'],
+  ['~- for the last folder', `cd ${OTHER} && cd ${OWN} && rm -f ~-/notes.txt`],
+  ["another account's home", 'rm -f ~other/notes.txt'],
+  ['a cd to the last folder with ~-', `cd ${OTHER} && cd ${OWN} && cd ~- && rm -f notes.txt`],
+  ['a cd to the last folder with -', `cd ${OTHER} && cd ${OWN} && cd - && rm -f notes.txt`],
+  ['a pushd to a place in the stack', `pushd ${OTHER} && pushd ${OWN} && pushd +1 && rm -f notes.txt`],
+  ['a cd to a place in the stack', `pushd ${OTHER} && cd -1 && rm -f notes.txt`],
+  ['a bare pushd that swaps the stack', `pushd ${OTHER} && pushd ${OWN} && pushd && rm -f notes.txt`],
+  ['.. after a link into another worktree', `rm -f ${OWN}/lnk/../notes.txt`],
+  ['.. after a cd through a link', `cd ${OWN}/lnk && rm -f ../notes.txt`],
+  ['a cd -P through a link and ..', `cd -P ${OWN}/lnk/.. && rm -f notes.txt`],
+  ['a file through a link into another worktree', `rm -f ${OWN}/lnk/notes.txt`],
+  ['a relative file after a cd through a link', `cd ${OWN}/lnk && rm -f notes.txt`],
 ]
 
 for (const [why, command] of OTHER_WORKTREE_REFUSED) {
@@ -747,6 +764,24 @@ test("a session outside every worktree can't delete in one either", async ($, on
   const { ran, deny } = await bash($, on, `rm -f ${OWN}/notes.txt`)
   expect(ran).toEqual([])
   expect(deny).toMatch(/another session's worktree/)
+})
+
+for (const command of [`rm -rf ${OTHER}/build`, 'rm -f notes.txt', `rm -f ${OTHER}/notes.txt`]) {
+  test(`a cd into another session's worktree doesn't make it the session's own: ${command}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OTHER, root: PROJECT })
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/another session's worktree/)
+  })
+}
+
+test("a session's own worktree is still its own after a cd elsewhere", async ($, on) => {
+  const { deny } = await bash($, on, `rm -rf ${OWN}/build`, { cwd: '/tmp/guard-test', root: OWN })
+  expect(deny).toBeUndefined()
+})
+
+test('a bare cd goes home', async ($, on) => {
+  const { deny } = await bash($, on, 'cd && rm -f notes.txt', { cwd: OWN })
+  expect(deny).toBeUndefined()
 })
 
 test('a session deep inside its own worktree still owns all of it', async ($, on) => {
@@ -890,6 +925,15 @@ const STORED_REFUSED: [string, string][] = [
   ["pnpm's shell", 'pnpm config set shell /tmp/x/evil.sh'],
   ["yarn's own path", 'yarn config set yarnPath /tmp/x/evil.js'],
   ['a setting in a line it can\'t read', '((1)); gh config set browser /tmp/x/evil.sh'],
+  // From the first review: more settings that run a program, and npm's several pairs at once.
+  ["npm's script shell after another pair with =", 'npm config set fund=false script-shell=/tmp/x/evil.sh'],
+  ["npm's script shell after another pair", 'npm config set fund false script-shell /tmp/x/evil.sh'],
+  ['a git merge tool', "git config mergetool.x.cmd '/tmp/x/evil.sh'"],
+  ['a git diff tool', "git config difftool.x.cmd '/tmp/x/evil.sh'"],
+  ["git's alternate refs command", 'git config core.alternateRefsCommand /tmp/x/evil.sh'],
+  ['a git trailer command', 'git config trailer.x.command /tmp/x/evil.sh'],
+  ['a gh shell alias', "gh alias set x --shell '/tmp/x/evil.sh'"],
+  ['a gh alias starting with !', "gh alias set x '!/tmp/x/evil.sh'"],
 ]
 
 for (const [why, command] of STORED_REFUSED) {
@@ -912,6 +956,8 @@ const STORED_ALLOWED: [string, string][] = [
   ["this repo's own hooks folder, from its setup", 'git config core.hooksPath .githooks'],
   ['an npm setting', 'npm config set fund false'],
   ['reading an npm setting', 'npm config get script-shell'],
+  ['several ordinary npm settings', 'npm config set fund=false audit=false'],
+  ['a gh alias for another gh command', "gh alias set co 'pr checkout'"],
 ]
 
 for (const [why, command] of STORED_ALLOWED) {

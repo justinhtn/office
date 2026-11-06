@@ -386,11 +386,18 @@ function checkTarget(word: Word, scope: Scope, targets: Target[]) {
   return undefined
 }
 
+// A place the shell knows but the guard doesn't: the last or current folder, another account's home, or a place in the
+// folder stack, as with ~-, ~+, ~user, +1 and -1. And .. goes up from wherever a link led, which reading the path
+// can't tell, so it's unclear too.
+const UNCLEAR_PLACE = /^(~(?!\/|$)|[+-]\d|-$)|(^|\/)\.\.(\/|$)/
+const expandHome = (text: string, home: string) => text.replace(/^~(?=\/|$)/, home)
+
 // A delete that isn't recursive can only remove what it names, so only another session's worktree is off limits.
 // A relative name counts from the folder the line's cd commands lead to, and can't be checked after an unclear one.
 function checkFile(word: Word, scope: Scope, targets: Target[]) {
-  if (!word.text.startsWith('/') && !scope.base) return notLiteral(word.text)
-  const path = resolve(word.text, scope.base ?? '/')
+  const text = expandHome(word.text, scope.home)
+  if (UNCLEAR_PLACE.test(word.text) || (!text.startsWith('/') && !scope.base)) return notLiteral(word.text)
+  const path = resolve(text, scope.base ?? '/')
   const what = protectedAs(path, scope, false)
   if (what) return tooBroad(word.text, what)
   targets.push({ path, shown: word.text, isRecursive: false })
@@ -471,10 +478,15 @@ function runsArguments(name: string, args: Word[]) {
 function followCd(words: Word[], scope: Scope) {
   const name = nameOf(words[0])
   if (!/^(cd|pushd|popd|chdir)$/.test(name)) return
-  const target = words.slice(1).find(word => !/^-[LPe@]*$/.test(word.text) || word.text === '-')
-  const isClear = name !== 'popd' && target && !target.isDynamic && target.globAt < 0 && target.text !== '-'
-  const text = target?.text.replace(/^~(?=\/|$)/, scope.home) ?? scope.home
-  scope.base = isClear && scope.base !== undefined ? resolve(text, scope.base) : isClear && text.startsWith('/') ? resolve(text, '/') : undefined
+  const target = words.slice(1).find(word => !/^(-[LPe@]+|--)$/.test(word.text))
+  // A bare cd goes home. A bare pushd swaps the stack, and popd leaves for wherever the stack says.
+  if (!target && /^(cd|chdir)$/.test(name)) {
+    scope.base = normalize(scope.home)
+    return
+  }
+  const isClear = name !== 'popd' && target && !target.isDynamic && target.globAt < 0 && !UNCLEAR_PLACE.test(target.text)
+  const text = isClear ? expandHome(target.text, scope.home) : ''
+  scope.base = !isClear ? undefined : text.startsWith('/') ? resolve(text, '/') : scope.base && resolve(text, scope.base)
 }
 
 function checkCommand(words: Word[], scope: Scope, targets: Target[]) {
@@ -808,10 +820,11 @@ function refuseOfficeReview(commands: Command[] | undefined, command: string, ho
 }
 
 // Settings that make a trusted tool run a program later, when the guard can't see what it runs: gh's browser for --web,
-// its pager and editor, git's pager, editor, hooks, helpers, drivers and aliases, and npm's shells and editor.
+// its pager and editor, git's pager, editor, hooks, helpers, drivers, tools and aliases, and npm's shells and editor.
+// It's defense in depth: the same settings can be written straight into .git/config, gh's config.yml or .npmrc.
 const GH_PROGRAM_KEYS = /^(browser|pager|editor)$/i
 const GIT_PROGRAM_KEYS =
-  /^(core\.(pager|editor|sshcommand|fsmonitor|askpass|gitproxy|hookspath)|pager\..+|sequence\.editor|diff\.external|(diff|merge)\..+\.(textconv|command|driver)|filter\..+\.(clean|smudge|process)|credential\.(.+\.)?helper|gpg\.(.+\.)?program|alias\..+|remote\..+\.(uploadpack|receivepack|proxy)|(web|browser|man|instaweb|sendemail)\..+|uploadpack\..+|receive\..+|interactive\.difffilter|include\.path|includeif\..+\.path)$/i
+  /^(core\.(pager|editor|sshcommand|fsmonitor|askpass|gitproxy|hookspath|alternaterefscommand)|pager\..+|sequence\.editor|diff\.external|(diff|merge)\..+\.(textconv|command|driver)|(mergetool|difftool)\..+\.(cmd|path)|trailer\..+\.(command|cmd)|filter\..+\.(clean|smudge|process)|credential\.(.+\.)?helper|gpg\.(.+\.)?program|alias\..+|remote\..+\.(uploadpack|receivepack|proxy)|(web|browser|man|instaweb|sendemail)\..+|uploadpack\..+|receive\..+|interactive\.difffilter|include\.path|includeif\..+\.path)$/i
 const NPM_PROGRAM_KEYS = /^(script-shell|shell|editor|browser|git|viewer|node-gyp|yarn-?path)$/i
 // git config's flags that take the next word as their value.
 const GIT_CONFIG_VALUES = /^(-f|--file|--blob|--type|--default|--comment|--value|--url)$/
@@ -829,13 +842,25 @@ function storedSettings(words: Word[]) {
 
     return key ? [{ tool: name, key, keys: GH_PROGRAM_KEYS }] : []
   }
+  // A shell alias, or one starting with !, runs its text through a shell whenever it's used.
+  if (GH.test(name) && args[0]?.text === 'alias' && args[1]?.text === 'set') {
+    const isShell = args.some(arg => /^(-s|--shell)$/.test(arg.text) || arg.text.startsWith('!'))
+
+    return isShell ? [{ tool: name, key: newWord('a shell alias'), keys: /./ }] : []
+  }
   if (['npm', 'pnpm', 'yarn'].includes(name)) {
     const first = positional(args, /(?!)/)
     const isSet = first[0]?.text === 'set' || (first[0]?.text === 'config' && first[1]?.text === 'set')
-    const key = first[first[0]?.text === 'set' ? 1 : 2]
-    if (!isSet || !key) return []
+    if (!isSet) return []
+    // Each pair is key=value or key value, and one set can take several.
+    const keys: Word[] = []
+    const pairs = first.slice(first[0]?.text === 'set' ? 1 : 2)
+    for (let k = 0; k < pairs.length; k++) {
+      keys.push(Object.assign({}, pairs[k], { text: pairs[k].text.split('=')[0] }))
+      if (!pairs[k].text.includes('=')) k++
+    }
 
-    return [{ tool: name, key: Object.assign({}, key, { text: key.text.split('=')[0] }), keys: NPM_PROGRAM_KEYS }]
+    return keys.map(key => ({ tool: name, key, keys: NPM_PROGRAM_KEYS }))
   }
   if (name === 'git') {
     const command = gitCommandAt(args)
@@ -881,9 +906,12 @@ export async function refuseDelete($: EngineInterface, command: string): Promise
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
   // Without its folder, a session has no worktree of its own and no base for relative names.
+  // The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
+  // worktree can't make it look like its own. Relative names still count from where the shell is.
   const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
+  const root = await Promise.resolve($.session.root()).catch(() => undefined)
   const base = cwd ? normalize(cwd) : undefined
-  const scope: Scope = { home, base, ownWorktree: base && worktreeOf(base) }
+  const scope: Scope = { home, base, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
   const targets: Target[] = []
   for (const words of commands ?? lex(command)) {
     const refusal = checkCommand(words, scope, targets)
