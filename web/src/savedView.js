@@ -27,3 +27,31 @@ export function writeSavedView(view) {
     else localStorage.removeItem(VIEW_SETTING)
   } catch {}
 }
+
+// The split view, and which team is in each pane, are kept per device.
+const SPLIT_SETTING = 'office-split-view'
+
+export function parseSplitLayout(text, paneCount = 4) {
+  try {
+    const layout = JSON.parse(text)
+    const isValid = layout && typeof layout.isOn === 'boolean' && (layout.panes === null || (Array.isArray(layout.panes) && layout.panes.length === paneCount && layout.panes.every(key => key === null || (typeof key === 'string' && key.length > 0 && key.length <= 200))))
+
+    return isValid ? { isOn: layout.isOn, panes: layout.panes } : null
+  } catch {
+    return null
+  }
+}
+
+export function readSplitLayout() {
+  try {
+    return parseSplitLayout(localStorage.getItem(SPLIT_SETTING))
+  } catch {
+    return null
+  }
+}
+
+export function writeSplitLayout(layout) {
+  try {
+    localStorage.setItem(SPLIT_SETTING, JSON.stringify(layout))
+  } catch {}
+}

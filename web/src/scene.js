@@ -126,6 +126,8 @@ const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
 renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,TOUCH_MODE?TOUCH_PIXEL_RATIO:2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
+// Reset once a frame, so ?perf counts every pane of the split view.
+renderer.info.autoReset = false
 const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
@@ -1163,7 +1165,7 @@ function applyTimeOfDay(){
 function build(){
   const buildStart=performance.now()
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
-  scene.remove(world); releaseRoom(world); world=new THREE.Group(); scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; teamVolumes=[]; boards=[]
+  scene.remove(world); releaseRoom(world); world=new THREE.Group(); paneParts=null; scene.add(world); actors=[]; tagsEl.innerHTML=''; tags=[]; spots={}; floors=[]; teamVolumes=[]; boards=[]
   scene.remove(lighting);releaseLighting(lighting);lighting=new THREE.Group();scene.add(lighting);lit.lights=[];lit.sky=[];lit.selfLit=[]
   const spaces=planSpaces(),perRow=ROOM_COLUMNS
   const rows=[];spaces.forEach((z,i)=>{const r=Math.floor(i/perRow);(rows[r]=rows[r]||[]).push(z)})
@@ -1605,6 +1607,130 @@ let viewShift=0
 function applyViewShift(){const w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight);if(viewShift)camera.setViewOffset(w,h,-viewShift*w,0,w,h);else camera.clearViewOffset()}
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(Math.max(1,w),Math.max(1,h),false);camera.aspect=w/Math.max(1,h);applyViewShift();camera.updateProjectionMatrix();fitDirty=true}
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
+// Split view: up to four rooms at once, each with its own camera, drawn into parts of the one canvas.
+// The page lays out the panes, and passes their place in the stage, in CSS pixels.
+const PANE_EASE=.2,PANE_MAX_ZOOM=12,PANE_TAG_SCALE=.85,PANE_THOUGHTS=1,PANE_DOUBLE_TAP_MS=320,SPLIT_GAP_COLOR=0x10131a
+let split=null
+const roomGoal=(spot,aspect)=>({x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.max(spot.D*.62,spot.W*.36/Math.max(aspect,.55))+1.6})
+function setSplit(next){
+  if(!next){split=null;return}
+  split=next.keys.map((key,i)=>{
+    const old=split?.[i]
+    return old&&old.key===key?Object.assign(old,{rect:next.rects[i]}):{key,rect:next.rects[i],camera:new THREE.PerspectiveCamera(camera.fov,1,.1,300),turn:0,tilt:0,zoom:0,view:null,lastTap:0}
+  })
+}
+const panesShown=()=>split?split.filter(pane=>pane.key&&spots[pane.key]&&pane.rect?.w>0&&pane.rect?.h>0):[]
+function placePane(pane){
+  const g=roomGoal(spots[pane.key],pane.rect.w/pane.rect.h),cam=pane.camera
+  if(!pane.view)pane.view={center:new THREE.Vector3(g.x,g.y,g.z),az:g.az,el:g.el,dist:g.d}
+  const v=pane.view
+  v.center.x+=(g.x-v.center.x)*PANE_EASE;v.center.y+=(g.y-v.center.y)*PANE_EASE;v.center.z+=(g.z-v.center.z)*PANE_EASE
+  v.az+=(g.az+pane.turn-v.az)*PANE_EASE;v.el+=(g.el+pane.tilt-v.el)*PANE_EASE;v.dist+=(g.d+pane.zoom-v.dist)*PANE_EASE
+  cam.position.copy(v.center).addScaledVector(viewDirection(v.az,v.el),v.dist);cam.lookAt(v.center)
+  if(cam.aspect!==pane.rect.w/pane.rect.h){cam.aspect=pane.rect.w/pane.rect.h;cam.updateProjectionMatrix()}
+}
+// Turns and zooms stay inside what the single view allows, so a pane never goes under the floor.
+function adjustPane(pane,turn,tilt,zoom){
+  const g=roomGoal(spots[pane.key],pane.rect.w/pane.rect.h)
+  pane.turn=Math.min(1.35,Math.max(.1,g.az+pane.turn+turn))-g.az
+  pane.tilt=Math.min(1.25,Math.max(.06,g.el+pane.tilt+tilt))-g.el
+  pane.zoom=Math.min(PANE_MAX_ZOOM,Math.max(MIN_ZOOM_DIST-g.d,pane.zoom+zoom))
+}
+// A pane draws its own room and what's near it, since the iPad can't draw the whole office four times.
+// Floors, outer glass and anything else larger than a room always draw. People are placed each frame, as they walk.
+const PANE_REACH=8,PANE_ALWAYS=24,PANE_PARTS_S=10
+let paneParts=null,lastPaneParts=0
+function nearRoom(box,spot){return box.max.x>spot.x-spot.W/2-PANE_REACH&&box.min.x<spot.x+spot.W/2+PANE_REACH&&box.max.z>spot.z-spot.D/2-PANE_REACH&&box.min.z<spot.z+spot.D/2+PANE_REACH}
+function cullForPane(spot){
+  if(!paneParts){
+    const people=new Set(actors.map(a=>a.g)),size=new THREE.Vector3()
+    paneParts=world.children.filter(o=>!people.has(o)).map(o=>({o,box:new THREE.Box3().setFromObject(o)})).filter(({box})=>!box.isEmpty()&&Math.max(box.getSize(size).x,size.z)<=PANE_ALWAYS)
+  }
+  const shown=[]
+  paneParts.forEach(({o,box})=>{if(o.visible&&!nearRoom(box,spot)){o.visible=false;shown.push(o)}})
+  actors.forEach(a=>{const at=a.g.position;if(a.g.visible&&!nearRoom({min:at,max:at},spot)){a.g.visible=false;shown.push(a.g)}})
+  return shown
+}
+// The shadow map is drawn by whichever render comes first in a frame, so it gets one of its own, before any pane hides anything.
+// This camera looks at nothing, so only the shadow pass costs anything.
+const shadowOnly=new THREE.PerspectiveCamera(1,1,.1,.2);shadowOnly.position.set(0,-1000,0);shadowOnly.lookAt(0,-2000,0)
+function drawPanes(){
+  const w=stage.clientWidth,h=stage.clientHeight,clear=renderer.getClearColor(new THREE.Color()),clearAlpha=renderer.getClearAlpha()
+  renderer.setScissorTest(true)
+  if(sun.shadow.needsUpdate){renderer.setViewport(0,0,1,1);renderer.setScissor(0,0,1,1);renderer.render(scene,shadowOnly)}
+  // Clears that pixel too.
+  renderer.setScissorTest(false);renderer.setClearColor(SPLIT_GAP_COLOR,1);renderer.clear();renderer.setClearColor(clear,clearAlpha)
+  renderer.setScissorTest(true)
+  panesShown().forEach(pane=>{
+    placePane(pane)
+    const {x,y,w:pw,h:ph}=pane.rect
+    renderer.setViewport(x,h-y-ph,pw,ph);renderer.setScissor(x,h-y-ph,pw,ph)
+    const hidden=cullForPane(spots[pane.key])
+    renderer.render(scene,pane.camera)
+    hidden.forEach(o=>{o.visible=true})
+  })
+  renderer.setScissorTest(false);renderer.setViewport(0,0,w,h)
+}
+function placeSplitTag(el,a,isZone,key,budget){
+  const pane=!isZone&&panesShown().find(one=>one.key===key)
+  if(!pane){el.style.display='none';return}
+  if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=detailed||(budget.get(pane)??PANE_THOUGHTS)>0;if(shown&&!detailed)budget.set(pane,(budget.get(pane)??PANE_THOUGHTS)-1);drawThought(el.thought,live,shown,detailed)}
+  el.classList.toggle('quiet',Boolean(spots[key]?.hasBoard))
+  if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`
+  v.set(a.g.position.x,a.g.position.y+(a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(pane.camera)
+  const isInside=v.z<1&&Math.abs(v.x)<=1&&Math.abs(v.y)<=1
+  el.style.display=isInside?'':'none'
+  if(!isInside)return
+  el.style.left=(pane.rect.x+(v.x+1)/2*pane.rect.w)+'px';el.style.top=(pane.rect.y+(1-v.y)/2*pane.rect.h)+'px'
+  el.classList.toggle('on',a.p.id===selected)
+  const near=Math.min(1,Math.max(.62,13/pane.camera.position.distanceTo(a.g.position)))*PANE_TAG_SCALE
+  el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`
+}
+const paneUnder=(x,y)=>{const r=canvas.getBoundingClientRect(),px=x-r.left,py=y-r.top;return panesShown().find(({rect})=>px>=rect.x&&px<rect.x+rect.w&&py>=rect.y&&py<rect.y+rect.h)}
+function paneRay(pane,x,y){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(x-r.left-pane.rect.x)/pane.rect.w*2-1,y:-(y-r.top-pane.rect.y)/pane.rect.h*2+1},pane.camera);return ray}
+// One finger or the mouse turns a pane, two fingers pinch and twist it, a tap picks a person, and a double tap puts it back.
+// A gesture stays with the pane it started in.
+let paneGesture=null
+function paneDown(e){
+  const pane=paneGesture?.pane??paneUnder(e.clientX,e.clientY)
+  if(!pane||(paneGesture&&!paneUnder(e.clientX,e.clientY)))return
+  try{canvas.setPointerCapture(e.pointerId)}catch{}
+  if(!paneGesture)paneGesture={pane,pointers:new Map(),isTap:true,start:{x:e.clientX,y:e.clientY,at:performance.now()},tag:e.target.closest?.('.tag')??null,pair:null}
+  else paneGesture.isTap=false
+  paneGesture.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY})
+  if(paneGesture.pointers.size===2)paneGesture.pair=fingers(paneGesture.pointers)
+}
+function paneMove(e){
+  const gesture=paneGesture,finger=gesture?.pointers.get(e.pointerId)
+  if(!finger){if(e.pointerType==='mouse'){const pane=paneUnder(e.clientX,e.clientY);canvas.style.cursor=pane&&personUnder(paneRay(pane,e.clientX,e.clientY))?'pointer':''}return}
+  const dx=e.clientX-finger.x,dy=e.clientY-finger.y
+  finger.x=e.clientX;finger.y=e.clientY
+  if(gesture.pointers.size===1){
+    if(Math.hypot(e.clientX-gesture.start.x,e.clientY-gesture.start.y)>TOUCH_SLOP)gesture.isTap=false
+    if(!gesture.isTap)adjustPane(gesture.pane,-dx*.005,dy*.004,0)
+  }else if(gesture.pointers.size===2&&gesture.pair){
+    const now=fingers(gesture.pointers),turn=Math.atan2(Math.sin(now.angle-gesture.pair.angle),Math.cos(now.angle-gesture.pair.angle))
+    adjustPane(gesture.pane,turn-(now.x-gesture.pair.x)*.005,(now.y-gesture.pair.y)*.004,(gesture.pair.dist-now.dist)*TOUCH_PINCH)
+    gesture.pair=now
+  }
+}
+function paneUp(e){
+  const gesture=paneGesture
+  if(!gesture?.pointers.delete(e.pointerId))return
+  if(e.pointerType==='touch')lastTouchUp=performance.now()
+  gesture.pair=gesture.pointers.size===2?fingers(gesture.pointers):null
+  if(gesture.pointers.size)return
+  paneGesture=null
+  const {pane}=gesture,now=performance.now()
+  // A finger held still is a press, not a tap. A mouse click counts however slow.
+  if(!gesture.isTap||(e.pointerType==='touch'&&now-gesture.start.at>=TOUCH_TAP_MS))return
+  if(now-pane.lastTap<PANE_DOUBLE_TAP_MS){pane.lastTap=0;pane.turn=pane.tilt=pane.zoom=0;return}
+  pane.lastTap=now
+  if(gesture.tag){if(e.pointerType==='touch'){clickingTag=true;gesture.tag.click();clickingTag=false}return}
+  const hit=personUnder(paneRay(pane,e.clientX,e.clientY))
+  if(hit?.object.userData.person)onPick(hit.object.userData.person.id)
+}
+const forgetPaneGesture=()=>{paneGesture=null}
 let drag=null,moved=false
 // Each person has an invisible box around them, so the whole body can be clicked, not just the name.
 const personUnder=ray=>ray.intersectObjects(actors.map(a=>a.g.children[0]))[0]
@@ -1626,7 +1752,7 @@ function hoverSpace(ray){
 function placeCheckIn(){
   const spot=spots[checkInKey]
   checkInSpot.set(spot?.x??0,CHECK_IN_HEIGHT,spot?.z??0).project(camera)
-  if(!spot||lightsOut||drag||checkInKey===focusKey||checkInSpot.z>1){checkIn.hidden=true;checkInFloor.visible=false;return}
+  if(!spot||split||lightsOut||drag||checkInKey===focusKey||checkInSpot.z>1){checkIn.hidden=true;checkInFloor.visible=false;return}
   checkIn.querySelector('small').textContent=spot.teamName
   checkIn.setAttribute('aria-label',`Drop in on ${spot.teamName}`)
   checkInFloor.position.x=spot.x;checkInFloor.position.z=spot.z;checkInFloor.scale.set(spot.W,spot.D,1);checkInFloor.visible=true
@@ -1821,28 +1947,31 @@ const onSpaceUp=e=>{if(e.code==='Space'&&isSpaceHeld){isSpaceHeld=false;showPanC
 const onSpaceLost=()=>{isSpaceHeld=false;showPanCursor()}
 window.addEventListener('keydown',onSpaceDown);window.addEventListener('keyup',onSpaceUp);window.addEventListener('blur',onSpaceLost)
 canvas.addEventListener('pointerdown',e=>{
+  if(split){paneDown(e);return}
   if(e.pointerType==='touch'){touchDown(e);return}
   const isPan=e.button===2||e.shiftKey||wantsPan()
   if(!isPan)isManual=true
   drag={x:e.clientX,y:e.clientY,az:view.az,el:view.el,isPan,lastX:e.clientX,lastY:e.clientY};moved=e.button===2;canvas.setPointerCapture(e.pointerId);if(isPan)canvas.style.cursor='grabbing'
 })
-canvas.addEventListener('pointermove',e=>{if(e.pointerType==='touch'){touchMove(e);return}if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':wantsPan()?'grab':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
-canvas.addEventListener('pointerup',e=>{if(e.pointerType==='touch'){touchUp(e);return}drag=null;canvas.style.cursor=wantsPan()?'grab':'';if(moved)return;tapAt(e)})
+canvas.addEventListener('pointermove',e=>{if(split){paneMove(e);return}if(e.pointerType==='touch'){touchMove(e);return}if(!drag){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);hoverSpace(ray);const row=directoryRow(ray),over=row?row.id:null;canvas.style.cursor=over||personUnder(ray)?'pointer':wantsPan()?'grab':'';if(directory&&over!==directory.hover){directory.hover=over;drawDirectory()}}if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)moved=true;if(drag.isPan){panBy(e.clientX-drag.lastX,e.clientY-drag.lastY);drag.lastX=e.clientX;drag.lastY=e.clientY;return}view.az=Math.min(1.35,Math.max(.1,drag.az-dx*.005));view.el=Math.min(1.25,Math.max(.06,drag.el+dy*.004))})
+canvas.addEventListener('pointerup',e=>{if(split){paneUp(e);return}if(e.pointerType==='touch'){touchUp(e);return}drag=null;canvas.style.cursor=wantsPan()?'grab':'';if(moved)return;tapAt(e)})
 function tapAt(e){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster();ray.setFromCamera({x:(e.clientX-r.left)/r.width*2-1,y:-(e.clientY-r.top)/r.height*2+1},camera);const hit=personUnder(ray);const row=directoryRow(ray);if(row&&(!hit||row.distance<hit.distance)){onPick(row.id);return};if(hit&&hit.object.userData.person)onPick(hit.object.userData.person.id);else{const ground=ray.intersectObjects(floors)[0];if(ground)onSpace(ground.object.spaceKey)}}
 // One finger pans, and a short still touch is a tap. Two fingers pinch to zoom, and twist or drag to rotate.
 const touches=new Map()
 let touchIsTap=false,touchStart=null,twoFingers=null,touchTag=null,clickingTag=false,lastTouchUp=-Infinity
-function fingers(){
-  const [a,b]=[...touches.values()]
+function fingers(pointers=touches){
+  const [a,b]=[...pointers.values()]
   return {dist:Math.hypot(a.x-b.x,a.y-b.y),angle:Math.atan2(b.y-a.y,b.x-a.x),x:(a.x+b.x)/2,y:(a.y+b.y)/2}
 }
 function touchDown(e){
+  if(split){paneDown(e);return}
   try{canvas.setPointerCapture(e.pointerId)}catch{}
   touches.set(e.pointerId,{x:e.clientX,y:e.clientY})
   if(touches.size===1){touchIsTap=true;touchStart={x:e.clientX,y:e.clientY,at:performance.now()};touchTag=e.target.closest?.('.tag,.zone-tag')??null}
   else{touchIsTap=false;if(touches.size===2)twoFingers=fingers()}
 }
 function touchMove(e){
+  if(split){paneMove(e);return}
   const finger=touches.get(e.pointerId)
   if(!finger)return
   const dx=e.clientX-finger.x,dy=e.clientY-finger.y
@@ -1860,16 +1989,17 @@ function touchMove(e){
   }
 }
 function touchUp(e){
+  if(split){paneUp(e);return}
   if(!touches.delete(e.pointerId))return
   lastTouchUp=performance.now()
   twoFingers=touches.size===2?fingers():null
   if(touches.size||!touchIsTap||performance.now()-touchStart.at>=TOUCH_TAP_MS)return
   if(touchTag){clickingTag=true;touchTag.click();clickingTag=false}else tapAt(e)
 }
-const forgetTouches=()=>{touches.clear();touchIsTap=false;twoFingers=null}
+const forgetTouches=()=>{touches.clear();touchIsTap=false;twoFingers=null;forgetPaneGesture()}
 canvas.addEventListener('pointercancel',forgetTouches)
 // A missed lift would otherwise leave a finger behind, and every later touch would count as two.
-canvas.addEventListener('lostpointercapture',e=>{if(touches.has(e.pointerId))forgetTouches()})
+canvas.addEventListener('lostpointercapture',e=>{if(touches.has(e.pointerId)||paneGesture?.pointers.has(e.pointerId))forgetTouches()})
 // Name tags cover much of the room, so a gesture starting on one has to reach the same code.
 tagsEl.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchDown(e)})
 tagsEl.addEventListener('pointermove',e=>{if(e.pointerType==='touch')touchMove(e)})
@@ -1879,7 +2009,7 @@ tagsEl.addEventListener('pointercancel',forgetTouches)
 tagsEl.addEventListener('click',e=>{if(!clickingTag&&performance.now()-lastTouchUp<TOUCH_CLICK_MS)e.stopPropagation()},true)
 // Safari would otherwise zoom the whole page.
 if(isTouchDevice)stage.addEventListener('gesturestart',e=>e.preventDefault())
-canvas.addEventListener('wheel',e=>{e.preventDefault();if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})
+canvas.addEventListener('wheel',e=>{e.preventDefault();if(split){const pane=paneUnder(e.clientX,e.clientY);if(pane)adjustPane(pane,0,0,e.deltaY*.02);return}if(e.shiftKey)panBy(-e.deltaX,-e.deltaY);else zoomBy(e.deltaY*.02)},{passive:false})
 const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));marker.rotation.x=Math.PI;scene.add(marker)
 // Milliseconds between frames. Nothing is drawn while the page is hidden.
 const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:TOUCH_MODE?{active:50,watching:100,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
@@ -1892,10 +2022,13 @@ function loop(){const t=clock.getElapsedTime()
   if(t-lastDaylight>60){lastDaylight=t;applyTimeOfDay()}
   // Models keep arriving after the room is built.
   if(t-lastReflections>REFLECTION_CHECK_S){lastReflections=t;dimReflections()}
+  // Furniture models keep arriving too, so the split view measures the rooms again now and then.
+  if(t-lastPaneParts>PANE_PARTS_S){lastPaneParts=t;paneParts=null}
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
-    const goal=spot?{x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.min(home.roomLimit,Math.max(spot.D*.62,spot.W*.36/Math.max(camera.aspect,.55))+1.6)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    const framed=spot&&roomGoal(spot,camera.aspect)
+    const goal=spot?{...framed,d:Math.min(home.roomLimit,framed.d)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
     // Someone can be away from their team's table, on a break or in a meeting, so go to them.
@@ -1933,12 +2066,15 @@ function loop(){const t=clock.getElapsedTime()
   // People move slightly, so their shadows needn't redraw every frame; walkers keep them current.
   shadowTick=(shadowTick+1)%5
   sun.shadow.needsUpdate=shadowTick===0||actors.some(a=>a.route)
+  if(split)marker.visible=false
   const drawStart=PERF&&performance.now()
-  renderer.render(scene,camera)
+  renderer.info.reset()
+  if(split)drawPanes();else renderer.render(scene,camera)
   if(PERF)notePerf(drawStart,t)
   const w=stage.clientWidth,h=stage.clientHeight
   let thoughtRoom=3
-  tags.forEach(({el,a,key,isZone})=>{if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
+  const paneThoughts=new Map()
+  tags.forEach(({el,a,key,isZone})=>{if(split){placeSplitTag(el,a,isZone,key,paneThoughts);return}if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
 }
 let pace='active',timer=setInterval(loop,PACE_MS.active)
 let signature=''
@@ -1968,6 +2104,8 @@ return {
   },
   clearSavedView(){savedView=null;writeSavedView(null);isManual=false;isAdjusted=false;fitDirty=true},
   setViewShift(next){viewShift=next;applyViewShift()},
+  setSplit(next){setSplit(next);if(timer)loop()},
+  mapSpaceAt(x,y){return mapTarget({clientX:x,clientY:y}).spaceKey??null},
   setPace(next){
     if(next===pace)return
     pace=next
