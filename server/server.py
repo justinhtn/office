@@ -290,12 +290,24 @@ AGENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '-]{0,23}$")
 SECRET_FILE = re.compile(r"(^|/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|\.(netrc|npmrc|pypirc|git-credentials|htpasswd|pgpass))$|(^|/)\.ssh/", re.I)
 # Catches private keys with any name, such as an SSH key without the id_ prefix. A real key starts its line with this, unlike code that mentions it.
 PRIVATE_KEY = re.compile(rb"(?m)^-----BEGIN [A-Z ]*PRIVATE KEY-----")
+
+
+def hidden_value(value):
+    """Keeps a quoted value's quotes, so JSON and code still read as they did."""
+    quote = value[0] if value[:1] in ("\"", "'") else ""
+
+    return f"{quote}[secret hidden]{quote}"
+
+
 # Things in a conversation that look like secrets, hidden before it reaches a phone. Each keeps the part that says what it was.
 SECRET_TEXT = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), "[private key hidden]"),
-    (re.compile(r"\b(?:sk-ant-[\w-]{10,}|sk-(?:proj-)?[\w-]{20,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|npm_\w{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"), "[secret hidden]"),
+    (re.compile(r"\b(?:sk-ant-[\w-]{10,}|sk-(?:proj-)?[\w-]{20,}|[sr]k_(?:live|test)_\w{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}|xapp-[\w-]{10,}|hf_\w{30,}|SG\.[\w-]{16,}\.[\w-]{16,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|npm_\w{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"), "[secret hidden]"),
+    (re.compile(r"(hooks\.slack\.com/(?:services|workflows|triggers)/)[\w/-]+"), r"\1[secret hidden]"),
     (re.compile(r"(?i)\b((?:bearer|basic|token)\s+)[\w.~+/=-]{16,}"), r"\1[secret hidden]"),
-    (re.compile(r"(?i)(\b[\w.-]*(?:api[_-]?key|token|secret|passw(?:or)?d|pwd|access[_-]?key|private[_-]?key|credential)[\w.-]*[\"']?\s*[:=]\s*[\"']?)[^\s\"'`,;&]{6,}"), r"\1[secret hidden]"),
+    # A name that says it holds a secret, then its value. A quoted value is hidden up to its closing quote, spaces and all.
+    (re.compile(r"(?i)(\b(?:[\w.-]*(?:api[_-]?key|token|secret|passw(?:or)?d|pwd|access[_-]?key|private[_-]?key|credential)[\w.-]*|[\w.-]*(?:key|pass|sig|signature))[\"']?\s*[:=]\s*)(?:\"[^\"\n]{4,}\"|'[^'\n]{4,}'|[^\s\"'`,;&]{6,})"),
+     lambda found: found.group(1) + hidden_value(found.group(0)[len(found.group(1)):])),
     (re.compile(r"(://[^/\s:@]+:)[^/\s@]+@"), r"\1[secret hidden]@"),
 ]
 # The conversation view loads this many items at a time, cuts long ones, and keeps each reply under a size a phone handles well.
@@ -1530,10 +1542,18 @@ class Transcripts:
                             if tool == "Agent":
                                 helpers[block.get("id")] = {"label": str(tool_input.get("description") or "Helper")[:60], "at": record.get("timestamp", "")}
                             label = self.describe_tool(tool, tool_input)
-                            # A raw command is where an inline password is most likely, so it isn't shown on its own.
-                            step = "Ran a command" if tool == "Bash" and not tool_input.get("description") else label
+                            # A raw command is where an inline password is most likely, and a link can carry one in its query,
+                            # so the conversation view gets neither: a command needs its description, and a page shows its site.
+                            is_bare_command = tool == "Bash" and not tool_input.get("description")
+                            step = "Ran a command" if is_bare_command else label
+                            if tool == "WebFetch":
+                                try:
+                                    site = urlparse(str(tool_input.get("url", ""))).hostname
+                                except ValueError:
+                                    site = None
+                                step = f"Read a web page on {site}" if site else "Read a web page"
                             conversation.append({"role": "step", "body": step[:1000], "at": record.get("timestamp", "")})
-                            recent.append("Running a command" if tool == "Bash" and not tool_input.get("description") else label[:70])
+                            recent.append("Running a command" if is_bare_command else label[:70])
 
         return {"messages": messages, "conversation": conversation, "plan": plan, "turnStartedAt": turn_started, "lastReply": last_reply, "lastPeer": last_peer, "helpers": list(helpers.values()), "jobs": list(jobs.values()), "recent": recent[-3:]}
 
@@ -1679,11 +1699,20 @@ def viewable(item):
 
 def conversation(session_id, before=None):
     """A page of a session's conversation, newest last, ending just before `before` or at the newest."""
-    items = TRANSCRIPTS.load(session_id)[1]["conversation"]
+    stamp, parsed = TRANSCRIPTS.load(session_id)
+    items = parsed["conversation"]
+    # A phone asks every few seconds, so each item is redacted once per version of the transcript.
+    cached = VIEWABLE.get(session_id)
+    if not cached or cached[0] != stamp:
+        cached = (stamp, {})
+        VIEWABLE[session_id] = cached
     end = len(items) if before is None else max(0, min(before, len(items)))
     shown, size = [], 0
     for index in range(end - 1, max(0, end - CONVERSATION_PAGE) - 1, -1):
-        item = {**viewable(items[index]), "index": index}
+        if index not in cached[1]:
+            cached[1][index] = {**viewable(items[index]), "index": index}
+        item = cached[1][index]
+        # Measured as the reply sends it, which escapes anything outside ASCII.
         size += len(json.dumps(item))
         if size > CONVERSATION_BYTES and shown:
             break
@@ -1692,6 +1721,9 @@ def conversation(session_id, before=None):
     start = shown[0]["index"] if shown else end
 
     return {"messages": shown, "start": start, "hasOlder": start > 0, "total": len(items)}
+
+
+VIEWABLE = {}
 APPROVAL_ROUTES = ("/api/approvals/options", "/api/approvals/approve", "/api/approvals/decline", "/api/approvals/answer")
 MIA_CHAT = MiaChat(DATA, FRONT_DESK, chat_command, chat_is_wanted, note_sender_command)
 APPROVALS = Approvals(DATA, GitHub(), team_lead_name, tell_lead)

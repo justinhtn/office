@@ -20,6 +20,7 @@ class ConversationCase(Case):
     def write(self, *records):
         server.TRANSCRIPTS.paths[SESSION] = write_transcript(WORK / "transcript.jsonl", records)
         server.TRANSCRIPTS.parsed.pop(SESSION, None)
+        server.VIEWABLE.pop(SESSION, None)
 
     def device(self):
         cookie = self.signed_in()
@@ -83,6 +84,17 @@ class ContentTests(ConversationCase):
         self.assertNotIn(b"TOOL-OUTPUT", body)
         self.assertEqual([(m["role"], m["text"]) for m in json.loads(body)["messages"]], [("person", "Check"), ("step", "Read notes.md"), ("step", "List files")])
 
+    def test_a_web_page_shows_only_its_site(self):
+        self.write(assistant(tool("t1", "WebFetch", url="https://files.example.com/a.pdf?X-Amz-Credential=AbCdEf&sig=AbCdEf123", prompt="p"), tool("t2", "WebFetch", url="http://[bad", prompt="p")))
+        self.assertEqual(self.texts(), [("step", "Read a web page on files.example.com"), ("step", "Read a web page")])
+
+    def test_a_new_version_of_the_transcript_is_read_again(self):
+        self.assertEqual(self.texts()[-1], ("agent", "Hello"))
+        path = server.TRANSCRIPTS.paths[SESSION]
+        with path.open("a") as handle:
+            handle.write(json.dumps(assistant(text("Later")), separators=(",", ":")) + "\n")
+        self.assertEqual(self.texts()[-1], ("agent", "Later"))
+
     def test_a_command_without_a_description_isnt_shown(self):
         self.write(assistant(tool("t1", "Bash", command="mysql -uroot -pS3cretPass db")))
         self.assertEqual(self.texts(), [("step", "Ran a command")])
@@ -121,6 +133,19 @@ class RedactionTests(ConversationCase):
         "password": "password: hunter2hunter2",
         "url": "https://me:hunter2pass@example.com/repo",
         "private key": "-----BEGIN OPENSSH PRIVATE KEY-----\nAbCdEfGh\n-----END OPENSSH PRIVATE KEY-----",
+        "stripe": "use sk_live_AbCdEfGhIjKlMnOpQrStUv here",
+        "stripe restricted": "rk_test_AbCdEfGhIjKlMnOpQrStUv",
+        "hugging face": "hf_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        "slack app": "xapp-1-AbCdEfGhIj-1234",
+        "sendgrid": "SG.AbCdEfGhIjKlMnOp.AbCdEfGhIjKlMnOpQrSt",
+        "slack webhook": "https://hooks.slack.com/services/T000/B000/AbCdEfGhIj",
+        "name ending in key": "STRIPE_KEY=AbCdEf123456",
+        "name ending in pass": "DB_PASS=hunter2hunter2",
+        "signing key": "SIGNING_KEY: AbCdEf123456",
+        "signature param": "a.pdf?X-Amz-Signature=AbCdEf123456&x=1",
+        "sig param": "a.pdf?sig=AbCdEf123456",
+        "quoted with spaces": '{"password": "hunter2 AbCdEf more words"}',
+        "single quoted": "secret = 'hunter2 AbCdEf'",
     }
 
     def test_secrets_are_hidden(self):
@@ -134,6 +159,9 @@ class RedactionTests(ConversationCase):
 
     def test_the_offices_own_token_is_hidden(self):
         self.assertNotIn(server.TOKEN, server.redacted(f"token was {server.TOKEN[:4]} {server.TOKEN}"))
+
+    def test_a_quoted_value_keeps_its_quotes(self):
+        self.assertEqual(server.redacted('{"password": "a b c d"}'), '{"password": "[secret hidden]"}')
 
     def test_ordinary_words_stay(self):
         for words in ("The token budget is fine", "Set the password field to required", "see https://example.com/a:b", "sk-learn is a library"):

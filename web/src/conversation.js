@@ -5,10 +5,13 @@ export const IDLE_POLL_MS = 6000
 const GROUP_MS = 5 * 60 * 1000
 
 // Pages arrive by position in the transcript, so a refreshed newest page and older pages loaded by hand fit together.
-// A transcript that got shorter has started over, so only the new page is kept.
+// A transcript that got shorter has started over, and a newest page that doesn't reach what's known leaves a gap
+// (more arrived than a page holds, say while the phone was locked), so either way only the new page is kept.
 export function merge(known, page) {
   const hasShrunk = known.some(message => message.index >= (page.total ?? 0))
-  const byIndex = new Map((hasShrunk ? [] : known).map(message => [message.index, message]))
+  const newest = known.length ? known[known.length - 1].index : -1
+  const leavesGap = (page.messages ?? []).length > 0 && page.start > newest + 1
+  const byIndex = new Map((hasShrunk || leavesGap ? [] : known).map(message => [message.index, message]))
   ;(page.messages ?? []).forEach(message => byIndex.set(message.index, message))
 
   return [...byIndex.values()].sort((a, b) => a.index - b.index)

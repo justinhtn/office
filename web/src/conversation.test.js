@@ -16,6 +16,16 @@ test('a page replaces what was known at the same positions', () => {
   assert.deepEqual(merged.map(one => one.text), ['m0', 'new'])
 })
 
+test('a newest page that leaves a gap after what was known replaces it, so nothing in between goes missing unseen', () => {
+  const merged = merge([message(0), message(1)], { messages: [message(80), message(81)], start: 80, total: 82 })
+  assert.deepEqual(merged.map(one => one.index), [80, 81])
+})
+
+test('a newest page that starts right after what was known, or an older page, joins it', () => {
+  assert.deepEqual(merge([message(0), message(1)], { messages: [message(2)], start: 2, total: 3 }).map(one => one.index), [0, 1, 2])
+  assert.deepEqual(merge([message(5), message(6)], { messages: [message(3), message(4)], start: 3, total: 7 }).map(one => one.index), [3, 4, 5, 6])
+})
+
 test('a transcript that got shorter starts over', () => {
   const merged = merge([message(0), message(5)], { messages: [message(0, 'person')], total: 1 })
   assert.deepEqual(merged.map(one => [one.index, one.role]), [[0, 'person']])
