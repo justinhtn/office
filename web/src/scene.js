@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { isTouchDevice } from './device.js'
 import { readSavedView, writeSavedView } from './savedView.js'
+import { markFailed, texturesState } from './textureState.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
@@ -39,7 +40,7 @@ const templates = new Map(), clips = new Map()
 
 // A texture that couldn't be fetched says so, so a face waiting for it fails at once instead of waiting it out.
 function avatarTexture(url) {
-  const texture = textures.load(url, undefined, undefined, () => { texture.userData.failed = true })
+  const texture = textures.load(url, undefined, undefined, () => markFailed(texture))
   return texture
 }
 
@@ -117,10 +118,9 @@ async function texturesLoaded(model, id) {
       for (const texture of [material.map, material.normalMap, material.specularMap]) if (texture) wanted.push(texture)
     }
   })
-  const isLoaded = texture => texture.image && (texture.image.complete !== false) && (texture.image.width || texture.image.naturalWidth)
   const deadline = Date.now() + PORTRAIT_TEXTURES_MS
-  while (!wanted.every(isLoaded)) {
-    if (wanted.some(texture => texture.userData.failed)) {
+  for (let state = texturesState(wanted); state !== 'loaded'; state = texturesState(wanted)) {
+    if (state === 'failed') {
       // The model keeps its broken texture, so it's forgotten, and a later ask loads it afresh.
       templates.delete(id)
       throw new Error("One of the face's textures couldn't be fetched.")
