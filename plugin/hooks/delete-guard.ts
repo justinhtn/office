@@ -459,7 +459,7 @@ const textMentionsDelete = (command: string) =>
 
 // Programs that only read their arguments as data, so delete words in quotes there don't count. Every other program
 // is read as text, so an unlisted program that runs its arguments fails closed.
-const DATA_PROGRAMS = new Set([...PLAIN_PROGRAMS, 'sed', 'curl', 'quinn-gh'])
+const DATA_PROGRAMS = new Set([...PLAIN_PROGRAMS, 'sed', 'curl', 'quinn-gh', 'office-review'])
 const SHELLS = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/
 // Other languages are read for calls that delete or start a shell, so code that only names rm in its text runs.
 const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
@@ -715,9 +715,38 @@ export function mentionsDelete(command: unknown) {
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
+// office-review posts reviews through fixed subcommands and reads every body from a file. It's trusted only as written
+// out in full, so a variable, substitution or pattern that could build it or its arguments is refused, delete or not.
+const OFFICE_REVIEW_COMMANDS = /^(status|reply|comment|review|verdict|-h|--help)$/
+const REVIEW_ADVICE = 'Run it as office-review <subcommand> with each argument written out, and put the body in a file passed with --file.'
+
+function refuseOfficeReview(commands: Command[] | undefined, command: string) {
+  if (!/office-review/i.test(command)) return undefined
+  if (!commands) return `Agent Office blocked this office-review command because its safety check couldn't read it. ${REVIEW_ADVICE}`
+  for (const words of commands) {
+    const at = words.findIndex(word => !ASSIGNMENT.test(word.text) && !BEFORE_PROGRAM.has(word.text))
+    const held = words.slice(0, at < 0 ? words.length : at).find(word => /office-review/i.test(word.text))
+    if (held) return `Agent Office blocked this office-review command because \`${held.text}\` keeps it in a variable. ${REVIEW_ADVICE}`
+    const program = words[at]
+    if (!program) continue
+    if (program.isDynamic) return `Agent Office blocked this command because \`${program.text}\` could be office-review built from a variable or substitution. ${REVIEW_ADVICE}`
+    if (nameOf(program) !== 'office-review') continue
+    const args = words.slice(at + 1)
+    const unclear = args.find(arg => arg.isDynamic || arg.globAt >= 0)
+    if (unclear) return `Agent Office blocked this office-review command because \`${unclear.text}\` isn't written out in full. ${REVIEW_ADVICE}`
+    if (!OFFICE_REVIEW_COMMANDS.test(args[0]?.text ?? '')) {
+      return `Agent Office blocked this office-review command because \`${args[0]?.text ?? ''}\` isn't one of its subcommands: status, reply, comment, review and verdict. ${REVIEW_ADVICE}`
+    }
+  }
+
+  return undefined
+}
+
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
   const commands = read(command)
+  const review = refuseOfficeReview(commands, command)
+  if (review) return review
   if (!anyMentionDelete(commands, command)) return undefined
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
