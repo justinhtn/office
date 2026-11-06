@@ -260,6 +260,27 @@ class PasskeyTests(Case):
         server.REMOTE.turn_on(HOST)
         self.assertNotEqual(self.post("/api/passkey/register-options", cookie=self.signed_in())[1]["userId"], first)
 
+    def status(self, cookie, token=None):
+        status, answer, _ = self.request("GET", "/api/passkey/status", cookie=cookie, token=token or self.page_token(cookie))
+
+        return status, json.loads(answer)
+
+    def test_the_office_offers_face_id_until_the_device_has_it(self):
+        # For a device that skipped the offer after its code: the office asks, then uses the same steps.
+        authenticator = Authenticator()
+        cookie = self.signed_in()
+        self.assertEqual(self.status(cookie), (200, {"canSetUp": True}))
+        status, _, _ = self.request("POST", "/api/passkey/register", cookie=cookie, origin=ORIGIN, token=self.page_token(cookie), body=authenticator.create(self.challenge("register", cookie)))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.status(cookie), (200, {"canSetUp": False}))
+        _, _, response = self.face_id(authenticator)
+        self.assertEqual(self.status(self.cookie_from(response)), (200, {"canSetUp": False}))
+
+    def test_asking_needs_the_devices_token(self):
+        cookie = self.signed_in()
+        self.assertEqual(self.status(cookie, token="wrong")[0], 403)
+        self.assertEqual(self.request("GET", "/api/passkey/status")[0], 403)
+
     def test_an_id_that_isnt_ascii_is_refused_cleanly(self):
         authenticator, _ = self.registered()
         answer = {**authenticator.get(self.challenge("sign-in")), "id": "café"}
@@ -307,6 +328,8 @@ class WithoutCryptographyTests(Case):
             status, _, _ = self.request("POST", "/api/passkey/register-options", cookie=cookie, origin=ORIGIN, body={})
             self.assertEqual(status, 404)
             self.assertEqual(self.request("POST", "/api/passkey/sign-in-options", origin=ORIGIN, body={})[0], 404)
+            status, answer, _ = self.request("GET", "/api/passkey/status", cookie=cookie, token=self.page_token(cookie))
+            self.assertEqual((status, json.loads(answer)), (200, {"canSetUp": False}))
             self.assertEqual(self.request("GET", "/api/sessions", cookie=cookie, token=self.page_token(cookie))[0], 200)
 
 

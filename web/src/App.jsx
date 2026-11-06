@@ -6,8 +6,9 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace,
 } from 'lucide-react'
+import { canSetUpFaceId, faceIdOptions, setUpFaceId } from './faceId.js'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { PHONE_SIZE, isTouchDevice } from './device.js'
 import { readSplitLayout, writeSplitLayout } from './savedView.js'
@@ -1110,6 +1111,46 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
   )
 }
 
+// For a device that skipped "Use Face ID next time" after its code. Hidden once it has a passkey, or where there are none.
+function FaceIdSetup() {
+  const [stage, setStage] = useState('hidden')
+  const [options, setOptions] = useState(null)
+  const prepare = () => faceIdOptions().then(setOptions, () => setOptions(null))
+  useEffect(() => {
+    canSetUpFaceId().then(can => {
+      if (!can) return
+      setStage('ready')
+      prepare()
+    })
+  }, [])
+  useEffect(() => {
+    if (stage !== 'done') return
+    const timer = setTimeout(() => setStage('hidden'), 4000)
+    return () => clearTimeout(timer)
+  }, [stage])
+
+  const setUp = async () => {
+    setStage('working')
+    try {
+      if (!options) throw new Error('No challenge yet')
+      await setUpFaceId(options)
+      setStage('done')
+    } catch {
+      setStage('problem')
+      prepare()
+    }
+  }
+
+  if (stage === 'hidden') return null
+  if (stage === 'done') return <small><Check size={12} /> Face ID is set up for next time</small>
+
+  return (
+    <button className="away-button face-id-button" disabled={stage === 'working'} title="Sign in with Face ID next time instead of a code" onClick={setUp}>
+      <ScanFace size={13} /> {stage === 'problem' ? "Face ID wasn't set up. Try again" : 'Set up Face ID'}
+    </button>
+  )
+}
+
 function Away({ people, onPick, onClose }) {
   const projects = [...new Set(people.map(person => person.project))]
 
@@ -1584,6 +1625,7 @@ export default function App() {
 
       <footer className="statusbar">
         <small>{active.length} active · {updatedAt ? `updated ${age(updatedAt)} ago` : 'no data yet'}</small>
+        {isTouchDevice && <FaceIdSetup />}
         <button className="away-button" onClick={() => setIsAwayOpen(true)}>{away.length} away</button>
       </footer>
 
