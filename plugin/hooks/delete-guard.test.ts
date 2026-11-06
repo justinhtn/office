@@ -697,6 +697,7 @@ const OWN_WORKTREE_ALLOWED: [string, string][] = [
   ['a relative file in its own worktree', 'rm notes.txt'],
   ['a relative file after a cd into its own subfolder', 'cd web && rm -f dist/old.js'],
   ['a file after a cd to its own worktree by full path', `cd ${OWN}/web && rm -f old.js`],
+  ['a file after cd -P and -- into its own subfolder', 'cd -P -- web && rm -f old.js'],
   ['find -delete in its own worktree', `find ${OWN}/build -name '*.pyc' -delete`],
   ['trash in its own worktree', `trash ${OWN}/old`],
   ['rmdir in its own worktree', `rmdir ${OWN}/empty`],
@@ -750,6 +751,12 @@ const OTHER_WORKTREE_REFUSED: [string, string][] = [
   ['a cd -P through a link and ..', `cd -P ${OWN}/lnk/.. && rm -f notes.txt`],
   ['a file through a link into another worktree', `rm -f ${OWN}/lnk/notes.txt`],
   ['a relative file after a cd through a link', `cd ${OWN}/lnk && rm -f notes.txt`],
+  // From the second review: zsh's cd flags and its two-word form.
+  ["a cd with zsh's -q", `cd -q ${OTHER} && rm -f notes.txt`],
+  ["a cd with zsh's -s", `cd -s ${OTHER} && rm -f notes.txt`],
+  ['a cd with -q among other flags', `cd -qP ${OTHER} && rm -f notes.txt`],
+  ['a pushd with -q', `pushd -q ${OTHER} && rm -f notes.txt`],
+  ["zsh's cd old new", 'cd mine theirs && rm -f notes.txt'],
 ]
 
 for (const [why, command] of OTHER_WORKTREE_REFUSED) {
@@ -934,6 +941,8 @@ const STORED_REFUSED: [string, string][] = [
   ['a git trailer command', 'git config trailer.x.command /tmp/x/evil.sh'],
   ['a gh shell alias', "gh alias set x --shell '/tmp/x/evil.sh'"],
   ['a gh alias starting with !', "gh alias set x '!/tmp/x/evil.sh'"],
+  ['gh aliases imported from a file', 'gh alias import /tmp/x/aliases.yml'],
+  ['a gh alias read from input', 'gh alias set x - < /tmp/x/expansion.txt'],
 ]
 
 for (const [why, command] of STORED_REFUSED) {

@@ -478,12 +478,22 @@ function runsArguments(name: string, args: Word[]) {
 function followCd(words: Word[], scope: Scope) {
   const name = nameOf(words[0])
   if (!/^(cd|pushd|popd|chdir)$/.test(name)) return
-  const target = words.slice(1).find(word => !/^(-[LPe@]+|--)$/.test(word.text))
+  // Only -L, -P and -- are known flags. Any other flag, such as zsh's -q and -s, and a second word, as in zsh's
+  // cd old new, which swaps old for new in the current path, leave the folder unclear.
+  const targets: Word[] = []
+  let isPastFlags = false
+  let isKnown = true
+  for (const word of words.slice(1)) {
+    if (isPastFlags || !word.text.startsWith('-')) targets.push(word)
+    else if (word.text === '--') isPastFlags = true
+    else if (!/^-[LP]+$/.test(word.text)) isKnown = false
+  }
   // A bare cd goes home. A bare pushd swaps the stack, and popd leaves for wherever the stack says.
-  if (!target && /^(cd|chdir)$/.test(name)) {
+  if (isKnown && !targets.length && /^(cd|chdir)$/.test(name)) {
     scope.base = normalize(scope.home)
     return
   }
+  const target = targets.length === 1 && isKnown ? targets[0] : undefined
   const isClear = name !== 'popd' && target && !target.isDynamic && target.globAt < 0 && !UNCLEAR_PLACE.test(target.text)
   const text = isClear ? expandHome(target.text, scope.home) : ''
   scope.base = !isClear ? undefined : text.startsWith('/') ? resolve(text, '/') : scope.base && resolve(text, scope.base)
@@ -843,8 +853,9 @@ function storedSettings(words: Word[]) {
     return key ? [{ tool: name, key, keys: GH_PROGRAM_KEYS }] : []
   }
   // A shell alias, or one starting with !, runs its text through a shell whenever it's used.
-  if (GH.test(name) && args[0]?.text === 'alias' && args[1]?.text === 'set') {
-    const isShell = args.some(arg => /^(-s|--shell)$/.test(arg.text) || arg.text.startsWith('!'))
+  // An expansion read from a file or input, with alias import or alias set … -, could be one too.
+  if (GH.test(name) && args[0]?.text === 'alias' && /^(set|import)$/.test(args[1]?.text ?? '')) {
+    const isShell = args[1].text === 'import' || args.slice(2).some(arg => /^(-s|--shell|-)$/.test(arg.text) || arg.text.startsWith('!'))
 
     return isShell ? [{ tool: name, key: newWord('a shell alias'), keys: /./ }] : []
   }
