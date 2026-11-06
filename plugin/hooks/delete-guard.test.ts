@@ -557,6 +557,7 @@ const FALSE_ALARMS: [string, string][] = [
   ['a search for --delete paged through less', "grep -rn -- '--delete' scripts | less"],
   ['a python edit whose text names a delete', `python3 - <<'EOF'\np = 'plugin/hooks/x.test.ts'\ns = open(p).read().replace("  ['a prompt', \`claude -p 'rm -rf'\`],\\n", '')\nopen(p, 'w').write(s)\nEOF`],
   ['node printing a template literal', "node -e 'console.log(`${1 + 1} files`)'"],
+  ['python reading JSON from gh beside a review post', `gh pr view 40 --json files | python3 -c "import json, sys; print(len(json.load(sys.stdin)['files']))" && ${QUINN} pr comment 40 --body 'It still runs rm -rf on old logs. Grace'`],
 ]
 
 for (const [why, command] of FALSE_ALARMS) {
@@ -608,7 +609,37 @@ const STILL_REFUSED: [string, string][] = [
   ['a delete exported for a program', `export CMD='rm -rf ~/.claude'; make run`],
   ['a script written by python then run', `python3 -c "open('/tmp/x.sh', 'w').write('rm -rf ~/.claude')"; sh /tmp/x.sh`],
   ['a script edited by sed -i then run', `sed -i '' 's/^/rm -rf ~\\/.claude/' /tmp/x.sh && /tmp/x.sh`],
-  ['perl backticks from a heredoc',`perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
+  // From the first review of this change: each was refused before it and briefly allowed.
+  ['python reading its code from /dev/stdin', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 /dev/stdin`],
+  ['python reading its code from /dev/fd/0', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 /dev/fd/0`],
+  ['python -c running what it reads', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 -c 'import sys; eval(compile(sys.stdin.read(), "x", "exec"))'`],
+  ['sh -c sh reading a pipe', `echo 'rm -rf /Users/me/.claude' | sh -c sh`],
+  ['bash -c sourcing /dev/stdin', `echo 'rm -rf /Users/me/.claude' | bash -c 'source /dev/stdin'`],
+  ['xargs filling sh -c', `echo 'rm -rf /Users/me/.claude' | xargs -I{} sh -c {}`],
+  ['xargs filling an eval', `printf 'rm -rf /Users/me/.claude' | xargs -0 sh -c 'eval "$1"' _`],
+  ['a pipe into a subshell around a shell', `cat <<'EOF' | (true; sh)\nrm -rf /Users/me/.claude\nEOF`],
+  ['a pipe into a group around a shell', `cat <<'EOF' | { true; sh; }\nrm -rf /Users/me/.claude\nEOF`],
+  ['a heredoc fed to a group around a shell', `{ sh; } <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a heredoc fed to a subshell around a shell', `( sh ) <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a here-string fed to a group around a shell', `{ bash; } <<< 'rm -rf /Users/me/.claude'`],
+  ['a heredoc fed to a loop around a shell', `while read -r l; do sh; done <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a script written by cp then run', `cp /dev/stdin /tmp/x.sh <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a script written by sort -o then run', `sort -o /tmp/x.sh <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a script written by sed w then run', `sed -n 'w /tmp/x.sh' <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a Makefile written then made', `cat > Makefile <<'EOF'\nall:\n\trm -rf /Users/me/.claude\nEOF\nmake`],
+  ['git clean after -c', 'git -c color.ui=never clean -fdx'],
+  ['git worktree remove after -c', 'git -c x=y worktree remove --force /Users/me/.claude/x'],
+  ['git clean after --git-dir', 'git --git-dir /tmp/r/.git --work-tree /Users/me/.claude clean -fdx'],
+  ['git clean with -n as its exclude pattern', 'git clean -fdx -e -n'],
+  ['git clean with -n in an attached exclude pattern', 'git clean -fdxen'],
+  ['git clean with -n after --', 'git clean -fdx -- -n'],
+  ['rsync --del', 'rsync -a --del /tmp/empty/ /Users/me/.claude/'],
+  ['rclone bisync', 'rclone bisync /tmp/empty /Users/me/.claude --resync'],
+  ['sudo git clean', 'sudo git clean -fdx'],
+  ['env git worktree remove', 'env git worktree remove --force /Users/me/.claude/x'],
+  ['yarn node removing a folder', `yarn node -e "require('fs').rmSync('/Users/me/.claude', {recursive: true})"`],
+  ['yarn rimraf', 'yarn rimraf /Users/me/.claude'],
+  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
 ]
 
 for (const [why, command] of STILL_REFUSED) {
@@ -619,10 +650,12 @@ for (const [why, command] of STILL_REFUSED) {
   })
 }
 
-test('git clean with --dry-run deletes nothing', async ($, on) => {
-  const { deny } = await bash($, on, 'git clean -nd && scripts/update.sh')
-  expect(deny).toBeUndefined()
-})
+for (const command of ['git clean -nd && scripts/update.sh', 'git clean -fdn', 'git clean --dry-run -e build']) {
+  test(`a dry run of git clean deletes nothing: ${command}`, async ($, on) => {
+    const { deny } = await bash($, on, command)
+    expect(deny).toBeUndefined()
+  })
+}
 
 test('git worktree remove of a full literal path is checked like rm -rf', async ($, on) => {
   const { deny } = await bash($, on, `git worktree remove ${PROJECT}/.claude/worktrees/w`)

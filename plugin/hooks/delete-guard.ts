@@ -4,10 +4,11 @@ import type { EngineInterface } from 'claude-code'
 // It's an allow-list. A command that mentions a delete runs only if every part of it is something this can vouch for.
 type Word = { text: string; isDynamic: boolean; globAt: number }
 // A command's words, with its own source text, the heredocs and here-strings fed to it, whether a pipe feeds it,
-// whether what's fed to it holds a variable or substitution, and whether it writes a file.
-type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; writesFile: boolean }
-// The whole command as sent, and the parts of it that may write a file another part could run.
-type Line = { text: string; writers: Command[] }
+// whether what's fed to it holds a variable or substitution, and whether it runs inside a group, subshell or loop,
+// which passes on whatever is fed to the group.
+type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean }
+// The whole command as sent, and whether any part of it is fed by a pipe, heredoc or here-string.
+type Line = { text: string; isFed: boolean }
 type Target = { path: string; shown: string }
 
 const MAX_NESTING = 8
@@ -28,13 +29,14 @@ const ADVICE = 'Run the delete as its own command with the full literal path, st
 
 // Anything that could be a delete, once quotes are out of the way, including rm pieced together from variables.
 // A pattern or variable counts only as the program itself, perhaps after assignments, redirections, a wrapper, !, { or a keyword, or inside a function body or case arm, but not a case pattern ending in ), followed anywhere on its line by a flag rm could use.
-// rm counts as a word or a flag such as --rm, not inside a name like fix-rm-guard, and --delete-branch isn't a delete of files.
-const MENTIONS_DELETE = /(?<![\w.]|[\w.]-)g?rm(?![\w.-])|(?<![\w.]|[\w.]-)trash(?![\w.-])|\bunlink\b|\brmtree\b|\brmdir\b|\bshred\b|\bsrm\b|(^|\s)--?delete(?!-branch)\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|[A-Za-z_]\w*\+?=|\S*\)(\s|$))\S*[?*[]\S*(\s|$)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=|\S*\)(\s|$))(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
+// rm counts as a word or a flag such as --rm, not inside a name like fix-rm-guard. --delete and rsync's --del count, but not
+// as --delete-branch or after git or gh, where they delete a branch rather than files.
+const MENTIONS_DELETE = /(?<![\w.]|[\w.]-)g?rm(?![\w.-])|(?<![\w.]|[\w.]-)trash(?![\w.-])|\bunlink\b|\brmtree\b|\brmdir\b|\bshred\b|\bsrm\b|(?<!\b(git|gh)\s[^;&|\n]*)(^|\s)--?del(ete)?(?!-branch)\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|[A-Za-z_]\w*\+?=|\S*\)(\s|$))\S*[?*[]\S*(\s|$)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=|\S*\)(\s|$))(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
 
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
 const newCommand = (): Command =>
-  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, writesFile: false })
+  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false })
 // Syntax this reader doesn't model, which makes a command it was checking a refusal.
 const unsure = (what: string) => new Error(`can't read ${what}`)
 
@@ -149,23 +151,35 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
     let word: Word | undefined
     let skipsWord = false
     let isHereString = false
-    let isOutput = false
     let parens = 0
-    let heredocs: { end: string; stripsTabs: boolean; isQuoted: boolean; owner: Command }[] = []
-    const endWord = () => {
-      if (word && isHereString) {
-        cmd.stdin += `${word.text}\n`
-        cmd.isFedDynamic ||= word.isDynamic
+    // Groups and loops opened by { and do, which only count before the program.
+    let blocks = 0
+    let heredocs: { end: string; stripsTabs: boolean; isQuoted: boolean; owners: Command[] }[] = []
+    // Input given before any word is fed either to the program after it or, after a ) or }, to the group that ended,
+    // so it's recorded on both the coming command and the last one before it.
+    const fedCommands = () => (cmd.length ? [cmd] : [cmd, ...out.slice(-1)])
+    const feed = (owners: Command[], text: string, isDynamic: boolean) => {
+      for (const owner of owners) {
+        owner.stdin += `${text}\n`
+        owner.isFedDynamic ||= isDynamic
       }
-      // Writing to a file descriptor or /dev/null leaves nothing for another program to run.
-      if (word && isOutput) cmd.writesFile ||= word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text)
-      if (word && !skipsWord) cmd.push(word)
-      if (word) skipsWord = isHereString = isOutput = false
+    }
+    const endWord = () => {
+      if (word && isHereString) feed(fedCommands(), word.text, word.isDynamic)
+      if (word && !skipsWord) {
+        if (!word.isDynamic && cmd.every(each => BEFORE_PROGRAM.has(each.text))) {
+          if (word.text === '{' || word.text === 'do') blocks++
+          else if ((word.text === '}' || word.text === 'done') && blocks > 0) blocks--
+        }
+        cmd.push(word)
+        cmd.isNested ||= parens + blocks > 0
+      }
+      if (word) skipsWord = isHereString = false
       word = undefined
     }
     const endCommand = () => {
       endWord()
-      skipsWord = isHereString = isOutput = false
+      skipsWord = isHereString = false
       if (cmd.length) {
         cmd.text = src.slice(start, i)
         out.push(cmd)
@@ -190,8 +204,7 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
         }
         if (!isEnded) throw unsure('a heredoc with no end')
         const body = lines.join('\n')
-        doc.owner.stdin += `${body}\n`
-        doc.owner.isFedDynamic ||= !doc.isQuoted && /[$`]/.test(body)
+        feed(doc.owners, body, !doc.isQuoted && /[$`]/.test(body))
         if (!doc.isQuoted && body.includes('\\\n')) throw unsure('a continued line in a heredoc')
         // Text in an unquoted heredoc is a document, but its substitutions still run.
         if (!doc.isQuoted) out.push(...lex(body, nesting + 1, true))
@@ -216,9 +229,10 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
         return
       } else if (c === '(' || c === ')') {
         if (c === '(' && src[i + 1] === '(') throw unsure('arithmetic')
+        // The command before a ) is still inside it.
+        endCommand()
         if (c === '(') parens++
         else if (parens > 0) parens--
-        endCommand()
         i++
       } else if (c === '<' || c === '>' || (c === '&' && src[i + 1] === '>')) {
         // A redirect's target isn't an argument, and a file descriptor before it isn't either.
@@ -244,9 +258,8 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
           }
           // A quoted end can hold blanks that this scan stops at, so accept only a plain name.
           if (isQuoted && !/^(['"]?)[\w.-]+\1$|^\\[\w.-]+$/.test(src.slice(startOfEnd, i))) throw unsure('an unusual heredoc end')
-          heredocs.push({ end, stripsTabs, isQuoted, owner: cmd })
+          heredocs.push({ end, stripsTabs, isQuoted, owners: fedCommands() })
         } else {
-          isOutput = c !== '<'
           i += c === '&' ? 2 : 1
           while (src[i] === '>' || src[i] === '&' || src[i] === '|') i++
           skipsWord = true
@@ -392,6 +405,9 @@ function runsArguments(name: string, args: Word[]) {
   if (name === 'git' && args.some(arg => GIT_RUNS_TEXT.test(arg.text))) return 'git with a command it runs'
   if (GH.test(name) && args.some(arg => arg.text === '--' || GH_RUNS_TEXT.test(arg.text))) return `${name} with a command it runs`
   if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return `${name} exec`
+  const yarnRuns = nameOf(args.find(arg => !arg.text.startsWith('-')) ?? newWord())
+  const isYarnRunning = [YARN_RUNS, LANGUAGES, SHELLS].some(each => each.test(yarnRuns)) || DELETE_WORDS.has(yarnRuns)
+  if (name === 'yarn' && isYarnRunning) return `yarn ${yarnRuns}`
   if (name === 'sed' && args.map(sedScript).some(text => !text.startsWith('-') && SED_RUNS.test(text))) return 'sed with its e command'
   // A script read from a file can't be checked, so it's treated like one that runs a command.
   if (name === 'sed' && args.some(arg => /^(-[nEsrzi]*f|--file)/.test(arg.text))) return 'sed with a script file'
@@ -450,13 +466,15 @@ const sedScript = (arg: Word) => arg.text.replace(/^(-[nEsrz]*e|--expression=)/,
 const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
 const TESTS = new Set(['[', '[['])
 const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmdir', 'shred', 'srm', 'trash', 'rmtree', 'rimraf', '--recursive'])
-// Flags that make a program it can't vouch for delete files, such as rsync's and aws s3 sync's.
-const DELETE_FLAGS = /^--?delete|^--remove-source-files/
+// Flags that make a program it can't vouch for delete files, such as rsync's, including its --del, and aws s3 sync's.
+const DELETE_FLAGS = /^--?del(ete)?\b|^--remove-source-files/
 // A delete an assignment can hold for a variable to run later.
-const VALUE_DELETES = /\bg?rm\b|\bunlink\b|\brmtree\b|\brmdir\b|\bshred\b|\bsrm\b|(^|\s)--?delete|\$'/
+const VALUE_DELETES = /\bg?rm\b|\bunlink\b|\brmtree\b|\brmdir\b|\bshred\b|\bsrm\b|(^|\s)--?del(ete)?\b|\$'/
 // Programs whose job is to delete the files they're given.
 const REMOVERS = /^(g?rm|unlink|rmdir|shred|srm)$/
-const RCLONE_DELETES = /^(sync|move|moveto|delete|deletefile|purge|rmdir|rmdirs|cleanup|dedupe)$/
+const RCLONE_DELETES = /^(sync|bisync|move|moveto|delete|deletefile|purge|rmdir|rmdirs|cleanup|dedupe)$/
+// yarn runs a program it's given in place of one of its own commands, such as yarn node or yarn rimraf.
+const YARN_RUNS = /^(node|exec|dlx)$/
 // Programs outside the vouched list that read a pipe as data, never as code to run.
 const READS_PIPE_AS_DATA = new Set(['xargs', 'less', 'more'])
 // Perl, Ruby and PHP run a shell from backticks, qx and %x. In other languages a backtick is only text.
@@ -480,30 +498,80 @@ function findMayDelete(args: Word[]) {
   return false
 }
 
-// Where git's subcommand is: the first word that isn't a flag or the folder given to -C.
-const gitCommandAt = (args: Word[]) => args.findIndex((arg, k) => !arg.text.startsWith('-') && args[k - 1]?.text !== '-C')
+// git's flags that take the next word as their value.
+const GIT_VALUE_FLAGS = /^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env|--list-cmds)$/
+// Where git's subcommand is: the first word that isn't a flag or a flag's value.
+const gitCommandAt = (args: Word[]) =>
+  args.findIndex((arg, k) => !arg.text.startsWith('-') && !GIT_VALUE_FLAGS.test(args[k - 1]?.text ?? ''))
 const isWorktreeRemove = (args: Word[], at: number) => args[at]?.text === 'worktree' && args[at + 1]?.text === 'remove'
+
+// A dry run of git clean, read the way git does: an e in a cluster of flags takes the rest, or the next word, as a
+// pattern to exclude, and nothing after -- is a flag.
+function isDryRun(args: Word[]) {
+  for (let k = 0; k < args.length; k++) {
+    const text = args[k].text
+    if (text === '--') return false
+    if (text === '--dry-run') return true
+    if (text === '--exclude') k++
+    else if (/^-[A-Za-z]+$/.test(text)) {
+      const at = text.indexOf('e')
+      if ((at < 0 ? text : text.slice(0, at)).includes('n')) return true
+      if (at === text.length - 1) k++
+    }
+  }
+
+  return false
+}
 
 // git clean and git worktree remove delete files. A dry run of git clean doesn't.
 function gitDeletes(args: Word[]) {
   const at = gitCommandAt(args)
-  if (args[at]?.text === 'clean') return !args.slice(at + 1).some(arg => /^(-[A-Za-z]*n[A-Za-z]*|--dry-run)$/.test(arg.text))
+  if (args[at]?.text === 'clean') return !isDryRun(args.slice(at + 1))
 
   return isWorktreeRemove(args, at)
 }
 
-// What a command could run as code: its own text and what a heredoc or here-string feeds it. That's the whole line when
-// its code could come from elsewhere in it: down a pipe to a program that reads code from one, through a variable or
-// substitution among its words or input, or from a file another part of the line writes.
-function codeOf(words: Command, readsPipe: boolean, line: Line) {
-  const isFromFile = line.writers.some(other => other !== words)
-  const isElsewhere = (words.isPiped && readsPipe) || words.isFedDynamic || words.some(word => word.isDynamic) || isFromFile
+// The flag after which each language takes its code as an argument, rather than from a file or its input.
+const CODE_FLAGS: [RegExp, RegExp][] = [
+  [/^(python[\d.]*|pypy\d*)$/, /^-[A-Za-z]*c$/],
+  [/^perl$/, /^-[A-Za-z]*[eE]$/],
+  [/^(ruby|lua)$/, /^-[A-Za-z]*e$/],
+  [/^(node|bun)$/, /^(-[A-Za-z]*[ep]|--eval|--print)$/],
+  [/^php$/, /^-[A-Za-z]*r$/],
+  [/^deno$/, /^eval$/],
+  [SHELLS, /^-[A-Za-z]*c[A-Za-z]*$/],
+]
 
-  return isElsewhere ? line.text : `${words.text}\n${words.stdin}`
+// awk takes its program as its first argument, unless it's given a file.
+function takesCodeArgument(program: string, after: Word[]) {
+  if (/^[gmn]?awk$/.test(program)) return !after.some(arg => /^(-f|--file)/.test(arg.text)) && after.some(arg => !arg.text.startsWith('-'))
+  const flag = CODE_FLAGS.find(([name]) => name.test(program))?.[1]
+
+  return !!flag && after.some(arg => flag.test(arg.text))
 }
 
-// A shell or language given only flags reads its code from its input.
-const readsCodeFromInput = (words: Command, at: number) => words.slice(at + 1).every(arg => arg.text.startsWith('-'))
+// Programs in front of a shell or language that fill in its arguments, so its code, from their input.
+const FILLS_ARGUMENTS = /^(xargs|parallel)$/
+// Code that runs what it reads, which matters when its input could come from elsewhere in the line.
+const RUNS_ITS_INPUT = /\b(eval|compile|execfile|runpy|Function|instance_eval|class_eval|module_eval)\b|\/dev\/(stdin|fd)|\/proc\/self\/fd/
+
+// Whether a command's input could come from the line: a pipe or heredoc fed to it, or to a group it's in.
+const isFed = (words: Command, line: Line) => words.isPiped || words.stdin !== '' || (words.isNested && line.isFed)
+const ownText = (words: Command) => `${words.text}\n${words.stdin}`
+const hasDynamic = (words: Command) => words.isFedDynamic || words.some(word => word.isDynamic)
+
+// What a shell or language at `k` among the launched programs could run: its own text only when its code is plainly an
+// argument that nothing in front of it fills and no variable supplies. A shell given input could read more code from it,
+// such as sh -c sh, and so could a language whose code runs what it reads. Otherwise its code could come from a file
+// or input that the rest of the line supplies, so it's the whole line.
+function codeOf(words: Command, at: number, launched: string[], k: number, line: Line) {
+  const isArgument = takesCodeArgument(launched[k], words.slice(at + k + 1)) && !hasDynamic(words)
+  const isFilled = launched.slice(0, k).some(each => FILLS_ARGUMENTS.test(each))
+  const own = ownText(words)
+  const readsInput = isFed(words, line) && (SHELLS.test(launched[k]) || RUNS_ITS_INPUT.test(own))
+
+  return isArgument && !isFilled && !readsInput ? own : line.text
+}
 
 function wordsMentionDelete(words: Command, line: Line) {
   let at = 0
@@ -518,19 +586,20 @@ function wordsMentionDelete(words: Command, line: Line) {
   if (!program) return false
   const args = words.slice(at + 1)
   const name = nameOf(program).replace(/^=/, '')
-  // A shell or language started by another program, such as uv run python, is read as that shell or language.
+  // A shell, language or git started by another program, such as uv run python or sudo git, is read as that program.
   const launched = [name, ...args.map(nameOf)]
   const language = launched.findIndex(each => LANGUAGES.test(each))
   if (language >= 0) {
-    const code = codeOf(words, readsCodeFromInput(words, at + language), line)
+    const code = codeOf(words, at, launched, language, line)
     if (CODE_DELETES.test(code) || (BACKTICK_LANGUAGES.test(launched[language]) && RUNS_BACKTICKS.test(code))) return true
   }
   const shell = launched.findIndex(each => SHELLS.test(each))
-  if (shell >= 0 && textMentionsDelete(codeOf(words, readsCodeFromInput(words, at + shell), line))) return true
+  if (shell >= 0 && textMentionsDelete(codeOf(words, at, launched, shell, line))) return true
   if (LANGUAGES.test(name)) return false
   if (REMOVERS.test(name) || name === 'trash') return true
   if (/^g?find$/.test(name)) return findMayDelete(args)
-  if (name === 'git' && gitDeletes(args)) return true
+  const git = launched.indexOf('git')
+  if (git >= 0 && (git === 0 || !DATA_PROGRAMS.has(name)) && gitDeletes(args.slice(git))) return true
   if (name === 'rclone' && args.some(arg => RCLONE_DELETES.test(arg.text))) return true
   // A program named by a variable or pattern could be rm. A pattern with no arguments is a case label.
   if (program.isDynamic && args.some(arg => /^-[A-Za-z]*[rRf]|^--rec/.test(arg.text))) return true
@@ -538,24 +607,17 @@ function wordsMentionDelete(words: Command, line: Line) {
   // Programs that only read their arguments as data delete nothing however their arguments read, as with gh's --delete-branch.
   if (DATA_PROGRAMS.has(name) && !program.isDynamic && !runsArguments(name, args)) return false
   if (args.some(arg => DELETE_WORDS.has(nameOf(arg)) || DELETE_FLAGS.test(arg.text))) return true
-  // The reader can't tell a case pattern's ) from the end of a substitution, so a case reads the whole line.
-  if (runsArguments(name, args) || name === 'case') return textMentionsDelete(line.text)
+  // A program that reads its input as data could still run its own arguments, as xargs does.
+  if (READS_PIPE_AS_DATA.has(name) && !hasDynamic(words) && !runsArguments(name, args)) return textMentionsDelete(ownText(words))
 
-  // Any other program could run the text it's given.
-  return textMentionsDelete(codeOf(words, !READS_PIPE_AS_DATA.has(name), line))
+  // Any other program could run text from anywhere in the line: its arguments, its input, or a file the line writes.
+  return textMentionsDelete(line.text)
 }
 
 // Whether any part of a command might delete. It's read whole if the reader can't split it.
 function anyMentionDelete(commands: Command[] | undefined, command: string) {
   if (!commands) return textMentionsDelete(command)
-  // Text in the line reaches a file through >, tee, sed -i or a language's own code.
-  const writes = (words: Command) => {
-    const names = words.map(nameOf)
-    const editsInPlace = names.includes('sed') && words.some(word => /^(-[A-Za-z]*i|--in-place)/.test(word.text))
-
-    return words.writesFile || editsInPlace || names.some(each => each === 'tee' || LANGUAGES.test(each))
-  }
-  const line = { text: command, writers: commands.filter(writes) }
+  const line = { text: command, isFed: commands.some(words => words.isPiped || words.stdin !== '') }
 
   return commands.some(words => wordsMentionDelete(words, line))
 }
