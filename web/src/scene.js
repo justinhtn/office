@@ -3,6 +3,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { isTouchDevice } from './device.js'
 import { readSavedView, writeSavedView } from './savedView.js'
 import { mark, once, plain, sampleFramesWith, sizeOf, timed } from './timeline.js'
+import { markFailed, texturesState } from './textureState.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
@@ -13,6 +14,7 @@ const cloneSkinned = model => SkeletonUtils.clone(model)
 
 import { api, teamsOf } from './api.js'
 import { SHARED_SPACES, hasRoom, keepPlaces, layoutStart, localLayout, parseLayout, shownSlots } from './officeLayout.js'
+import { labelRank, placeLabels, roomNeeds, roomOptions, roomRank, shortRoomName } from './labels.js'
 
 const AVATARS = '/assets/avatars'
 // The person's own avatar: one of the cast with red hair.
@@ -37,6 +39,8 @@ const sexOf = id => (/Female/.test(id) ? 'f' : 'm')
 const fbx = url => new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject))
 const textures = new THREE.TextureLoader()
 const templates = new Map(), clips = new Map()
+// Which load each model came from, so a face whose textures failed forgets only that load, not a fresh one begun since.
+const loadedFrom = new WeakMap()
 
 // A model's textures arrive on their own after it, so the timeline notes them as one group, with their size and time.
 function textureGroup(id) {
@@ -58,7 +62,7 @@ function textureGroup(id) {
 // A texture that couldn't be fetched says so, so a face waiting for it fails at once instead of waiting it out.
 function avatarTexture(url, group) {
   const [loaded, failed] = group.add(url)
-  const texture = textures.load(url, loaded, undefined, () => { texture.userData.failed = true; failed() })
+  const texture = textures.load(url, loaded, undefined, () => { markFailed(texture); failed() })
   return texture
 }
 
@@ -68,8 +72,9 @@ function template(id) {
     const folder = id === OWNER_AVATAR ? OWNER_BODY : id
     const url = `${AVATARS}/${folder}/${folder}.fbx`, loaded = timed('avatar.model', { id })
     // A model that failed to load is forgotten, so a later ask can fetch it again.
-    templates.set(id, fbx(url).catch(failure => { loaded({ failed: true, message: plain(failure?.message) }); templates.delete(id); throw failure }).then(model => {
+    const loading = fbx(url).catch(failure => { loaded({ failed: true, message: plain(failure?.message) }); templates.delete(id); throw failure }).then(model => {
       loaded(sizeOf(url))
+      loadedFrom.set(model, loading)
       const skin = textureGroup(id)
       const strays = []
       model.traverse(o => { if (o.isLight || o.isCamera) strays.push(o) })
@@ -94,7 +99,8 @@ function template(id) {
       })
       skin.close()
       return model
-    }))
+    })
+    templates.set(id, loading)
   }
   return templates.get(id)
 }
@@ -134,7 +140,7 @@ const PORTRAIT_TEXTURES_MS = 10 * 60 * 1000
 const PORTRAIT_TRIES = 5
 const PORTRAIT_RETRY_MS = 3000
 const worthRedrawing = message => Object.assign(new Error(message), { isWorthRedrawing: true })
-async function texturesLoaded(model, id) {
+async function texturesLoaded(model, id, source) {
   const wanted = []
   model.traverse(o => {
     if (!o.isSkinnedMesh) return
@@ -142,12 +148,11 @@ async function texturesLoaded(model, id) {
       for (const texture of [material.map, material.normalMap, material.specularMap]) if (texture) wanted.push(texture)
     }
   })
-  const isLoaded = texture => texture.image && (texture.image.complete !== false) && (texture.image.width || texture.image.naturalWidth)
   const deadline = Date.now() + PORTRAIT_TEXTURES_MS
-  while (!wanted.every(isLoaded)) {
-    if (wanted.some(texture => texture.userData.failed)) {
+  for (let state = texturesState(wanted); state !== 'loaded'; state = texturesState(wanted)) {
+    if (state === 'failed') {
       // The model keeps its broken texture, so it's forgotten, and a later ask loads it afresh.
-      templates.delete(id)
+      if (templates.get(id) === loadedFrom.get(source)) templates.delete(id)
       throw new Error("One of the face's textures couldn't be fetched.")
     }
     if (Date.now() > deadline) throw new Error("The face's textures didn't arrive.")
@@ -230,7 +235,7 @@ async function renderPortrait(source, id, p) {
   const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
   lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
   try {
-    await texturesLoaded(model, id)
+    await texturesLoaded(model, id, source)
     return drawPortrait(stage, lens)
   } finally {
     // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
@@ -1120,6 +1125,8 @@ const SLEEP_REFLECTIONS=.06
 const NIGHT_REFLECTIONS=.45
 const REFLECTION_CHECK_S=2
 const OVERVIEW_TAG_SCALE=1.05
+// Closer than this, a person's tag shows everything even in the whole-office view.
+const FULL_TAG_DISTANCE=16
 const TABLE_TOP=1.055
 const COUNTER_TOP=1.06
 const BAR_LENGTH=3.7
@@ -1439,8 +1446,10 @@ function fitCamera(){
 }
 function viewDirection(az,el){return new THREE.Vector3(Math.sin(az)*Math.cos(el),Math.sin(el),Math.cos(az)*Math.cos(el))}
 // The distance and aim that fit the floor and back walls in the part of the window the panel leaves clear.
+// On a phone the panel folds behind a button, so the whole width is clear.
 function frameWholeOffice(az,el){
-  const {W,D}=floorSize,w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight),covered=Math.min(FRAME_PANEL_MAX,FRAME_PANEL_PX/w)
+  const isPanelFolded=Boolean(stage.closest('.app.phone:not(.panel-open)'))
+  const {W,D}=floorSize,w=Math.max(1,stage.clientWidth),h=Math.max(1,stage.clientHeight),covered=isPanelFolded?0:Math.min(FRAME_PANEL_MAX,FRAME_PANEL_PX/w)
   const dir=viewDirection(az,el),right=new THREE.Vector3(Math.cos(az),0,-Math.sin(az)),up=new THREE.Vector3().crossVectors(dir,right)
   const tanUp=Math.tan(camera.fov*Math.PI/360),tanFull=tanUp*w/h,tanAcross=tanFull*(1-covered)
   const corners=[[-W/2,0,-D/2],[W/2,0,-D/2],[-W/2,0,D/2],[W/2,0,D/2],[-W/2,WALL_HEIGHT,-D/2],[W/2,WALL_HEIGHT,-D/2],[-W/2,WALL_HEIGHT,D/2]]
@@ -1701,12 +1710,14 @@ function drawSpace(space,x0,z0){
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
   spots[key]={x:cx,z:cz,W,D}
   drawingKey=key
-  const label=(name)=>{spots[key].name=name;addZoneTag(name,cx,z0-.2,key)}
+  const label=(name,short)=>{spots[key].name=name;addZoneTag(name,cx,z0-.2,key,{short})}
   if(kind==='team'){
     pendant(cx-W*.22,cz);pendant(cx+W*.22,cz,false)
     const {team}=space,uniform=new THREE.Color(uniformOf(team.lead.project)),isTeam=team.members.length>1
     spots[key].color=`#${uniform.getHexString()}`
     spots[key].teamName=spots[key].name=team.lead.teamName||team.lead.name
+    // In the whole-office view the room reads as its team and head count, even when its people's names don't fit.
+    addZoneTag(spots[key].name,cx,z0-.2,key,{count:team.members.length,needs:roomNeeds(team.members)})
     spots[key].team=team
     // The floor is a thin strip from a low camera, so the hover area also covers the desks and people.
     const volume=new THREE.Mesh(new THREE.BoxGeometry(W,TEAM_VOLUME_HEIGHT,D),new THREE.MeshBasicMaterial());volume.position.set(cx,TEAM_VOLUME_HEIGHT/2,cz);volume.visible=false;volume.spaceKey=key;world.add(volume);teamVolumes.push(volume)
@@ -1741,7 +1752,7 @@ function drawSpace(space,x0,z0){
   }
   if(kind==='meeting'){
     pendant(cx,cz)
-    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Meeting room')
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Meeting room','Meeting')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     const top=new THREE.Mesh(new THREE.CylinderGeometry(1,1,.1,40),mat(WOOD));top.scale.set(2.5,1,1.1);top.position.set(cx,1,cz);top.castShadow=top.receiveShadow=true;world.add(top)
     const stem=new THREE.Mesh(new THREE.CylinderGeometry(.16,.3,1,10),mat(CHARCOAL));stem.position.set(cx,.5,cz);world.add(stem)
@@ -1751,7 +1762,7 @@ function drawSpace(space,x0,z0){
   if(kind==='office'){
     pendant(cx-.2,cz+.3)
     deskTopic='general'
-    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Your office')
+    floors.push(Object.assign(flat(W,D,WHITE,cx,.02,cz),{spaceKey:key}));label('Your office','Office')
     glassWall(cx,z0,W,true);glassWall(x0,cz,D,false)
     rubberMat(world,cx,cz-.95,3.4,3.3)
     attachUsageScreen(desk(world,cx,cz-.5,1,true,'you'));if(REAL_FURNITURE)placeModel(OFFICE_CHAIR,cx,cz-1.7,0);else chair(world,cx,cz-1.7,-1)
@@ -1778,8 +1789,13 @@ function drawSpace(space,x0,z0){
     wallArt(world,cx+1.75,z0+.1)
   }
 }
-function addZoneTag(name,x,z,key){const el=document.createElement('div');el.className='zone-tag';el.textContent=name;el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
-function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?a.p.readyLine||'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
+// A room's label has a full form and a short one, for when the full one doesn't fit in the whole-office view.
+function addZoneTag(name,x,z,key,{count=null,needs={asking:0,ready:0},short=shortRoomName(name)}={}){const el=document.createElement('div');el.className='zone-tag';el.rank=roomRank(needs)
+  const full=document.createElement('span');full.className='room-full';full.textContent=count===null?name:`${name} · ${count}`
+  const brief=document.createElement('span');brief.className='room-short';brief.textContent=short;el.append(full,brief)
+  if(needs.asking||needs.ready){const badge=document.createElement('b'),word=document.createElement('span');badge.className='need-badge'+(needs.asking?' asks':'');word.className='need-word';word.textContent=needs.asking?' asking':' ready';badge.append(String(needs.asking||needs.ready),word);el.appendChild(badge)}
+  el.onclick=()=>onSpace(key);tagsEl.appendChild(el);tags.push({el,a:{g:{position:new THREE.Vector3(x,-2.65,z)},p:{id:null}},key,isZone:true})}
+function addTag(a,isLead){const el=document.createElement('div');el.className='tag'+(isLead?' lead':'');el.style.setProperty('--name-hue',nameHash(a.p.name)%360);const name=document.createElement('span');name.textContent=a.p.name;if(a.p.label){const job=document.createElement('em');job.textContent=' · '+a.p.label;name.appendChild(job)}el.appendChild(name);const count=a.p.helpers?.length||0;if(count||a.p.talkingTo){const badge=document.createElement('b');badge.className='call-badge';badge.textContent=count?`${count} helper${count>1?'s':''}`:'On a call';el.appendChild(badge)}if(a.p.isWaiting){const badge=document.createElement('b');badge.className='call-badge waiting';el.appendChild(badge);el.waitBadge=badge}if(a.p.isActing&&!a.p.request&&!a.p.meetingWith?.length){const thought=document.createElement('div');thought.className='thought';el.prepend(thought);el.thought=thought}else if(busy(a.p)){const say=document.createElement('div');say.className='say'+(a.p.request?' asks':a.p.isFinished?' done':'');say.textContent=a.p.request?a.p.request.message:a.p.meetingWith&&a.p.meetingWith.length?'In a meeting':a.p.isFinished?a.p.readyLine||'Finished: '+a.p.title:a.p.jobs?.length?`Job running: ${a.p.jobs[0]}`:a.p.title;el.prepend(say)}if(a.p.request||a.p.isFinished){const need=document.createElement('b');need.className='need-badge'+(a.p.request?' asks':'');need.textContent=a.p.request?'Asking':'Ready';el.prepend(need)}el.rank=labelRank(a.p,isLead);el.title=a.p.title;el.onclick=()=>onPick(a.p.id);tagsEl.appendChild(el);tags.push({el,a,key:drawingKey})}
 let tab='chat',chatTimer=null
 
 let viewShift=0
@@ -2271,7 +2287,38 @@ function loop(){const t=clock.getElapsedTime()
   const w=stage.clientWidth,h=stage.clientHeight
   let thoughtRoom=3
   const paneThoughts=new Map()
-  tags.forEach(({el,a,key,isZone})=>{if(split){placeSplitTag(el,a,isZone,key,paneThoughts);return}if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/camera.position.distanceTo(a.g.position)));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`}})
+  tags.forEach(({el,a,key,isZone})=>{if(split){el.style.visibility='';el.classList.toggle('compact',false);placeSplitTag(el,a,isZone,key,paneThoughts);return}if(el.thought){const live=people.find(x=>x.id===a.p.id)||a.p,detailed=a.p.id===selected||el.matches(':hover'),shown=focusKey===key&&(detailed||thoughtRoom>0);if(focusKey===key&&!detailed&&shown)thoughtRoom--;drawThought(el.thought,live,shown,detailed)}el.classList.toggle('quiet',Boolean(focusKey&&key===focusKey&&spots[focusKey]?.hasBoard));if(el.waitBadge)el.waitBadge.textContent=`Waiting · ${Math.max(1,Math.round((Date.now()/1000-a.p.jobStartedAt)/60))}m`;el.style.display=!focusKey||(key===focusKey&&!isZone)||a.p.request?'':'none';v.set(a.g.position.x,a.g.position.y+(isZone?2.55:a.pose==='wave'||a.pose==='walk'?2.5:1.75),a.g.position.z).project(camera);el.style.left=((v.x+1)/2*w)+'px';el.style.top=((1-v.y)/2*h)+'px';el.classList.toggle('on',a.p.id===selected);if(!isZone){const away=camera.position.distanceTo(a.g.position),near=Math.min(1.12,Math.max(focusKey?.72:OVERVIEW_TAG_SCALE,13/away));el.style.transform=`translate(-50%,-100%) scale(${near.toFixed(3)})`;el.scale=near;el.classList.toggle('compact',!focusKey&&away>FULL_TAG_DISTANCE)}})
+  if(!split)fitOfficeLabels()
+}
+// In the whole-office view a person is just their name. Labels never overlap: every room keeps a label, full or short and moved if
+// it has to be, and people's names show where there's room, anyone who needs the person first.
+// Labels are measured again once a web font arrives, since it changes their width.
+let labelFonts=0
+document.fonts?.addEventListener('loadingdone',()=>labelFonts++)
+function fitOfficeLabels(){
+  const labels=[]
+  tags.forEach(({el,isZone})=>{
+    if(el.style.display==='none')return
+    if(!isZone&&!el.classList.contains('compact')){el.style.visibility='';return}
+    const left=parseFloat(el.style.left),top=parseFloat(el.style.top)
+    if(isZone){
+      // Both forms are measured when first shown.
+      if(el.sizesFor!==labelFonts){el.classList.toggle('short',true);const short=[el.offsetWidth,el.offsetHeight];el.classList.toggle('short',false);el.sizes={full:[el.offsetWidth,el.offsetHeight],short};el.sizesFor=labelFonts}
+      labels.push({el,isZone,rank:el.rank,mustShow:true,options:roomOptions(left,top,el.sizes.full,el.sizes.short)})
+      return
+    }
+    // Measured only when the tag changes, so a frame reads the page's layout once at most.
+    if(el.measuredAs!==el.className+labelFonts){el.size=[el.offsetWidth,el.offsetHeight];el.measuredAs=el.className+labelFonts}
+    const [w,h]=el.size,scale=el.scale||1
+    labels.push({el,rank:el.rank??3,options:[{left:left-w*scale/2,right:left+w*scale/2,top:top-h*scale,bottom:top}]})
+  })
+  placeLabels(labels).forEach((index,{el,isZone,options})=>{
+    el.style.visibility=index<0?'hidden':''
+    if(!isZone||index<0)return
+    const {dx,dy}=options[index]
+    el.classList.toggle('short',index>0)
+    el.style.transform=dx||dy?`translate(calc(-50% + ${dx}px),calc(-100% + ${dy}px))`:''
+  })
 }
 let pace='active',timer=setInterval(loop,PACE_MS.active)
 let signature=''

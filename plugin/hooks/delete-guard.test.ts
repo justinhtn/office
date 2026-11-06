@@ -533,6 +533,161 @@ for (const [why, command] of ALLOWED) {
   })
 }
 
+// Commands the guard refused although nothing in them deletes a file: words in text, flags that only sound like a delete,
+// and programs it can't vouch for that share a line with no delete at all.
+const QUINN = '/Users/houghton/.agent-office/quinn/quinn-gh'
+const FALSE_ALARMS: [string, string][] = [
+  ['a review comment in -f body= about deleting old logs', `${QUINN} api -X POST repos/justinhtn/office/issues/40/comments -f body='Non-blocking: the cleanup deletes old log files with rm -rf "$LOG_DIR"/*.log; find /x -delete would be clearer. Asha'`],
+  ['a review comment in a double-quoted -f body=', `${QUINN} api repos/justinhtn/office/issues/40/comments -f body="Blocking: rm -rf \\"\\$D\\" and unlink(path) still pass. Grace"`],
+  ['quinn-gh kept in a variable', `Q=${QUINN}; $Q api -X POST repos/justinhtn/office/issues/40/comments -f body='The script deletes old log files with rm -rf; delete them by literal path. Asha'`],
+  ['quinn-gh kept in a quoted variable', `Q="${QUINN}" && "$Q" pr comment 40 --body 'Remove the rm -rf of old logs. Grace'`],
+  ['quinn-gh in a braced variable', `Q=${QUINN}\n\${Q} pr review 40 --comment --body 'unlink and rmtree are fine here. Asha'`],
+  ['a body file whose path is in a variable', `F=/private/tmp/x/body.md; cat > "$F" <<'EOF'\nBlocking: rm -rf "$D" deletes old log files.\nEOF\n${QUINN} pr comment 40 --body-file "$F"`],
+  ['a body file and quinn-gh both in variables', `Q=${QUINN}; F=/private/tmp/x/body.md; $Q api repos/justinhtn/office/pulls/40/reviews --input "$F" --jq .html_url`],
+  ['a review from a heredoc piped to quinn-gh', `cat <<'EOF' | ${QUINN} api repos/justinhtn/office/pulls/40/reviews --input -\n{"body": "It still runs rm -rf ~/.claude/projects/$D. Verdict: not ready at abc123"}\nEOF`],
+  ['a merge that keeps the branch, then the update script', 'gh pr merge 40 --repo justinhtn/office --squash --delete-branch=false && /Users/houghton/code/agent-office/scripts/update.sh'],
+  ['a merge that deletes the branch, then the update script', 'gh pr merge 40 --squash --delete-branch && scripts/update.sh'],
+  ['the update script beside a git push --delete', 'git push origin --delete old-branch && scripts/update.sh'],
+  ['a branch named for deletes beside a script', 'git checkout -b fix-rm-guard && scripts/check.sh'],
+  ['pushing a branch named delete-guard after the checks', 'scripts/check.sh && git push -u origin claude/delete-guard-false-alarms'],
+  ['a worktree for a branch about rm', 'git worktree add ../rm-old-logs -b rm-old-logs && make -C ../rm-old-logs'],
+  ['a search for unlink calls through awk', `grep -rn "unlink(" server | awk -F: '{print $1}' | sort -u`],
+  ['a search for os.remove through python', `rg -n 'rmtree|os.remove\\(' server | python3 -c "import sys; print(len(sys.stdin.read().splitlines()))"`],
+  ['a search for rm -rf counted by xargs', `grep -rln 'rm -rf' scripts | xargs wc -l`],
+  ['a search for --delete paged through less', "grep -rn -- '--delete' scripts | less"],
+  ['a python edit whose text names a delete', `python3 - <<'EOF'\np = 'plugin/hooks/x.test.ts'\ns = open(p).read().replace("  ['a prompt', \`claude -p 'rm -rf'\`],\\n", '')\nopen(p, 'w').write(s)\nEOF`],
+  ['node printing a template literal', "node -e 'console.log(`${1 + 1} files`)'"],
+  ['python reading JSON from gh beside a review post', `gh pr view 40 --json files | python3 -c "import json, sys; print(len(json.load(sys.stdin)['files']))" && ${QUINN} pr comment 40 --body 'It still runs rm -rf on old logs. Grace'`],
+]
+
+for (const [why, command] of FALSE_ALARMS) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
+  })
+}
+
+// What the guard exists for, next to the false alarms above: each still has a real delete it can't vouch for.
+const STILL_REFUSED: [string, string][] = [
+  ['a merge beside a recursive delete of a variable', 'gh pr merge 40 --delete-branch=false && rm -rf "$D"'],
+  ['the update script beside a literal delete', 'scripts/update.sh && rm -rf /tmp/guard-test/build'],
+  ['a branch named for deletes beside a delete of ~/.claude', 'git checkout -b delete-x && rm -rf ~/.claude/projects'],
+  ['rm kept in a variable', 'Q=/bin/rm; $Q -rf ~/.claude'],
+  ['quinn-gh in a variable that is read again', `Q=${QUINN}; read Q; $Q -rf ~/.claude`],
+  ['quinn-gh in a variable after a sourced script', `Q=${QUINN}; source x.sh; $Q -rf ~/.claude`],
+  ['quinn-gh in a variable set only in a subshell', `(Q=${QUINN}); $Q -rf ~/.claude`],
+  ['quinn-gh in a variable set after a condition', `false && Q=${QUINN}; $Q -rf ~/.claude`],
+  ['a program in a variable given a delete', `Q=/usr/local/bin/runner; $Q 'rm -rf ~/.claude'`],
+  ['a review post beside a delete', `${QUINN} pr comment 40 --body ok && rm -rf "$D"`],
+  ['a search piped to python that reads code from it', `grep -rh 'shutil.rmtree' notes | python3`],
+  ['text piped to a program that runs it', `echo 'rm -rf ~/.claude' | parallel`],
+  ['an unknown program given a delete', `scripts/run.sh 'rm -rf ~/.claude'`],
+  ['an unknown program with --delete', 'aws s3 sync s3://b ~/.claude --delete'],
+  ['rmdir of a variable', 'rmdir "$D"'],
+  ['shred of a pattern in ~/.claude', 'shred -u ~/.claude/projects/*/*.jsonl'],
+  ['trash of ~/.claude', 'trash ~/.claude/projects'],
+  ['trash of a relative folder', 'trash build'],
+  ['xargs trash', 'cat list | xargs trash'],
+  ['git clean', 'git clean -fdx'],
+  ['git clean in another folder', 'git -C /tmp/guard-test clean -fd'],
+  ['git worktree remove of a variable', 'git worktree remove --force "$W"'],
+  ['git worktree remove of a relative path', 'git worktree remove ../other'],
+  ['git worktree remove inside ~/.claude', 'git worktree remove ~/.claude/worktrees/x'],
+  ['rclone sync', 'rclone sync /tmp/a remote:b'],
+  ['rclone purge', 'rclone purge remote:b'],
+  ['rsync --remove-source-files', 'rsync -a --remove-source-files ~/.claude/ /tmp/b/'],
+  ['shred through sh -c', `sh -c 'shred -u ~/.claude/x'`],
+  ['trash through sh -c', `sh -c 'trash ~/.claude'`],
+  ['a script written then run by sh', `echo 'rm -rf ~/.claude' > /tmp/x.sh && sh /tmp/x.sh`],
+  ['a script written then run directly', `printf 'rm -rf ~/.claude' > /tmp/x.sh; chmod +x /tmp/x.sh; /tmp/x.sh`],
+  ['a script written by tee then run', `echo 'rm -rf ~/.claude' | tee /tmp/x.sh; bash /tmp/x.sh`],
+  ['python code written then run', `cat > /tmp/x.py <<'EOF'\nimport shutil; shutil.rmtree('/Users/me/.claude')\nEOF\npython3 /tmp/x.py`],
+  ['python code from a variable', `CODE='import os; os.remove("/Users/me/.claude/x")'; python3 -c "$CODE"`],
+  ['an unknown program given a variable holding a delete', `X='rm -rf ~/.claude'; scripts/run.sh "$X"`],
+  ['python code from an unquoted heredoc with a variable', `python3 - <<EOF\n$CODE\nEOF\nX='os.remove(1)'`],
+  ['a delete exported for a program', `export CMD='rm -rf ~/.claude'; make run`],
+  ['a script written by python then run', `python3 -c "open('/tmp/x.sh', 'w').write('rm -rf ~/.claude')"; sh /tmp/x.sh`],
+  ['a script edited by sed -i then run', `sed -i '' 's/^/rm -rf ~\\/.claude/' /tmp/x.sh && /tmp/x.sh`],
+  // From the first review of this change: each was refused before it and briefly allowed.
+  ['python reading its code from /dev/stdin', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 /dev/stdin`],
+  ['python reading its code from /dev/fd/0', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 /dev/fd/0`],
+  ['python -c running what it reads', `echo 'import shutil; shutil.rmtree("/Users/me/.claude")' | python3 -c 'import sys; eval(compile(sys.stdin.read(), "x", "exec"))'`],
+  ['sh -c sh reading a pipe', `echo 'rm -rf /Users/me/.claude' | sh -c sh`],
+  ['bash -c sourcing /dev/stdin', `echo 'rm -rf /Users/me/.claude' | bash -c 'source /dev/stdin'`],
+  ['xargs filling sh -c', `echo 'rm -rf /Users/me/.claude' | xargs -I{} sh -c {}`],
+  ['xargs filling an eval', `printf 'rm -rf /Users/me/.claude' | xargs -0 sh -c 'eval "$1"' _`],
+  ['a pipe into a subshell around a shell', `cat <<'EOF' | (true; sh)\nrm -rf /Users/me/.claude\nEOF`],
+  ['a pipe into a group around a shell', `cat <<'EOF' | { true; sh; }\nrm -rf /Users/me/.claude\nEOF`],
+  ['a heredoc fed to a group around a shell', `{ sh; } <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a heredoc fed to a subshell around a shell', `( sh ) <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a here-string fed to a group around a shell', `{ bash; } <<< 'rm -rf /Users/me/.claude'`],
+  ['a heredoc fed to a loop around a shell', `while read -r l; do sh; done <<'EOF'\nrm -rf /Users/me/.claude\nEOF`],
+  ['a script written by cp then run', `cp /dev/stdin /tmp/x.sh <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a script written by sort -o then run', `sort -o /tmp/x.sh <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a script written by sed w then run', `sed -n 'w /tmp/x.sh' <<< 'rm -rf /Users/me/.claude'; sh /tmp/x.sh`],
+  ['a Makefile written then made', `cat > Makefile <<'EOF'\nall:\n\trm -rf /Users/me/.claude\nEOF\nmake`],
+  ['git clean after -c', 'git -c color.ui=never clean -fdx'],
+  ['git worktree remove after -c', 'git -c x=y worktree remove --force /Users/me/.claude/x'],
+  ['git clean after --git-dir', 'git --git-dir /tmp/r/.git --work-tree /Users/me/.claude clean -fdx'],
+  ['git clean with -n as its exclude pattern', 'git clean -fdx -e -n'],
+  ['git clean with -n in an attached exclude pattern', 'git clean -fdxen'],
+  ['git clean with -n after --', 'git clean -fdx -- -n'],
+  ['rsync --del', 'rsync -a --del /tmp/empty/ /Users/me/.claude/'],
+  ['rclone bisync', 'rclone bisync /tmp/empty /Users/me/.claude --resync'],
+  ['sudo git clean', 'sudo git clean -fdx'],
+  ['env git worktree remove', 'env git worktree remove --force /Users/me/.claude/x'],
+  ['yarn node removing a folder', `yarn node -e "require('fs').rmSync('/Users/me/.claude', {recursive: true})"`],
+  ['yarn rimraf', 'yarn rimraf /Users/me/.claude'],
+  // From the second review: code given as an argument loading a file the line writes.
+  ['python -c importing a module the line writes', `cp /dev/stdin evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; python3 -c 'import evil'`],
+  ['node -e requiring a file the line writes', `cp /dev/stdin /tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['ruby -e loading a file the line writes', `cat > /tmp/x.rb <<'EOF'\nrequire "fileutils"; FileUtils.rm_rf("/Users/me/.claude")\nEOF\nruby -e 'load "/tmp/x.rb"'`],
+  ['perl -e requiring a file written by echo', `echo 'system("rm -rf /Users/me/.claude");' > /tmp/x.pl; perl -e 'require "/tmp/x.pl"'`],
+  ['python -c running a module written by sort -o', `sort -o /tmp/m.py <<< 'import os; os.remove("/Users/me/.claude/x")'; python3 -c 'import runpy'`],
+  // From the third review: writes that the read-only list missed, followed by code that loads what they wrote.
+  ['sort -o attached to its file', `sort -o/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort -o in a cluster', `sort -no/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort with a shortened --output', `sort --outp=/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq writing its second operand', `uniq - /tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['cat into a read-write redirection', `cat 1<>/tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['less logging its input to a file', `less -o/tmp/evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['gh downloading with -O attached', `gh run download 1 -O/tmp/evil.py; echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
+  // From the fourth review: an expansion that becomes a writing option or operand.
+  ['sort -o from a variable', `O=-o/tmp/evil.py; sort $O <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort -o from a quoted variable', `sort "$O" <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['sort -o from a substitution', `sort $(printf -- -o/tmp/evil.py) <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq operands from a variable', `uniq $FILES <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['gh -O from a substitution', `gh run download 1 $(echo -O/tmp/evil.py); echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
+  // From the fifth review: a brace or pattern that becomes a writing option or operand.
+  ['sort -o from a brace', `sort {-o,/tmp/evil.py} <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq operands from a brace', `uniq {-,/tmp/x.js} <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['sort -o from a pattern', `sort -- * <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq operands from a pattern', `uniq /tmp/in?.txt <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['gh -O from a brace', `gh run download 1 {-O,/tmp/evil.py}; echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
+  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
+]
+
+for (const [why, command] of STILL_REFUSED) {
+  test(`still refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/trash folder/)
+  })
+}
+
+for (const command of ['git clean -nd && scripts/update.sh', 'git clean -fdn', 'git clean --dry-run -e build']) {
+  test(`a dry run of git clean deletes nothing: ${command}`, async ($, on) => {
+    const { deny } = await bash($, on, command)
+    expect(deny).toBeUndefined()
+  })
+}
+
+test('git worktree remove of a full literal path is checked like rm -rf', async ($, on) => {
+  const { deny } = await bash($, on, `git worktree remove ${PROJECT}/.claude/worktrees/w`)
+  expect(deny).toBeUndefined()
+})
+
 test('a home folder deeper than usual still protects the folders above it', async ($, on) => {
   const { deny } = await bash($, on, 'rm -rf /srv/people', { home: '/srv/people/me' })
   expect(deny).toMatch(/home folder/)

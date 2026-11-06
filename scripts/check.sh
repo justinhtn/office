@@ -27,11 +27,13 @@ else
   echo "Skipping plugin tests: no claude command with plugin tests here. CI still runs them."
 fi
 
+# Installed first, because some interface tests use the office's own packages, such as three.js.
+[ -d web/node_modules ] || (cd web && npm ci --silent)
+
 echo "Running interface tests"
 node --test web/src/*.test.js
 
 echo "Building the interface"
-[ -d web/node_modules ] || (cd web && npm ci --silent)
 out="$(mktemp -d)"
 (cd web && npx vite build --outDir "$out" --emptyOutDir --logLevel error)
 rm -rf "$out"
