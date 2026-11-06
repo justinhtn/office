@@ -1,6 +1,7 @@
 """Sign-in for the office's own devices, reached through a proxy such as Tailscale Serve.
 
 Pairing codes and device cookies are long random secrets, so a plain hash is enough to store them.
+Passkeys are kept as public keys only: the private half never leaves the person's devices.
 """
 import fcntl
 import hashlib
@@ -107,16 +108,66 @@ class RemoteAccess:
                 return None, "wrong"
             state.pop("code", None)
             state["failures"] = []
-            device_secret = secrets.token_urlsafe(32)
-            device_id = secrets.token_hex(4)
-            state.setdefault("devices", {})[device_id] = {
-                "hash": hashed(device_secret),
-                "name": re.sub(r"[^\w .'-]", "", str(name))[:40].strip() or "Device",
-                "created": now,
-                "expires": now + DEVICE_S,
-            }
 
-            return f"{device_id}.{device_secret}", None
+            return new_device(state, name, now), None
+
+        return self.changing(change)
+
+    def add_passkey(self, device_id, credential, public_key, sign_count):
+        """Lets a signed-in device come back with this passkey. Only one signed in with a code, which has none yet:
+        replacing one would sign out the other devices that use it."""
+        def change(state):
+            device = state.get("devices", {}).get(device_id)
+            if not state.get("host") or not device or time.time() >= device.get("expires", 0) or device.get("passkey"):
+                return False
+            passkey_id = secrets.token_hex(4)
+            state.setdefault("passkeys", {})[passkey_id] = {
+                "credential": credential,
+                "publicKey": public_key,
+                "signCount": sign_count,
+                "name": device["name"],
+                "created": time.time(),
+            }
+            device["passkey"] = passkey_id
+
+            return True
+
+        return self.changing(change)
+
+    def has_passkeys(self):
+        state = self.read()
+
+        return bool(state.get("host") and state.get("passkeys"))
+
+    def passkeys(self):
+        return self.read().get("passkeys", {})
+
+    def passkey_user(self):
+        """The same WebAuthn user id every time, so iCloud Keychain replaces this office's old passkey instead of
+        keeping one for every pairing. Turning access off makes a new one."""
+        def change(state):
+            return state.setdefault("passkeyUser", secrets.token_urlsafe(16))
+
+        return self.changing(change)
+
+    def sign_in_with_passkey(self, credential, check):
+        """Returns a cookie value, or None. check(passkey) raises if the answer is wrong, or returns the new sign count.
+
+        It runs while the file is locked, so two sign-ins can't both use the same count.
+        """
+        def change(state):
+            if not state.get("host"):
+                return None
+            found = [(key, one) for key, one in state.get("passkeys", {}).items() if hmac.compare_digest(one.get("credential", "").encode(), str(credential).encode())]
+            if not found:
+                return None
+            passkey_id, passkey = found[0]
+            passkey["signCount"] = check(passkey)
+            now = time.time()
+            passkey["lastUsed"] = now
+            state["devices"] = {key: one for key, one in state.get("devices", {}).items() if now < one.get("expires", 0)}
+
+            return new_device(state, passkey["name"], now, passkey_id)
 
         return self.changing(change)
 
@@ -146,8 +197,45 @@ class RemoteAccess:
 
         return {key: one for key, one in self.read().get("devices", {}).items() if now < one.get("expires", 0)}
 
-    def revoke(self, device_id):
-        return self.changing(lambda state: state.get("devices", {}).pop(device_id, None)) is not None
+    def revoke(self, some_id):
+        """Takes a device or a passkey. Its passkey goes too, and so does every device signed in with that passkey,
+        since passkeys sync between someone's devices."""
+        def change(state):
+            device = state.get("devices", {}).pop(some_id, None)
+            passkey_id = device.get("passkey") if device else some_id
+            return forget_passkey(state, passkey_id) or device is not None
+
+        return self.changing(change)
 
     def revoke_all(self):
-        self.changing(lambda state: state.pop("devices", None))
+        def change(state):
+            state.pop("devices", None)
+            state.pop("passkeys", None)
+
+        self.changing(change)
+
+
+def new_device(state, name, now, passkey_id=None):
+    """Adds a device and returns its cookie value."""
+    device_secret = secrets.token_urlsafe(32)
+    device_id = secrets.token_hex(4)
+    device = {
+        "hash": hashed(device_secret),
+        "name": re.sub(r"[^\w .'-]", "", str(name))[:40].strip() or "Device",
+        "created": now,
+        "expires": now + DEVICE_S,
+    }
+    if passkey_id:
+        device["passkey"] = passkey_id
+    state.setdefault("devices", {})[device_id] = device
+
+    return f"{device_id}.{device_secret}"
+
+
+def forget_passkey(state, passkey_id):
+    """Removes a passkey and signs out every device that used it. Says whether there was one."""
+    if not passkey_id or state.get("passkeys", {}).pop(passkey_id, None) is None:
+        return False
+    state["devices"] = {key: one for key, one in state.get("devices", {}).items() if one.get("passkey") != passkey_id}
+
+    return True

@@ -133,9 +133,20 @@ class SignedInTests(Case):
         self.assertEqual(status, 200)
         cookie = response.getheader("Set-Cookie")
         self.assertTrue(cookie.startswith(f"{server.COOKIE}="))
-        for part in ("Path=/", "Secure", "HttpOnly", "SameSite=Strict", f"Max-Age={server.DEVICE_S}"):
+        for part in ("Path=/", "Secure", "HttpOnly", "SameSite=Lax", f"Max-Age={server.DEVICE_S}"):
             self.assertIn(part, cookie)
         self.assertNotIn("Domain", cookie)
+
+    def test_a_cross_site_request_carrying_the_cookie_cant_act(self):
+        # Lax lets the cookie ride along when another site links here, so the origin and token checks must hold.
+        cookie, code = self.signed_in(), server.REMOTE.new_code()
+        token = self.page_token(cookie)
+        self.assertEqual(self.request("POST", "/api/shut-down", cookie=cookie, token=token, origin="https://evil.example", body={"isOn": True})[0], 403)
+        self.assertEqual(self.request("POST", "/api/shut-down", cookie=cookie, body={"isOn": True})[0], 403)
+        self.assertEqual(self.request("POST", "/api/sign-in", cookie=cookie, origin="https://evil.example", body={"code": code, "name": "x"})[0], 403)
+        status, page, _ = self.request("GET", "/", cookie=cookie, headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 200)
+        self.assertNotIn(server.TOKEN.encode(), page)
 
     def test_a_device_gets_the_office_with_its_own_token(self):
         cookie = self.signed_in()

@@ -15,8 +15,8 @@ USAGE = """Usage: ipad-access.py COMMAND
 
   on HOST       Allow this Tailscale name, such as my-mac.tail1234.ts.net
   code          Make a one-time code to sign a device in
-  devices       List signed-in devices
-  revoke ID     Sign one device out, or use "all"
+  devices       List signed-in devices and Face ID passkeys
+  revoke ID     Sign out a device or forget a passkey, or use "all"
   status        Say whether it's on
   off           Turn it off and forget every device"""
 
@@ -35,17 +35,21 @@ def main(arguments):
     elif command == "devices":
         for device_id, device in ACCESS.devices().items():
             seen = f"last used {when(device['lastSeen'])}" if device.get("lastSeen") else "not used yet"
-            print(f"{device_id}  {device['name']}  signed in {when(device['created'])}, {seen}, ends {when(device['expires'])}")
+            face_id = f", with Face ID {device['passkey']}" if device.get("passkey") else ""
+            print(f"{device_id}  {device['name']}  signed in {when(device['created'])}{face_id}, {seen}, ends {when(device['expires'])}")
         if not ACCESS.devices():
             print("No devices.")
+        for passkey_id, passkey in ACCESS.passkeys().items():
+            used = f"last used {when(passkey['lastUsed'])}" if passkey.get("lastUsed") else "not used yet"
+            print(f"{passkey_id}  Face ID passkey from {passkey['name']}, added {when(passkey['created'])}, {used}")
     elif command == "revoke" and len(arguments) == 2:
         if arguments[1] == "all":
             ACCESS.revoke_all()
-            print("Every device is signed out.")
+            print("Every device is signed out, and every Face ID passkey is forgotten.")
         elif ACCESS.revoke(arguments[1]):
-            print("That device is signed out.")
+            print("Done. Any Face ID passkey it had is forgotten, and devices that signed in with it are signed out too.")
         else:
-            raise ValueError("There's no device with that ID. Run devices to list them.")
+            raise ValueError("There's no device or passkey with that ID. Run devices to list them.")
     elif command == "status":
         if ACCESS.host():
             with socket.socket() as probe:
@@ -58,7 +62,7 @@ def main(arguments):
     elif command == "off":
         port_note = "tailscale serve --https=443 off"
         ACCESS.turn_off()
-        print(f"Off, and every device is forgotten. To remove the Tailscale route too:\n\n  {port_note}\n  {RESTART}")
+        print(f"Off, and every device and Face ID passkey is forgotten. To remove the Tailscale route too:\n\n  {port_note}\n  {RESTART}")
     else:
         print(USAGE)
         return 2
