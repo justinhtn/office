@@ -1,8 +1,9 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowUp, Send, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import { ArrowUp, Check, ChevronLeft, Send, X } from 'lucide-react'
 import { api } from './api.js'
-import { FAST_POLL_MS, SLOW_POLL_MS, chatItems, isBusy, noteStatus } from './miaChat.js'
+import { FAST_POLL_MS, SLOW_POLL_MS, chatItems, dayLabel, grouped, isBusy, noteStatus, timeOf } from './miaChat.js'
 
 // The chat follows the part of the screen the keyboard leaves, so the text box stays in view as the person types.
 function useVisibleHeight(sheet) {
@@ -24,6 +25,19 @@ function useVisibleHeight(sheet) {
   }, [])
 }
 
+// Her words may use bold, italics, lists, code and quotes. Nothing else in Markdown is drawn, and raw HTML never is. Links aren't
+// either: her replies can carry other agents' words, and a link's label can hide where it goes, so only its text is shown.
+const MARKDOWN = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'br', 'blockquote']
+
+function Bubble({ item, children }) {
+  return (
+    <div className={`bubble-row ${item.side} ${item.isFirst ? 'first' : ''} ${item.isLast ? 'last' : ''}`}>
+      <div className={`chat-bubble ${item.side} ${item.kind === 'note' ? 'note' : ''}`}>{children}</div>
+    </div>
+  )
+}
+
+// A note Mia drafted, shown as one of her messages: what it says, who it's for, and a Send button until it's decided.
 function Note({ note, onDecide }) {
   const [isDeciding, setIsDeciding] = useState(false)
   const decide = async send => {
@@ -32,16 +46,38 @@ function Note({ note, onDecide }) {
   }
 
   return (
-    <div className={`mia-note ${note.status}`}>
-      <small className="mia-note-head"><Send size={12} /><span>Note to <b>{note.leadName}</b>, from you, passed on by Mia</span></small>
-      <p>{note.text}</p>
-      {note.status === 'draft'
-        ? <div className="mia-note-actions">
-            <button disabled={isDeciding} onClick={() => decide(false)}>Cancel</button>
-            <button className="primary" disabled={isDeciding} onClick={() => decide(true)}>Send to {note.leadName}</button>
-          </div>
-        : <small className="mia-note-status">{noteStatus(note)}</small>}
-    </div>
+    <Bubble item={note}>
+      <small className="note-to"><Send size={12} /> Note to {note.leadName}</small>
+      <p className="bubble-text">{note.text}</p>
+      <div className={`note-foot ${note.status}`}>
+        <small>{note.status === 'sent' && <Check size={13} />}{noteStatus(note)}</small>
+        {note.status === 'draft'
+          ? (
+            <span className="note-actions">
+              <time>{timeOf(note.at)}</time>
+              <button disabled={isDeciding} onClick={() => decide(false)}>Cancel</button>
+              <button className="note-send" disabled={isDeciding} onClick={() => decide(true)}>Send</button>
+            </span>
+          )
+          : <time>{timeOf(note.at)}</time>}
+      </div>
+    </Bubble>
+  )
+}
+
+function Message({ item }) {
+  if (item.isWriting && !item.text) {
+    return <Bubble item={item}>{item.step ? <small className="bubble-step">{item.step}…</small> : <span className="typing" aria-label="Mia is writing"><i /><i /><i /></span>}</Bubble>
+  }
+
+  return (
+    <Bubble item={item}>
+      {item.role === 'mia'
+        ? <div className="bubble-text markdown"><ReactMarkdown allowedElements={MARKDOWN} unwrapDisallowed skipHtml>{item.text}</ReactMarkdown></div>
+        : <p className="bubble-text">{item.text}</p>}
+      {/* The time sits in the bubble's bottom corner, as in a messaging app. */}
+      <time>{item.isWriting ? (item.step ? `${item.step}…` : 'writing…') : timeOf(item.at)}</time>
+    </Bubble>
   )
 }
 
@@ -84,7 +120,7 @@ export default function AskMia({ portrait, isPhone, onClose }) {
     return () => window.removeEventListener('keydown', close)
   }, [onClose])
 
-  const items = chatItems(chat)
+  const items = grouped(chatItems(chat))
   const last = items[items.length - 1]
   // New words keep the newest message in view, unless the person has scrolled up to read.
   useLayoutEffect(() => {
@@ -125,21 +161,20 @@ export default function AskMia({ portrait, isPhone, onClose }) {
     <>
       {!isPhone && <div className="mia-backdrop" onClick={onClose} />}
       <section ref={sheet} className={`mia-sheet ${isPhone ? 'full' : ''}`} role="dialog" aria-label="Ask Mia">
-        <header className="mia-head">
-          {portrait}
-          <div className="mia-who"><b>Mia</b><small>{isReady ? (chat.isAnswering ? 'Writing…' : 'Front desk, read-only') : 'Starting'}</small></div>
-          <button className="icon" aria-label="Close" title="Close" onClick={onClose}><X size={18} /></button>
+        {/* As in a messaging app: back, then her round photo and name, on a bar the thread scrolls under. */}
+        <header className="mia-head chat-head">
+          <button className="icon chat-back" aria-label="Close" title="Close" onClick={onClose}>{isPhone ? <ChevronLeft size={26} /> : <X size={18} />}</button>
+          <span className="chat-photo">{portrait ?? <span className="chat-initial" aria-hidden="true">M</span>}</span>
+          <div className="mia-who"><b>Mia</b><small>{isReady ? (chat.isAnswering ? 'typing…' : 'Front desk, read-only') : 'Starting'}</small></div>
         </header>
-        <div className="mia-messages" ref={list} aria-live="polite" onScroll={event => { const el = event.currentTarget; isNearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }}>
+        <div className="mia-messages chat-thread" ref={list} aria-live="polite" onScroll={event => { const el = event.currentTarget; isNearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }}>
           {chat && items.length === 0 && <p className="mia-empty">Ask who needs you, how a team is doing, or have Mia pass a note to a lead. She can read the office but can't change anything.</p>}
-          {items.map(item => item.kind === 'note'
-            ? <Note key={`note-${item.id}`} note={item} onDecide={decide} />
-            : (
-              <div key={item.id} className={`mia-message ${item.role}`}>
-                {item.text ? <p>{item.text}</p> : null}
-                {item.isWriting && <small className="mia-writing">{item.step ? `${item.step}…` : item.text ? '' : 'Thinking…'}</small>}
-              </div>
-            ))}
+          {items.map(item => (
+            <React.Fragment key={`${item.kind}-${item.id}`}>
+              {item.newDay && <div className="chat-day"><span>{dayLabel(item.at)}</span></div>}
+              {item.kind === 'note' ? <Note note={item} onDecide={decide} /> : <Message item={item} />}
+            </React.Fragment>
+          ))}
         </div>
         {problem && <p className="error mia-problem">{problem}</p>}
         <form className="mia-compose" onSubmit={event => { event.preventDefault(); send() }}>
