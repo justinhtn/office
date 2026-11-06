@@ -504,6 +504,8 @@ grep -n "isOn" web/src/App.jsx | sed -n '1,40p' | grep -iv "voice\\|isOn &&\\|!i
   ['sed with a g flag on a word ending in e', "sed 's/a/bare/g' notes.txt"],
   ['sed with -e scripts beside text naming rm', "sed -e 's/x/y/' -e 's/rm -rf/z/' notes.txt"],
   ['git grep for a delete', "git grep -n 'rm -rf' -- plugin"],
+  ['fetching a branch whose name says delete', 'B=$(gh pr view 36 --repo justinhtn/office --json headRefName --jq .headRefName); git fetch -q origin "$B"; git diff 7ed3d85 FETCH_HEAD -- plugin/hooks/delete-guard.ts plugin/hooks/delete-guard.test.ts | head -80'],
+  ['python rewriting a file through a temporary file', `cp ~/.agent-office/names.json /tmp/names.json.bak && python3 - <<'EOF'\nimport json, os, tempfile\npath = os.path.expanduser('~/.agent-office/names.json')\nwith open(path) as f:\n    names = json.load(f)\nnames['local_x'] = 'June'\nfd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))\nwith os.fdopen(fd, 'w') as f:\n    json.dump(names, f, indent=2)\nos.replace(tmp, path)\nEOF`],
   ['a case arm with several patterns', 'case $f in *.txt|*.log) echo hi;; esac'],
   ['a case arm with several patterns and a flag', 'case $f in *.txt|*.log) ls -f;; esac'],
   ['an assignment before npm test', 'NODE_ENV=test npm test'],
