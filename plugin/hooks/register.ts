@@ -732,7 +732,8 @@ export const register: Register = on => {
 
   // Mia never writes to another session herself. Notes go out from this plugin, and only after the person taps Send.
   on('session.send', async ($, e, next) => {
-    if (e.origin.kind !== 'model') return next(e)
+    // Only a plugin's own send passes by itself. Anything else, including a send that doesn't say where it came from, is checked.
+    if (e.origin?.kind === 'plugin') return next(e)
     const folder = (await $.env.get('AGENT_OFFICE_HOME')) || `${await $.env.get('HOME')}/.agent-office`
     const here = await realFolder($, await $.session.cwd())
     const desk = await realFolder($, `${folder}/front-desk`)

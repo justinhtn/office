@@ -1908,6 +1908,14 @@ class Handler(BaseHTTPRequestHandler):
     def page_token(self):
         return TOKEN
 
+    def from_signed_in_device(self):
+        # Any program on the Mac can load this port's page and read its token, agents included, so it can't speak for the person.
+        return False
+
+    def device_only(self):
+        if not self.from_signed_in_device():
+            raise Refused(403, "Ask Mia only works from a signed-in device.")
+
     def do_GET(self):
         try:
             self.guarded()
@@ -1929,6 +1937,7 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/sessions":
                 self.reply(200, {**sessions(), "onScreen": sessions_on_screen()})
             elif url.path == "/api/mia":
+                self.device_only()
                 self.reply(200, MIA_CHAT.view())
             elif url.path == "/api/newsroom":
                 self.reply(200, newsroom_day())
@@ -1936,7 +1945,7 @@ class Handler(BaseHTTPRequestHandler):
                 idle = seconds_idle()
                 away_mode = read_json(AWAY_MODE, {}).get("isOn") is True
                 shut_down = read_json(SHUT_DOWN, {}).get("isOn") is True
-                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on(), "miaChat": chat_is_wanted()})
+                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on(), "miaChat": chat_is_wanted() and self.from_signed_in_device()})
             elif url.path == "/api/presentation":
                 self.reply(200, presentation(json.loads(PRESENTATION_DEMO.read_text())))
             elif url.path == "/api/usage":
@@ -2029,6 +2038,8 @@ class Handler(BaseHTTPRequestHandler):
                 OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
                 return
+            if route in ("/api/mia/ask", "/api/mia/note"):
+                self.device_only()
             if route == "/api/mia/ask":
                 try:
                     MIA_CHAT.ask(body.get("text", ""))
@@ -2170,6 +2181,9 @@ class RemoteHandler(Handler):
     def page_token(self):
         # Only for this device, so the office's own token never leaves the Mac.
         return hmac.new(hashlib.sha256(f"device\0{TOKEN}".encode()).digest(), self.device.encode(), hashlib.sha256).hexdigest()
+
+    def from_signed_in_device(self):
+        return bool(self.device)
 
     def authorized(self):
         supplied = self.headers.get("X-Office-Token", "")

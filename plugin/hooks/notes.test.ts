@@ -47,14 +47,16 @@ async function mia($: any, on: any, { isChat = true, cwd = DESK } = {}) {
   on('tool.register', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'office' } }))
   on('mcp.call', () => ({ value: { isError: true, content: [] } }))
-  on('session.send', (_: unknown, e: { to: unknown; text: string }) => {
+  const origins: unknown[] = []
+  on('session.send', (_: unknown, e: { to: unknown; text: string; origin: unknown }) => {
     sent.push({ to: e.to, text: e.text })
+    origins.push(e.origin)
 
     return { isDelivered: true }
   })
   await $.session.start({ cwd, surface: 'cli', isInteractive: false })
 
-  return { files, sent, clock }
+  return { files, sent, clock, origins }
 }
 
 const passNote = async ($: any, lead: string, note: string) => JSON.stringify(await $.tool.call({ tool: PASS_NOTE, lead, note }))
@@ -122,4 +124,28 @@ test('the chat copy may use pass_note but nothing outside the front desk list', 
   for (const tool of ['SendMessage', 'Bash', 'Read', 'mcp__ccd_session_mgmt__send_message']) {
     expect((await $.tool.check({ tool, input: {} })).decision).toBe('deny')
   }
+})
+
+// Her copy has SendMessage only so this plugin can send approved notes. Each of these stops her using it, on its own.
+
+test('her own SendMessage call is denied by the front-desk permission check', async ($, on) => {
+  const { sent } = await mia($, on)
+  expect((await $.tool.check({ tool: 'SendMessage', input: { to: 'Zoe', message: 'hi' } })).decision).toBe('deny')
+  const answer = await $.tool.call({ tool: 'SendMessage', to: 'Zoe', message: 'hi' })
+  expect(JSON.stringify(answer)).toContain('The front desk is read-only')
+  expect(sent).toEqual([])
+})
+
+test('a send the plugin did not start is refused before it leaves, even past the permission check', async ($, on) => {
+  const { sent } = await mia($, on)
+  // Straight to session.send, as if the permission check had let SendMessage through.
+  const answer = await $.session.send({ to: { sessionId: 'engine-zoe' }, text: 'hi' })
+  expect(answer).toMatchObject({ isDelivered: false })
+  expect(sent).toEqual([])
+})
+
+test('outside her folder, other sessions still send as usual', async ($, on) => {
+  const { sent } = await mia($, on, { isChat: false, cwd: `${HOME}/code/app` })
+  expect(await $.session.send({ to: { sessionId: 'engine-zoe' }, text: 'hi' })).toEqual({ isDelivered: true })
+  expect(sent.length).toBe(1)
 })

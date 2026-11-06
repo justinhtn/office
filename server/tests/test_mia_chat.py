@@ -279,10 +279,16 @@ class RouteTests(Case):
                 self.assertEqual(self.request("GET", "/api/mia", **headers)[0], 403)
         self.assertEqual(self.process.sent(), [])
 
-    def test_the_macs_own_port_needs_its_own_token(self):
+    def test_the_macs_own_port_never_reaches_her_even_with_its_token(self):
+        # Any program on the Mac can read that token from the page, so it can't stand for the person.
         local = {"port": self.local.server_address[1], "host": f"127.0.0.1:{server.PORT}"}
-        self.assertEqual(self.request("POST", "/api/mia/ask", body={"text": "Hi"}, **local)[0], 403)
-        self.assertEqual(self.request("POST", "/api/mia/ask", body={"text": "Hi"}, token=self.page_token(self.signed_in()), **local)[0], 403)
+        for token in (None, self.page_token(self.signed_in()), server.TOKEN):
+            with self.subTest(token=bool(token)):
+                self.assertEqual(self.request("POST", "/api/mia/ask", body={"text": "Hi"}, token=token, **local)[0], 403)
+                self.assertEqual(self.request("POST", "/api/mia/note", body={"id": "x", "send": True}, token=token, **local)[0], 403)
+                self.assertEqual(self.request("GET", "/api/mia", token=token, **local)[0], 403)
+        status, body, _ = self.request("GET", "/api/presence", token=server.TOKEN, **local)
+        self.assertEqual((status, json.loads(body)["miaChat"]), (200, False))
         self.assertEqual(self.process.sent(), [])
 
     def test_she_says_when_she_isnt_running(self):
