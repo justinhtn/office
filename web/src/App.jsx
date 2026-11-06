@@ -1652,7 +1652,7 @@ export default function App() {
 
       {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
       {isApprovalsOpen && <ApprovalCards isPhone={isPhone} isDevice={isDevice} onClose={() => setIsApprovalsOpen(false)} />}
-      {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={32} /> : null} onClose={() => setIsMiaOpen(false)} />}
+      {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={38} /> : null} onClose={() => setIsMiaOpen(false)} />}
       {isPaletteOpen && (
         <Palette
           everyone={cast}

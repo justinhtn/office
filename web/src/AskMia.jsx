@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
-import { ArrowUp, Check, Send, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronLeft, Send, X } from 'lucide-react'
 import { api } from './api.js'
 import { FAST_POLL_MS, SLOW_POLL_MS, chatItems, dayLabel, grouped, isBusy, noteStatus, timeOf } from './miaChat.js'
 
@@ -161,10 +161,11 @@ export default function AskMia({ portrait, isPhone, onClose }) {
     <>
       {!isPhone && <div className="mia-backdrop" onClick={onClose} />}
       <section ref={sheet} className={`mia-sheet ${isPhone ? 'full' : ''}`} role="dialog" aria-label="Ask Mia">
-        <header className="mia-head">
-          {portrait}
-          <div className="mia-who"><b>Mia</b><small>{isReady ? (chat.isAnswering ? 'Writing…' : 'Front desk, read-only') : 'Starting'}</small></div>
-          <button className="icon" aria-label="Close" title="Close" onClick={onClose}><X size={18} /></button>
+        {/* As in a messaging app: back, then her round photo and name, on a bar the thread scrolls under. */}
+        <header className="mia-head chat-head">
+          <button className="icon chat-back" aria-label="Close" title="Close" onClick={onClose}>{isPhone ? <ChevronLeft size={26} /> : <X size={18} />}</button>
+          <span className="chat-photo">{portrait ?? <span className="chat-initial" aria-hidden="true">M</span>}</span>
+          <div className="mia-who"><b>Mia</b><small>{isReady ? (chat.isAnswering ? 'typing…' : 'Front desk, read-only') : 'Starting'}</small></div>
         </header>
         <div className="mia-messages chat-thread" ref={list} aria-live="polite" onScroll={event => { const el = event.currentTarget; isNearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }}>
           {chat && items.length === 0 && <p className="mia-empty">Ask who needs you, how a team is doing, or have Mia pass a note to a lead. She can read the office but can't change anything.</p>}
