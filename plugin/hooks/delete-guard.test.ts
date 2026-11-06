@@ -659,6 +659,12 @@ const STILL_REFUSED: [string, string][] = [
   ['sort -o from a substitution', `sort $(printf -- -o/tmp/evil.py) <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
   ['uniq operands from a variable', `uniq $FILES <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
   ['gh -O from a substitution', `gh run download 1 $(echo -O/tmp/evil.py); echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
+  // From the fifth review: a brace or pattern that becomes a writing option or operand.
+  ['sort -o from a brace', `sort {-o,/tmp/evil.py} <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq operands from a brace', `uniq {-,/tmp/x.js} <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['sort -o from a pattern', `sort -- * <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; cd /tmp && python3 -c 'import evil'`],
+  ['uniq operands from a pattern', `uniq /tmp/in?.txt <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['gh -O from a brace', `gh run download 1 {-O,/tmp/evil.py}; echo 'shutil.rmtree' > /dev/null; cd /tmp && python3 -c 'import evil'`],
   ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
 ]
 
