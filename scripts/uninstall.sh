@@ -5,11 +5,12 @@ set -u
 LABEL=com.agentoffice.server
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
 
-# The away copy of Mia runs in its own process group, so it outlives the server.
+# The away and chat copies of Mia run in their own process groups, so they can outlive the server.
+# The server stops the chat copy when launchd stops it, and this catches one left by a server that couldn't.
 FRONT_DESK=$(cd "$HOME/.agent-office/front-desk" 2>/dev/null && pwd -P)
 mia_copies() {
   [ -n "$FRONT_DESK" ] || return 0
-  ps -axww -o pid=,command= | grep -e '--channels plugin:telegram@claude-plugins-official' | grep -e '--resume' | while read -r pid _; do
+  ps -axww -o pid=,command= | grep -E -e '--channels plugin:telegram@claude-plugins-official.*--resume|--resume.*--channels plugin:telegram@claude-plugins-official|mcp__agent-office__pass_note' | while read -r pid _; do
     if lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | grep -qxF "n$FRONT_DESK"; then
       echo "$pid"
     fi
@@ -22,7 +23,7 @@ for sig in TERM KILL; do
   [ -z "$(mia_copies)" ] && break
   sleep 3
 done
-[ -z "$(mia_copies)" ] || echo "Couldn't stop Telegram Mia. Check Activity Monitor for: claude --channels" >&2
+[ -z "$(mia_copies)" ] || echo "Couldn't stop Mia's background copy. Check Activity Monitor for claude processes in ~/.agent-office/front-desk" >&2
 
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 claude plugin uninstall agent-office@agent-office --scope user
