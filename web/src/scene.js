@@ -94,6 +94,40 @@ let portraitRenderer = null
 let roomRenderer = null
 const portraits = new Map()
 
+// The face is drawn only once its skin has arrived: without its textures a model draws as a dark silhouette, which a phone
+// fetching them over the network would otherwise keep as the face.
+const PORTRAIT_TEXTURES_MS = 20000
+async function texturesLoaded(model) {
+  const wanted = []
+  model.traverse(o => {
+    if (!o.isSkinnedMesh) return
+    for (const material of Array.isArray(o.material) ? o.material : [o.material]) {
+      for (const texture of [material.map, material.normalMap, material.specularMap]) if (texture) wanted.push(texture)
+    }
+  })
+  const isLoaded = texture => texture.image && (texture.image.complete !== false) && (texture.image.width || texture.image.naturalWidth)
+  const deadline = Date.now() + PORTRAIT_TEXTURES_MS
+  while (!wanted.every(isLoaded)) {
+    if (Date.now() > deadline) throw new Error("The face's textures didn't arrive.")
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
+}
+
+// A backstop: if the middle of the picture, where the face is, is almost black, something wasn't ready, so it's drawn again later.
+const UNLIT_LEVEL = 18
+function isUnlit(pixels) {
+  let sum = 0, count = 0
+  for (let y = PORTRAIT_SIZE * .3; y < PORTRAIT_SIZE * .7; y++) {
+    for (let x = PORTRAIT_SIZE * .3; x < PORTRAIT_SIZE * .7; x++) {
+      const at = (Math.floor(y) * PORTRAIT_SIZE + Math.floor(x)) * 4
+      sum += (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3
+      count++
+    }
+  }
+
+  return sum / count < UNLIT_LEVEL
+}
+
 function drawPortrait(stage, lens) {
   if (roomRenderer) {
     // A lost context draws nothing and reads back zeros, which would be kept as a blank face, so it fails and is tried again later.
@@ -115,6 +149,7 @@ function drawPortrait(stage, lens) {
       roomRenderer.setRenderTarget(before)
       target.dispose()
     }
+    if (isUnlit(pixels)) throw new Error('The face came out unlit.')
     // WebGL's rows run bottom up, a picture's top down.
     const canvas = document.createElement('canvas')
     canvas.width = canvas.height = PORTRAIT_SIZE
@@ -139,6 +174,7 @@ export function portrait(p) {
   const id = castOf(p), key = `${id}|${uniformOf(p.project)}`
   if (!portraits.has(key)) {
     portraits.set(key, template(id).then(async source => {
+      // A stage of its own, with fixed lights: nothing the room does, such as sleeping or night, reaches the face.
       const stage = new THREE.Scene()
       stage.background = new THREE.Color(uniformOf(p.project)).lerp(new THREE.Color(0xffffff), .7)
       stage.add(new THREE.AmbientLight(0xffffff, .75))
@@ -148,8 +184,8 @@ export function portrait(p) {
       const head = new THREE.Vector3(); model.getObjectByName('Bip01_Head').getWorldPosition(head)
       const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
       lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
-      await new Promise(resolve => setTimeout(resolve, 400))
       try {
+        await texturesLoaded(model)
         return drawPortrait(stage, lens)
       } finally {
         // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
