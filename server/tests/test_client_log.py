@@ -1,6 +1,7 @@
 import http.client
 import json
 import threading
+from datetime import date, timedelta
 import unittest
 from unittest import mock
 
@@ -98,6 +99,26 @@ class ClientLogTests(unittest.TestCase):
         self.log.write("mac", "Mac", {"run": RUN, "dropped": 12, "events": [event()]})
         self.assertEqual(lines_in(self.only_file())[-1]["kind"], "log.dropped")
 
+    def test_a_line_keeps_its_time_however_many_keys_come_before_it(self):
+        crowded = {f"k{index}": index for index in range(40)}
+        self.log.write("mac", "Mac", {"run": RUN, "dropped": 3, "events": [{**crowded, "kind": "late", "t": 77}]})
+        first, dropped = lines_in(self.only_file())
+        self.assertEqual((first["t"], first["kind"]), (77, "late"))
+        self.assertEqual((dropped["kind"], dropped["t"]), ("log.dropped", 77))
+
+    def test_a_new_day_clears_only_this_logs_files_from_before_the_days_kept(self):
+        self.folder.mkdir(parents=True)
+        today = date.today()
+        old = (today - timedelta(days=client_log.KEEP_DAYS)).isoformat()
+        kept_day = (today - timedelta(days=client_log.KEEP_DAYS - 1)).isoformat()
+        for name in (f"mac-{old}.jsonl", f"a1b2c3d4-{old}.1.jsonl", f"mac-{kept_day}.jsonl", f"notes-{old}.txt", "mac-not-a-date.jsonl"):
+            (self.folder / name).write_text("{}\n")
+        with mock.patch.object(client_log, "datetime", wraps=client_log.datetime) as clock:
+            clock.now.return_value = client_log.datetime.combine(today, client_log.datetime.min.time(), client_log.timezone.utc)
+            self.log.write("mac", "Mac", {"run": RUN, "events": [event()]})
+        names = sorted(path.name for path in self.folder.iterdir())
+        self.assertEqual(names, sorted([f"mac-{kept_day}.jsonl", f"notes-{old}.txt", "mac-not-a-date.jsonl", f"mac-{today.isoformat()}.jsonl"]))
+
     def test_a_full_file_moves_aside_and_only_one_older_file_is_kept(self):
         log = client_log.ClientLog(self.folder, server.redacted, max_file=600)
         for _ in range(12):
@@ -165,6 +186,7 @@ class RequestTests(unittest.TestCase):
     def test_too_big_or_bad_is_refused(self):
         self.assertEqual(self.post(b"x" * (client_log.MAX_BODY + 1))[0], 413)
         self.assertEqual(self.post(b"not json")[0], 400)
+        self.assertEqual(self.post(b"[" * 60000)[0], 400)
         self.assertEqual(self.post({"token": server.TOKEN, "run": "../x", "events": []})[0], 400)
 
     def test_a_signed_in_device_files_under_its_own_id_and_name(self):

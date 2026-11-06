@@ -1967,7 +1967,11 @@ const mapDotColor=p=>mapNeedsYou(p)?MAP_GOLD:p.isRunning||p.isWaiting?MAP_WORKIN
 const mapFaces=new Map()
 let hasOverviewFaces=false
 function mapFace(p){
-  return askForFace(mapFaces,p.id,p).image
+  return askForFace(mapFaces,p.id,p,noteOverviewFaces).image
+}
+// Checked only as each face arrives, never while drawing.
+function noteOverviewFaces(){
+  if(!hasOverviewFaces&&[...mapFaces.values()].every(face=>face.image)){hasOverviewFaces=true;mark('overview.faces',{count:mapFaces.size})}
 }
 function mapStatus(team){
   const members=team.members.map(m=>people.find(one=>one.id===m.id)||m),working=members.filter(m=>m.isRunning).length
@@ -2099,7 +2103,6 @@ function drawMap(){
     members.forEach(({p})=>seated.add(p.id))
     drawMapTeam(g,o,members.map(({p})=>p),x,y,now)
   })
-  if(!hasOverviewFaces&&mapFaces.size&&[...mapFaces.values()].every(face=>face.image)){hasOverviewFaces=true;mark('overview.faces',{count:mapFaces.size})}
   live.filter(({p})=>!seated.has(p.id)).forEach(({a,p})=>{const room=rooms.find(([,o])=>inRoom(a,o)),near=room?mapFrame.gather(room[1]):{x:0,y:0},moved=room?mapFurnitureShift(room[0],room[1],scale):{x:0,y:0};drawMapDot(g,p,x(a.g.position.x)+near.x+moved.x,y(a.g.position.z)+near.y+moved.y,MAP_DOT,now)})
 }
 function mapTarget(e){

@@ -8,11 +8,13 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 MAX_BODY = 64_000
 MAX_EVENTS = 200
 MAX_FILE = 2_000_000
+# Days of timelines kept. Older files go when a device starts a new day's file, so the folder stays small and quick to read.
+KEEP_DAYS = 14
 MAX_TEXT = 300
 MAX_ITEMS = 30
 MAX_KEYS = 24
@@ -22,6 +24,7 @@ KIND = re.compile(r"^[a-z][A-Za-z0-9.-]{0,47}$")
 KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,31}$")
 RUN = re.compile(r"^[a-z0-9-]{6,40}$")
 DEVICE = re.compile(r"^[a-z0-9]{1,16}$")
+LOG_FILE = re.compile(r"^[a-z0-9]{1,16}-(\d{4}-\d{2}-\d{2})(?:\.1)?\.jsonl$")
 SECRET_KEY = re.compile(r"(?i)token|secret|passw|cookie|auth|sig$|signature|key$")
 # A link's query and fragment, where signatures and ids would be, go, and its path stays.
 LINK_QUERY = re.compile(r"""([^\s'"?#]*)[?#][^\s'"]*""")
@@ -72,17 +75,20 @@ def event_line(event, redact):
     t = event.get("t")
     if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t < 1e10:
         return None
-    line = cleaned({key: item for key, item in event.items() if key not in OWN_FIELDS and key != "kind"}, redact)
+    line = cleaned({key: item for key, item in event.items() if key not in OWN_FIELDS and key not in ("kind", "t")}, redact)
+    # Set again after the cut to a few keys, which could otherwise leave a line without its time.
+    line["t"] = t
     line["kind"] = event["kind"]
 
     return line
 
 
 class ClientLog:
-    def __init__(self, folder, redact=lambda text: text, max_file=MAX_FILE):
+    def __init__(self, folder, redact=lambda text: text, max_file=MAX_FILE, keep_days=KEEP_DAYS):
         self.folder = folder
         self.redact = redact
         self.max_file = max_file
+        self.keep_days = keep_days
         self.lock = threading.Lock()
 
     def path_for(self, device, day):
@@ -114,11 +120,27 @@ class ClientLog:
         with self.lock:
             self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             path = self.path_for(device, now.date().isoformat())
+            if not path.exists():
+                self.forget_old_days(now.date())
             self.rotate(path, len(data))
             with open(path, "ab") as handle:
                 handle.write(data)
 
         return len(lines)
+
+    def forget_old_days(self, today):
+        """Removes timeline files from before the days kept. Only files named the way this class names them, in its own folder."""
+        oldest = today - timedelta(days=self.keep_days - 1)
+        for path in self.folder.iterdir():
+            match = LOG_FILE.match(path.name)
+            if not match or not path.is_file():
+                continue
+            try:
+                day = date.fromisoformat(match.group(1))
+            except ValueError:
+                continue
+            if day < oldest:
+                path.unlink(missing_ok=True)
 
     def rotate(self, path, adding):
         """A file about to pass the limit moves aside to .1, replacing the one before it, so a device keeps at most two a day."""

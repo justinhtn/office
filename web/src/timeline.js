@@ -1,6 +1,7 @@
 // A timeline of how the office starts and runs on this device, sent to the Mac in small batches so a slow phone, or one that
 // crashed and reloaded, can be read there with scripts/client-log.py. Times are milliseconds since the page's navigation began.
 // Only names of steps, times, sizes and counts are kept: never what anyone wrote, and never a link's query or the token.
+import { takeBatch } from './batch.js'
 import { beat, mayBeat, settle } from './runs.js'
 
 const SEND_MS = 5000
@@ -17,6 +18,10 @@ const MAX_PER_KIND = 100
 const UNCAPPED = new Set(['fps', 'visibility', 'pagehide', 'pageshow', 'freeze', 'resume'])
 const MAX_QUEUE = 500
 const MAX_BATCH = 150
+// Under the server's 64 KB limit, with room for the token and the rest of the body.
+const MAX_BATCH_BYTES = 56000
+// Messages can quote what was being read, such as text JSON couldn't parse, so only their start is kept.
+const MESSAGE_LENGTH = 80
 const MAX_KEPT = 1000
 const LAST_EVENTS = 25
 const RUNS_KEY = 'office-runs'
@@ -200,11 +205,11 @@ function watchErrors() {
       mark('error.resource', { tag: target.tagName?.toLowerCase(), url: plain(target.src || target.href) })
       return
     }
-    mark('error', { message: plain(event.message), file: plain(event.filename), line: event.lineno || null, column: event.colno || null })
+    mark('error', { name: event.error?.name || null, message: plain(event.message, MESSAGE_LENGTH), file: plain(event.filename), line: event.lineno || null, column: event.colno || null })
   }, true)
   addEventListener('unhandledrejection', event => {
     const reason = event.reason
-    mark('error.rejection', { message: plain(reason?.message ?? reason) })
+    mark('error.rejection', { name: reason?.name || null, message: plain(reason?.message ?? reason, MESSAGE_LENGTH) })
   })
 }
 
@@ -241,8 +246,10 @@ function memory() {
 
 async function send(isLeaving) {
   if (!queue.length || !token) return
-  const batch = queue.slice(0, MAX_BATCH)
-  queue = queue.slice(batch.length)
+  const taken = takeBatch(queue, MAX_BATCH, MAX_BATCH_BYTES)
+  const batch = taken.batch
+  queue = taken.rest
+  dropped += taken.dropped
   const sentDropped = dropped
   const body = JSON.stringify({ token, run: run.id, dropped: sentDropped, events: batch })
   dropped = 0
@@ -250,7 +257,9 @@ async function send(isLeaving) {
   if (isLeaving && navigator.sendBeacon?.('/api/client-log', new Blob([body], { type: 'text/plain' }))) return
   try {
     const response = await fetch('/api/client-log', { method: 'POST', body, keepalive: body.length < 60000, headers: { 'Content-Type': 'text/plain' } })
-    if (!response.ok && response.status !== 400 && response.status !== 413) throw new Error('Not kept')
+    // A batch the server refused as bad or too big would be refused again, so it's counted as dropped rather than lost unnoticed.
+    if (response.status === 400 || response.status === 413) dropped += sentDropped + batch.length
+    else if (!response.ok) throw new Error('Not kept')
   } catch {
     // Kept for the next try, oldest first, so a dropped connection loses nothing.
     queue = [...batch, ...queue].slice(-MAX_QUEUE)

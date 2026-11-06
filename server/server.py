@@ -2209,7 +2209,10 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if not 0 < length <= client_log.MAX_BODY:
             raise Refused(413, "That log is too long.")
-        body = json.loads(self.rfile.read(length))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except RecursionError:
+            raise ValueError("Nested too deeply.") from None
         if not isinstance(body, dict):
             raise ValueError("Not an object.")
         supplied = body.get("token")
