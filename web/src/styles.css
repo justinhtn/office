@@ -269,6 +269,11 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .usage-list h3 { margin: 12px 0 0; font-size: 12px; font-weight: 600; }
 .usage-list h3:first-child { margin-top: 0; }
 .usage-list small { color: var(--muted); }
+.diagnostics { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.diagnostics li { display: grid; grid-template-columns: 52px 1fr; column-gap: 8px; }
+.diagnostics time { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.diagnostics b { font-weight: 500; overflow-wrap: anywhere; }
+.diagnostics small { grid-column: 2; overflow-wrap: anywhere; }
 .meter span { display: flex; justify-content: space-between; gap: 8px; }
 .meter b { font-weight: 500; }
 .meter-track { height: 6px; margin-top: 4px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }

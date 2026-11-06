@@ -1,4 +1,4 @@
-const token = document.querySelector('meta[name="office-token"]').content
+export const token = document.querySelector('meta[name="office-token"]').content
 
 export async function api(path, body) {
   const response = await fetch(path, {

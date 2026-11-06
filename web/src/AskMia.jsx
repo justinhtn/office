@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import { ArrowUp, Check, ChevronLeft, Send, X } from 'lucide-react'
 import { api } from './api.js'
+import { mark } from './timeline.js'
 import { FAST_POLL_MS, SLOW_POLL_MS, chatItems, dayLabel, grouped, isBusy, noteStatus, timeOf } from './miaChat.js'
 
 // The chat follows the part of the screen the keyboard leaves, so the text box stays in view as the person types.
@@ -99,9 +100,11 @@ export default function AskMia({ portrait, isPhone, onClose }) {
   useEffect(() => {
     let isStopped = false
     let timer
+    const opened = performance.now()
     const load = async () => {
       try {
         const next = await api('/api/mia')
+        if (!isStopped && !latest.current) mark('mia.ready', { ms: Math.round(performance.now() - opened) })
         if (!isStopped) { show(next); setProblem('') }
       } catch (failure) {
         if (!isStopped) setProblem(failure.message)

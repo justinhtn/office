@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { isTouchDevice } from './device.js'
 import { readSavedView, writeSavedView } from './savedView.js'
+import { mark, once, plain, sampleFramesWith, sizeOf, timed } from './timeline.js'
 import { markFailed, texturesState } from './textureState.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -41,9 +42,27 @@ const templates = new Map(), clips = new Map()
 // Which load each model came from, so a face whose textures failed forgets only that load, not a fresh one begun since.
 const loadedFrom = new WeakMap()
 
+// A model's textures arrive on their own after it, so the timeline notes them as one group, with their size and time.
+function textureGroup(id) {
+  const started = performance.now(), urls = []
+  let pending = 0, failed = 0, isOpen = true
+  mark('avatar.textures.start', { id })
+  const settle = () => {
+    if (isOpen || pending) return
+    const kb = urls.reduce((sum, url) => sum + (sizeOf(url).kb || 0), 0)
+    mark('avatar.textures.done', { id, count: urls.length, failed, kb, ms: Math.round(performance.now() - started) })
+  }
+
+  return {
+    add(url) { urls.push(url); pending++; return [() => { pending--; settle() }, () => { failed++; pending--; settle() }] },
+    close() { isOpen = false; settle() },
+  }
+}
+
 // A texture that couldn't be fetched says so, so a face waiting for it fails at once instead of waiting it out.
-function avatarTexture(url) {
-  const texture = textures.load(url, undefined, undefined, () => markFailed(texture))
+function avatarTexture(url, group) {
+  const [loaded, failed] = group.add(url)
+  const texture = textures.load(url, loaded, undefined, () => { markFailed(texture); failed() })
   return texture
 }
 
@@ -51,9 +70,12 @@ function avatarTexture(url) {
 function template(id) {
   if (!templates.has(id)) {
     const folder = id === OWNER_AVATAR ? OWNER_BODY : id
+    const url = `${AVATARS}/${folder}/${folder}.fbx`, loaded = timed('avatar.model', { id })
     // A model that failed to load is forgotten, so a later ask can fetch it again.
-    const loading = fbx(`${AVATARS}/${folder}/${folder}.fbx`).catch(failure => { templates.delete(id); throw failure }).then(model => {
+    const loading = fbx(url).catch(failure => { loaded({ failed: true, message: plain(failure?.message) }); templates.delete(id); throw failure }).then(model => {
+      loaded(sizeOf(url))
       loadedFrom.set(model, loading)
+      const skin = textureGroup(id)
       const strays = []
       model.traverse(o => { if (o.isLight || o.isCamera) strays.push(o) })
       strays.forEach(o => o.parent.remove(o))
@@ -66,15 +88,16 @@ function template(id) {
         const made = list.map(old => {
           const see = /_opacity$/.test(old.name)
           const isOwnerHead = id === OWNER_AVATAR && /_head$/.test(old.name)
-          const map = avatarTexture(isOwnerHead ? `${AVATARS}/owner_head_color.jpg` : id === OWNER_AVATAR && see ? `${AVATARS}/owner_opacity_color.png` : `${AVATARS}/${folder}/${old.name}_color.${see ? 'png' : 'jpg'}`)
+          const map = avatarTexture(isOwnerHead ? `${AVATARS}/owner_head_color.jpg` : id === OWNER_AVATAR && see ? `${AVATARS}/owner_opacity_color.png` : `${AVATARS}/${folder}/${old.name}_color.${see ? 'png' : 'jpg'}`, skin)
           map.anisotropy = 8
           if (see) return new THREE.MeshLambertMaterial({ map, skinning: true, side: THREE.DoubleSide, alphaTest: .4 })
-          const normalMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_normal.jpg`)
-          const specularMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_specular.jpg`)
+          const normalMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_normal.jpg`, skin)
+          const specularMap = avatarTexture(`${AVATARS}/${folder}/${old.name}_specular.jpg`, skin)
           return new THREE.MeshPhongMaterial({ map, normalMap, specularMap, normalScale: new THREE.Vector2(.9, .9), specular: 0x4a4a4a, shininess: 26, skinning: true })
         })
         o.material = made.length === 1 ? made[0] : made
       })
+      skin.close()
       return model
     })
     templates.set(id, loading)
@@ -86,7 +109,9 @@ function template(id) {
 function clip(sex, pose) {
   const name = `${sex}_${CLIPS[pose]}`
   if (!clips.has(name)) {
-    clips.set(name, fbx(`${AVATARS}/anim/${name}.fbx`).then(object => {
+    const url = `${AVATARS}/anim/${name}.fbx`, loaded = timed('avatar.clip', { name })
+    clips.set(name, fbx(url).then(object => {
+      loaded(sizeOf(url))
       const source = object.animations[0]
       const tracks = source.tracks.filter(t => /^Bip01(?!_Footsteps)/.test(t.name) && !/\.scale$/.test(t.name))
       // The walk carries the body forward and snaps it back each loop, so walking on the spot here lets walk() do the moving.
@@ -221,16 +246,21 @@ async function renderPortrait(source, id, p) {
 export function portrait(p) {
   const id = castOf(p), key = `${id}|${uniformOf(p.project)}`
   if (!portraits.has(key)) {
+    const started = performance.now()
     portraits.set(key, template(id).then(async source => {
       for (let attempt = 1; ; attempt++) {
         try {
-          return await renderPortrait(source, id, p)
+          const url = await renderPortrait(source, id, p)
+          mark('face.drawn', { id, attempt, ms: Math.round(performance.now() - started) })
+          return url
         } catch (failure) {
+          if (failure.isWorthRedrawing) mark('face.unlit', { id, attempt, reason: plain(failure.message) })
           if (!failure.isWorthRedrawing || attempt >= PORTRAIT_TRIES) throw failure
           await new Promise(resolve => setTimeout(resolve, PORTRAIT_RETRY_MS * attempt))
         }
       }
     }).catch(failure => {
+      mark('face.failed', { id, message: plain(failure?.message), ms: Math.round(performance.now() - started) })
       // Not remembered, so the face is tried again the next time it's asked for.
       portraits.delete(key)
       throw failure
@@ -274,6 +304,12 @@ renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 // Reset once a frame, so ?perf counts every pane of the split view.
 renderer.info.autoReset = false
+{
+  const gl=renderer.getContext(),debug=gl.getExtension('WEBGL_debug_renderer_info')
+  mark('scene.created',{renderer:plain(debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER)),webgl2:renderer.capabilities.isWebGL2,maxTexture:renderer.capabilities.maxTextureSize,pixelRatio:renderer.getPixelRatio()})
+}
+canvas.addEventListener('webglcontextlost',()=>mark('webgl.lost'))
+canvas.addEventListener('webglcontextrestored',()=>mark('webgl.restored'))
 const HEMI_DAY = new THREE.Color(0xfffaf0), SUN_DAY = new THREE.Color(0xfff0dc), BULB_ON = new THREE.Color(0xfff0d2), SKY_DAY = new THREE.Color(0xdbe8ef)
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0xdbe8ef)
@@ -926,7 +962,9 @@ function coffeeTable(parent,x,z,length){
 const REAL_FURNITURE=new URLSearchParams(location.search).get('furniture')!=='off'
 const OFFICE_CHAIR='B072Z6K34L',FURNITURE='/assets/furniture',FURNITURE_SCALE=1.22,furnitureModels=new Map()
 function furnitureModel(id){
-  if(!furnitureModels.has(id))furnitureModels.set(id,new Promise((resolve,reject)=>new GLTFLoader().load(id.startsWith('B0')?`${FURNITURE}/abo/${id}.glb`:`${FURNITURE}/${id}/${id}_1k.gltf`,gltf=>{
+  const url=id.startsWith('B0')?`${FURNITURE}/abo/${id}.glb`:`${FURNITURE}/${id}/${id}_1k.gltf`
+  if(!furnitureModels.has(id)){const loaded=timed('furniture.model',{id});furnitureModels.set(id,new Promise((resolve,reject)=>new GLTFLoader().load(url,gltf=>{
+    loaded(sizeOf(url))
     gltf.scene.traverse(o=>{
       if(!o.isMesh)return
       o.castShadow=o.receiveShadow=true;o.userData.keep=true
@@ -934,7 +972,7 @@ function furnitureModel(id){
       o.material.envMapIntensity=.75
     })
     resolve(gltf.scene)
-  },undefined,reject)))
+  },undefined,failure=>{loaded({failed:true});reject(failure)})))}
   return furnitureModels.get(id)
 }
 // Placed by width when given, and always standing on the floor, centred on the spot.
@@ -955,7 +993,9 @@ let lightingLoaded=false
 function loadLighting(){
   if(lightingLoaded||!REAL_FURNITURE)return
   lightingLoaded=true
+  const loaded=timed('lighting.hdr')
   new RGBELoader().setDataType(THREE.UnsignedByteType).load(`${FURNITURE}/art_studio_1k.hdr`,texture=>{
+    loaded(sizeOf(`${FURNITURE}/art_studio_1k.hdr`))
     const pmrem=new THREE.PMREMGenerator(renderer)
     scene.environment=pmrem.fromEquirectangular(texture).texture
     texture.dispose();pmrem.dispose()
@@ -1305,6 +1345,8 @@ function applyTimeOfDay(){
   lit.strip.color.setScalar(lightsOut?.12:.5+.5*Math.max(day,night*.75))
   scene.background.setHex(0x0d1420).lerp(SKY_DAY,day)
 }
+let hasBuilt=false
+const SLOW_BUILD_MS=50
 function build(){
   const buildStart=performance.now()
   walksInProgress=new Map(actors.filter(a=>a.visit&&(a.route||a.brewUntil)).map(a=>[a.p.id,{key:a.visit.key,position:a.g.position.clone(),turn:a.g.rotation.y,route:a.route,brewAt:a.visit.brewAt,brewUntil:a.brewUntil,hasMug:a.holdsMug}]))
@@ -1372,6 +1414,9 @@ function build(){
   applyTimeOfDay()
   fitDirty=true
   perf.buildMs=performance.now()-buildStart
+  // The first build is the room appearing. Later ones follow status changes, so only a slow one is worth a line.
+  if(!hasBuilt||perf.buildMs>SLOW_BUILD_MS)mark(hasBuilt?'room.rebuilt':'room.built',{ms:Math.round(perf.buildMs),people:actors.length,rooms:Object.keys(spots).length})
+  hasBuilt=true
 }
 let fitDirty=true,floorSize={W:20,D:20}
 const LOW_VIEW={az:home.az,el:home.el},FULL_VIEW={az:.42,el:.62},FULL_VIEW_MARGIN=1.25,ZOOM_OUT_RANGE=40,FRAME_PANEL_PX=304,FRAME_PANEL_MAX=.45,FRAME_MIDDLE_Y=2.5,FRAME_HEIGHT_USED=.88,FRAME_PASSES=4
@@ -1936,8 +1981,13 @@ function layoutMap(){
 const mapNeedsYou=p=>Boolean(p.request||p.isFinished)
 const mapDotColor=p=>mapNeedsYou(p)?MAP_GOLD:p.isRunning||p.isWaiting?MAP_WORKING:MAP_IDLE
 const mapFaces=new Map()
+let hasOverviewFaces=false
 function mapFace(p){
-  return askForFace(mapFaces,p.id,p).image
+  return askForFace(mapFaces,p.id,p,noteOverviewFaces).image
+}
+// Checked only as each face arrives, never while drawing.
+function noteOverviewFaces(){
+  if(!hasOverviewFaces&&[...mapFaces.values()].every(face=>face.image)){hasOverviewFaces=true;mark('overview.faces',{count:mapFaces.size})}
 }
 function mapStatus(team){
   const members=team.members.map(m=>people.find(one=>one.id===m.id)||m),working=members.filter(m=>m.isRunning).length
@@ -2042,6 +2092,7 @@ function drawMap(){
   mapFrame=layoutMap()
   map.hidden=lightsOut||!mapFrame
   if(map.hidden)return
+  once('overview.drawn')
   const {scale,height,x,y}=mapFrame,ratio=(window.devicePixelRatio||1)*(map.clientWidth||MAP_WIDTH)/MAP_WIDTH,g=map.getContext('2d'),w=Math.round(MAP_WIDTH*ratio),h=Math.round(height*ratio),now=performance.now()/1000
   if(map.width!==w||map.height!==h){map.width=w;map.height=h}
   g.setTransform(ratio,0,0,ratio,0,0);g.clearRect(0,0,MAP_WIDTH,height)
@@ -2169,6 +2220,12 @@ const marker=new THREE.Mesh(new THREE.ConeGeometry(.14,.26,4),glow(0xffc824));ma
 const PACE_MS=TEST_MODE?{active:200,watching:200,asleep:2000,hidden:0}:TOUCH_MODE?{active:50,watching:100,asleep:2000,hidden:0}:{active:33,watching:60,asleep:2000,hidden:0}
 let lastTick=0;const v=new THREE.Vector3(),clock=new THREE.Clock()
 let shadowTick=0
+// Counted here and read by the timeline every few seconds: the only thing the loop does for it.
+let frames=0,hasDrawn=false
+sampleFramesWith(()=>{
+  const count=frames,info=renderer.info;frames=0
+  return {count,pace,expected:PACE_MS[pace]?Math.round(1000/PACE_MS[pace]):0,gpu:{textures:info.memory.textures,geometries:info.memory.geometries,calls:info.render.calls}}
+})
 function loop(){const t=clock.getElapsedTime()
   if(fitDirty)fitCamera()
   placeCheckIn()
@@ -2224,6 +2281,8 @@ function loop(){const t=clock.getElapsedTime()
   const drawStart=PERF&&performance.now()
   renderer.info.reset()
   if(split)drawPanes();else renderer.render(scene,camera)
+  frames++
+  if(!hasDrawn){hasDrawn=true;mark('scene.firstFrame',{people:actors.length})}
   if(PERF)notePerf(drawStart,t)
   const w=stage.clientWidth,h=stage.clientHeight
   let thoughtRoom=3
@@ -2315,6 +2374,6 @@ return {
     boards.forEach(drawBoard);drawDirectory();drawModal();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
   map,
-  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();if(roomRenderer===renderer)roomRenderer=null;renderer.dispose();map.remove()},
+  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);sampleFramesWith(null);observer.disconnect();if(roomRenderer===renderer)roomRenderer=null;renderer.dispose();map.remove()},
 }
 }
