@@ -394,7 +394,7 @@ const textMentionsDelete = (command: string) =>
 const RUNS_TEXT = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish|eval|source|\.|trap|exec|env|sudo|doas|su|ssh|xargs|parallel|watch|script|flock|timeout|nice|nohup|time|command|builtin|stdbuf|ionice|caffeinate|arch|noglob|nocorrect|-|coproc|repeat|case|select|alias|osascript|docker|podman|kubectl)$/
 // Other languages are read for calls that delete or start a shell, so code that only names rm in its text runs.
 const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
-const CODE_DELETES = /\b(rmtree|remove|removedirs|unlink|unlinkSync|rmdir|rmdirSync|rmSync|rm_rf|rm_r|rimraf|system|popen|Popen|spawn|spawnSync|execSync|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\bsubprocess\b|\bos\.exec|`/
+const CODE_DELETES = /\b(rmtree|remove|removedirs|unlink|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|system|popen|Popen|spawn|spawnSync|execSync|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\bsubprocess\b|\bos\.exec|`/
 // Keywords that come before the program without being one.
 const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
 const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmtree', '-delete', '--delete', '--recursive'])

@@ -298,6 +298,7 @@ const REFUSED: [string, string][] = [
   ['python removing a file', `python3 -c "import os; os.remove('/Users/me/.claude/x')"`],
   ['python from a heredoc running a shell', "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['ls'])\nEOF"],
   ['node removing a folder', `node -e "require('fs').rmSync('/x', {recursive: true})"`],
+  ['node removing through the promise api', `node -e "require('fs').promises.rm('/x', {recursive: true})"`],
   ['perl running a shell in backticks', "perl -e 'print `ls`'"],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
