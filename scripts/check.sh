@@ -8,7 +8,10 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" python3 -m py_compile server/server.py
 
 if [ -d server/tests ]; then
   echo "Running server tests"
-  python3 -m unittest discover -s server/tests
+  # The office's own Python has what server/requirements.txt adds, so the Face ID tests run too. Elsewhere they skip.
+  python=python3
+  "$HOME/.agent-office/python/bin/python3" -c 'import cryptography' 2>/dev/null && python="$HOME/.agent-office/python/bin/python3"
+  "$python" -m unittest discover -s server/tests
 else
   echo "No server tests yet"
 fi

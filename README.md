@@ -112,12 +112,20 @@ scripts/ipad-access.py code
 
 Open `https://my-mac.tail1234.ts.net` on the iPad and enter the code. It works once and lasts 10 minutes, and five wrong tries end it. A device stays signed in for 30 days. Use `serve`, never `funnel`, which would put the office on the public internet.
 
+If you use the office from a Home Screen icon, sign in from the icon itself: it keeps its own cookies, separate from Safari.
+
+### Face ID
+
+After a code sign-in, the page offers "Use Face ID next time". That saves a passkey for your Mac's Tailscale name in your iCloud Keychain, so it works on your other Apple devices too. Next time, tap "Sign in with Face ID" instead of entering a code. The code always still works.
+
+Face ID needs the office's own Python environment at `~/.agent-office/python`, which `scripts/install.sh` and `scripts/update.sh` set up with the pinned packages in `server/requirements.txt`. Without it, the office works as before with codes only. The Mac keeps only each passkey's public key.
+
 A signed-in device can do what the office can do on the Mac: read sessions, see their files and media, send messages, and start or stop Telegram Mia. Some buttons, such as opening a session in the Claude app, act on the Mac rather than the iPad.
 
 - See devices: `scripts/ipad-access.py devices`
-- Sign one out: `scripts/ipad-access.py revoke ID`, or `revoke all`
+- Sign one out: `scripts/ipad-access.py revoke ID`, or `revoke all`. Revoking a device also forgets its Face ID passkey and signs out every device that signed in with that passkey. `devices` lists passkeys too, and `revoke` takes a passkey's ID.
 - Sign-ins and refused tries go in `~/.agent-office/server.log`, without codes or cookies.
-- Turn it all off: `scripts/ipad-access.py off`, then `tailscale serve --https=443 off`. Sign-in stops working at once.
+- Turn it all off: `scripts/ipad-access.py off`, which also forgets every passkey, then `tailscale serve --https=443 off`. Sign-in stops working at once.
 
 ## Privacy and security
 

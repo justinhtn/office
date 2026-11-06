@@ -35,4 +35,6 @@ jobs:
       # The plugin tests run through this command. They need no login or API key.
       # Pinned because the plugin uses an early-access API. Raise it deliberately.
       - run: npm install --global @anthropic-ai/claude-code@2.1.309
+      # So the Face ID tests run rather than skip.
+      - run: python -m pip install --require-hashes -r server/requirements.txt
       - run: scripts/check.sh

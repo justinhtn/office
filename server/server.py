@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from remote_access import COOKIE, DEVICE_S, RemoteAccess  # noqa: E402
+import passkeys  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
@@ -166,24 +167,103 @@ SIGN_IN_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" con
 <body style="font:16px system-ui;margin:12vh auto;max-width:26em;padding:0 16px">
 <h1>Sign in to the office</h1>
 <p>On your Mac, run <code>scripts/ipad-access.py code</code>, then enter the code here.</p>
+<div id="face-id" hidden>
+<p><button id="use-face-id" style="font:inherit;padding:8px 16px">Sign in with Face ID</button></p>
+<p>Or use a code:</p>
+</div>
 <form id="form">
 <p><label>Code<br><input id="code" autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" required style="font:inherit;width:100%;box-sizing:border-box;padding:8px"></label></p>
 <p><label>This device's name<br><input id="name" value="iPad" maxlength="40" style="font:inherit;width:100%;box-sizing:border-box;padding:8px"></label></p>
 <p><button style="font:inherit;padding:8px 16px">Sign in</button></p>
 <p id="problem" role="alert"></p>
 </form>
+<div id="offer" hidden>
+<p>You're signed in. Next time, you can use Face ID instead of a code.</p>
+<p><button id="add-face-id" style="font:inherit;padding:8px 16px">Use Face ID next time</button> <button id="not-now" style="font:inherit;padding:8px 16px">Not now</button></p>
+<p id="offer-problem" role="alert"></p>
+</div>
 <script>
-document.getElementById("form").onsubmit = async event => {
-  event.preventDefault()
-  const problem = document.getElementById("problem")
+// Whether the Mac can check passkeys, and whether it has any yet.
+const passkeysOn = __PASSKEYS_ON__, hasPasskeys = __HAS_PASSKEYS__
+const byId = id => document.getElementById(id)
+const toText = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+const toBytes = text => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), letter => letter.charCodeAt(0))
+const post = async (path, body) => {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+  const answer = await response.json()
+  if (!response.ok) throw new Error(answer.error)
+  return answer
+}
+// Asked for ahead of the tap, because Safari may refuse Face ID if the tap waits on the network first.
+let options = null
+const prepare = async path => { options = null; options = await post(path).catch(() => null) }
+
+if (passkeysOn && hasPasskeys && window.PublicKeyCredential) {
+  byId("face-id").hidden = false
+  prepare("/api/passkey/sign-in-options")
+  byId("use-face-id").onclick = async () => {
+    const problem = byId("problem")
+    problem.textContent = ""
+    try {
+      if (!options) throw new Error()
+      const credential = await navigator.credentials.get({ publicKey: { challenge: toBytes(options.challenge), rpId: options.rpId, userVerification: "required", timeout: 120000 } })
+      const answer = credential.response
+      await post("/api/passkey/sign-in", { id: credential.id, clientDataJSON: toText(answer.clientDataJSON), authenticatorData: toText(answer.authenticatorData), signature: toText(answer.signature) })
+      return window.location.reload()
+    } catch {
+      problem.textContent = "Face ID didn't sign you in. Try again, or use a code."
+      prepare("/api/passkey/sign-in-options")
+    }
+  }
+}
+
+const offerFaceId = async () => {
+  try {
+    return passkeysOn && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+  } catch {
+    return false
+  }
+}
+
+byId("not-now").onclick = () => window.location.reload()
+byId("add-face-id").onclick = async () => {
+  const problem = byId("offer-problem")
   problem.textContent = ""
   try {
-    const response = await fetch("/api/sign-in", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: document.getElementById("code").value, name: document.getElementById("name").value }) })
-    if (response.ok) return window.location.reload()
-    problem.textContent = (await response.json()).error
+    if (!options) throw new Error()
+    const credential = await navigator.credentials.create({ publicKey: {
+      challenge: toBytes(options.challenge),
+      rp: { id: options.rpId, name: "Agent Office" },
+      user: { id: toBytes(options.userId), name: options.name, displayName: options.name },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", userVerification: "required" },
+      attestation: "none",
+      timeout: 120000,
+    } })
+    const answer = credential.response
+    await post("/api/passkey/register", { id: credential.id, clientDataJSON: toText(answer.clientDataJSON), authenticatorData: toText(answer.getAuthenticatorData()), publicKey: toText(answer.getPublicKey()), publicKeyAlgorithm: answer.getPublicKeyAlgorithm() })
+    return window.location.reload()
   } catch {
-    problem.textContent = "Couldn't reach the office."
+    problem.textContent = "Face ID wasn't set up. Try again, or choose Not now."
+    prepare("/api/passkey/register-options")
   }
+}
+
+byId("form").onsubmit = async event => {
+  event.preventDefault()
+  const problem = byId("problem")
+  problem.textContent = ""
+  try {
+    await post("/api/sign-in", { code: byId("code").value, name: byId("name").value })
+  } catch (error) {
+    problem.textContent = error instanceof TypeError ? "Couldn't reach the office." : error.message
+    return
+  }
+  if (!await offerFaceId()) return window.location.reload()
+  await prepare("/api/passkey/register-options")
+  if (!options) return window.location.reload()
+  byId("form").hidden = byId("face-id").hidden = true
+  byId("offer").hidden = false
 }
 </script>
 </body>"""
@@ -2034,7 +2114,8 @@ class RemoteHandler(Handler):
         if self.device:
             super().do_GET()
         elif urlparse(self.path).path == "/":
-            self.reply(401, SIGN_IN_PAGE.encode(), "text/html; charset=utf-8")
+            page = SIGN_IN_PAGE.replace("__PASSKEYS_ON__", json.dumps(passkeys.available())).replace("__HAS_PASSKEYS__", json.dumps(REMOTE.has_passkeys()))
+            self.reply(401, page.encode(), "text/html; charset=utf-8")
         else:
             # The page reloads on this and lands on the sign-in form.
             self.reply(403, {"error": "Bad token."})
@@ -2042,8 +2123,11 @@ class RemoteHandler(Handler):
     def do_POST(self):
         try:
             self.gate()
-            if urlparse(self.path).path == "/api/sign-in":
+            path = urlparse(self.path).path
+            if path == "/api/sign-in":
                 self.sign_in()
+            elif path.startswith("/api/passkey/"):
+                self.passkey(path.removeprefix("/api/passkey/"))
             elif self.device:
                 super().do_POST()
             else:
@@ -2058,13 +2142,21 @@ class RemoteHandler(Handler):
             traceback.print_exc()
             self.reply(500, {"error": "The office server hit an error."})
 
-    def sign_in(self):
+    def signing_in_body(self, limit):
+        # Signing in rests on this check alone, so it must be an exact match, never a missing header.
         if self.headers.get("Origin") != f"https://{REMOTE.host()}":
             raise Refused(403, "Bad origin.")
         length = int(self.headers.get("Content-Length") or 0)
-        if not 0 <= length <= 2000:
+        if not 0 <= length <= limit:
             raise Refused(413, "That message is too long.")
         body = json.loads(self.rfile.read(length))
+        if not isinstance(body, dict):
+            raise ValueError("Not an object.")
+
+        return body
+
+    def sign_in(self):
+        body = self.signing_in_body(2000)
         cookie, problem = REMOTE.sign_in(body.get("code", ""), body.get("name", ""))
         if problem:
             print(f"Device sign-in refused: {problem}", file=sys.stderr, flush=True)
@@ -2074,8 +2166,50 @@ class RemoteHandler(Handler):
             raise Refused(429, "Too many tries. Make a new code on your Mac.")
         if problem:
             raise Refused(403, "That code isn't right, or it has expired.")
-        self.cookies_to_set = [("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={DEVICE_S}; Secure; HttpOnly; SameSite=Lax")]
+        self.set_device_cookie(cookie)
         self.reply(200, {"status": "ok"})
+
+    def set_device_cookie(self, cookie):
+        self.cookies_to_set = [("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={DEVICE_S}; Secure; HttpOnly; SameSite=Lax")]
+
+    def passkey(self, step):
+        """Face ID: a signed-in device adds a passkey, and later signs in with it instead of a code."""
+        body = self.signing_in_body(4000)
+        if not passkeys.available():
+            raise Refused(404, "Face ID isn't set up on the Mac. Run scripts/update.sh there.")
+        host = REMOTE.host()
+        origin = f"https://{host}"
+        if step in ("register-options", "register") and not self.device:
+            raise Refused(403, "Sign in with a code first.")
+        try:
+            if step == "register-options":
+                name = REMOTE.devices().get(self.device, {}).get("name", "Device")
+                challenge = PASSKEY_CHALLENGES.new(("register", self.device))
+                self.reply(200, {"challenge": challenge, "rpId": host, "userId": passkeys.encoded(secrets.token_bytes(16)), "name": name})
+            elif step == "register":
+                credential, public_key, count = passkeys.registered(body, host, origin, PASSKEY_CHALLENGES, ("register", self.device))
+                if not REMOTE.add_passkey(self.device, credential, public_key, count):
+                    raise Refused(403, "Sign in with a code first.")
+                print(f"Face ID added for device {self.device}", file=sys.stderr, flush=True)
+                self.reply(200, {"status": "ok"})
+            elif step == "sign-in-options":
+                self.reply(200, {"challenge": PASSKEY_CHALLENGES.new(("sign-in",)), "rpId": host})
+            elif step == "sign-in":
+                check = lambda passkey: passkeys.signed_in(body, passkey["publicKey"], passkey.get("signCount", 0), host, origin, PASSKEY_CHALLENGES, ("sign-in",))
+                cookie = REMOTE.sign_in_with_passkey(body.get("id"), check)
+                if not cookie:
+                    raise passkeys.Rejected("Unknown passkey.")
+                print(f"Device signed in with Face ID: {cookie.split('.')[0]}", file=sys.stderr, flush=True)
+                self.set_device_cookie(cookie)
+                self.reply(200, {"status": "ok"})
+            else:
+                raise Refused(404, "Not found.")
+        except passkeys.Rejected:
+            print(f"Face ID {step} refused", file=sys.stderr, flush=True)
+            raise Refused(403, "Face ID didn't work. Use a code instead.") from None
+
+
+PASSKEY_CHALLENGES = passkeys.Challenges()
 
 
 def remote_address():

@@ -4,6 +4,7 @@ set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/port.sh"
+. "$ROOT/scripts/python-env.sh"
 DATA="$HOME/.agent-office"
 LABEL=com.agentoffice.server
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -29,7 +30,7 @@ chmod 700 "$DATA" "$DATA/requests"
 claude plugin marketplace add "$ROOT"
 claude plugin install agent-office@agent-office --scope user
 
-PYTHON=$(python3 -c 'import sys; print(sys.executable)')
+office_python_env
 if [ "$(uname)" = Darwin ]; then
   mkdir -p "$(dirname "$PLIST")"
   cat > "$PLIST" <<EOF
@@ -39,7 +40,7 @@ if [ "$(uname)" = Darwin ]; then
 <dict>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
-  <array><string>$PYTHON</string><string>$ROOT/server/server.py</string><string>$PORT</string></array>
+  <array><string>$OFFICE_PYTHON</string><string>$ROOT/server/server.py</string><string>$PORT</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardErrorPath</key><string>$DATA/server.log</string>

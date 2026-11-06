@@ -24,8 +24,18 @@ update() {
     echo "The build failed, so the server wasn't restarted. This checkout now has the new code with the old interface, so fix the build and run this again." >&2
     exit 1
   }
+  . "$ROOT/scripts/python-env.sh"
+  office_python_env
   if [ "$(uname)" = Darwin ]; then
-    launchctl kickstart -k "gui/$(id -u)/$LABEL"
+    PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+    if [ "$(plutil -extract ProgramArguments.0 raw "$PLIST")" != "$OFFICE_PYTHON" ]; then
+      # A new Python only takes effect once launchd reloads the job.
+      plutil -replace ProgramArguments.0 -string "$OFFICE_PYTHON" "$PLIST"
+      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$PLIST"
+    else
+      launchctl kickstart -k "gui/$(id -u)/$LABEL"
+    fi
     echo "Agent Office is updated and restarted."
   else
     echo "Agent Office is updated. Restart the server to use it."
