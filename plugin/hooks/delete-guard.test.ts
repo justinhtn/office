@@ -290,6 +290,11 @@ const REFUSED: [string, string][] = [
   ['git clone --config', "git clone --config core.sshCommand='rm -rf ~/.claude #' git@github.com:a/b"],
   ['git clone -u', "git clone --no-local -u 'rm -rf ~/.claude;' /tmp/repo x"],
   ['gh repo clone passing flags to git', "gh repo clone a/b -- --config core.sshCommand='rm -rf ~/.claude #'"],
+  ['a variable program after an assignment with an escaped blank', 'x=a\\ b $y -rf ~/.claude'],
+  ['a variable program after an assignment from backticks', 'x=`echo a b` $y -rf ~/.claude'],
+  ['a variable program after an assignment with a blank in ${}', 'x=${a:-b c} $y -rf ~/.claude'],
+  ['a variable program after an assignment with an escaped quote', 'x="a\\"b c" $y -rf ~/.claude'],
+  ['a delete hidden in a grep pattern that is then run', "grep -E 'x' f; sh -c 'rm -rf ~/.claude'"],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
@@ -364,6 +369,11 @@ const ALLOWED: [string, string][] = [
   ['three assignments before python', 'a=1 b=2 c=3 python3 -m unittest -f'],
   ['repeat before make', 'repeat 3 make -f Makefile'],
   ['repeat before curl', 'repeat 3 curl -fsSL https://x/y'],
+  ['a read-only search with patterns', 'cd /Users/houghton/code/agent-office && sed -n 160,200p server/server.py | grep -n -E "def |path|route|/sign|href|location" ; grep -n -E "\\"/(sign|face|passkey)[^\\"]*\\"" server/server.py | head -12'],
+  ['a grep pattern naming rm', `grep -rn -e 'rm -rf "$D"' -e '-delete' plugin`],
+  ['a review comment about deletes', `~/.agent-office/quinn/quinn-gh api repos/a/b/pulls/30/comments -f body='Blocking: rm -rf ~/.claude/projects/"$D" still passes, and so does find ~/.claude -delete.'`],
+  ['a review comment from a heredoc', `~/.agent-office/quinn/quinn-gh pr comment 30 --body-file - <<'EOF'\nThe guard refuses rm -rf "$D" and x=1 $y -rf ~/.claude.\nEOF`],
+  ['a commit message with patterns and pipes', `git commit -m "Refuse rm -rf /tmp/*|x and \\$(printf rm) -r"`],
   ['a case arm with several patterns', 'case $f in *.txt|*.log) echo hi;; esac'],
   ['a case arm with several patterns and a flag', 'case $f in *.txt|*.log) ls -f;; esac'],
   ['an assignment before npm test', 'NODE_ENV=test npm test'],

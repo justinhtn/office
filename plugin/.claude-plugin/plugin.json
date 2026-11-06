@@ -1,6 +1,6 @@
 {
   "name": "agent-office",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Feeds your Claude Code sessions to the local Agent Office workspace",
   "license": "MIT"
 }

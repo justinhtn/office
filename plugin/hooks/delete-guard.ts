@@ -386,9 +386,68 @@ const withoutQuotes = (command: string) => command.replace(/\\\n|['"\\]/g, '')
 const withQuotedWordsJoined = (command: string) =>
   withoutQuotes(command.replace(/(["'])(.*?)\1/gs, (_, quote: string, inner: string) => quote + inner.replace(/[\s;&|()<>]/g, '_') + quote))
 
+// Read as text, which is the fallback when the reader can't split a command.
+const textMentionsDelete = (command: string) =>
+  command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)) || MENTIONS_DELETE.test(withQuotedWordsJoined(command))
+
+// Programs that can run text they're given, so their whole command is read as text.
+const RUNS_TEXT = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish|eval|source|\.|trap|exec|env|sudo|doas|su|ssh|xargs|parallel|watch|script|flock|timeout|nice|nohup|time|command|builtin|stdbuf|ionice|caffeinate|arch|noglob|nocorrect|-|coproc|repeat|case|select|alias|python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|osascript|awk|gawk|mawk|nawk|docker|podman|kubectl)$/
+// Keywords that come before the program without being one.
+const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
+const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmtree', '-delete', '--delete', '--recursive'])
+// Flags of these that make them run text.
+const GIT_RUNS_TEXT = /^(-c|--config.*|-u|config|submodule|bisect|rebase|filter-branch|difftool|clone)$/
+
+// find deletes through -delete or a program it runs, and a substitution or a variable among its predicates could supply either.
+function findMayDelete(args: Word[]) {
+  let hasPredicates = false
+  for (const [k, arg] of args.entries()) {
+    if (/^-(delete|exec|execdir|ok|okdir)$/.test(arg.text) || /\$\(|`/.test(arg.text)) return true
+    if (arg.isDynamic && hasPredicates && !FIND_VALUES.test(args[k - 1]?.text ?? '')) return true
+    if (arg.text.startsWith('-')) hasPredicates = true
+  }
+
+  return false
+}
+
+function wordsMentionDelete(words: Word[], command: string) {
+  let at = 0
+  while (at < words.length && (ASSIGNMENT.test(words[at].text) || BEFORE_PROGRAM.has(words[at].text))) at++
+  if (words[at]?.text === 'function') at += 2
+  while (at < words.length && BEFORE_PROGRAM.has(words[at].text)) at++
+  const program = words[at]
+  if (!program) return false
+  const args = words.slice(at + 1)
+  const name = nameOf(program).replace(/^=/, '')
+  if (RUNS_TEXT.test(name)) return textMentionsDelete(command)
+  if (/^g?rm$|^unlink$/.test(name)) return true
+  if (/^g?find$/.test(name)) return findMayDelete(args)
+  // A program named by a variable or pattern could be rm. A pattern with no arguments is a case label.
+  if (program.isDynamic && args.some(arg => /^-[A-Za-z]*[rRf]|^--rec/.test(arg.text))) return true
+  if (program.globAt >= 0 && program.text !== '[' && (args.length > 0 || /[{/]/.test(program.text))) return true
+  if (args.some(arg => DELETE_WORDS.has(arg.text))) return true
+  const runsText =
+    args.some(arg => RUNS_A_PROGRAM.test(arg.text)) ||
+    (name === 'git' && args.some(arg => GIT_RUNS_TEXT.test(arg.text))) ||
+    (name === 'gh' && args.some(arg => arg.text === '--')) ||
+    (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text)))
+
+  return runsText && textMentionsDelete(command)
+}
+
 // True if a command might delete something, which is what puts it under this check at all.
-export const mentionsDelete = (command: unknown) =>
-  typeof command === 'string' && (command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)) || MENTIONS_DELETE.test(withQuotedWordsJoined(command)))
+// Quoted text, heredoc bodies and patterns are arguments, so they count only where a program can run them.
+export function mentionsDelete(command: unknown) {
+  if (typeof command !== 'string') return false
+  let commands: Word[][]
+  try {
+    commands = lex(command)
+  } catch {
+    return textMentionsDelete(command)
+  }
+
+  return commands.some(words => wordsMentionDelete(words, command))
+}
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
