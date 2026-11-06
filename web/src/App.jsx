@@ -6,8 +6,9 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace, MessagesSquare,
 } from 'lucide-react'
+import AskMia from './AskMia.jsx'
 import { canSetUpFaceId, faceIdOptions, setUpFaceId } from './faceId.js'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { PHONE_SIZE, isTouchDevice } from './device.js'
@@ -323,7 +324,7 @@ function Newsroom({ day, onClose }) {
   )
 }
 
-function TeamMenu({ focus, mapHost, onPlace, onNews, children }) {
+function TeamMenu({ focus, mapHost, onPlace, onNews, onMia, children }) {
   return (
     <nav className="team-menu team-list" aria-label="Go to a team">
       {children}
@@ -333,6 +334,7 @@ function TeamMenu({ focus, mapHost, onPlace, onNews, children }) {
       </button>
       <div className="map-host" ref={mapHost} />
       <button className="team-button" onClick={onNews}><span className="place-icon"><Newspaper size={17} /></span><b>Today's reading</b></button>
+      {onMia && <button className="team-button" onClick={onMia}><span className="place-icon"><MessagesSquare size={17} /></span><b>Ask Mia</b></button>}
     </nav>
   )
 }
@@ -1388,6 +1390,8 @@ export default function App() {
   const [voiceMode, setVoiceMode] = useState(false)
   const [awayMode, setAwayMode] = useState(false)
   const [shutDown, setShutDown] = useState(false)
+  const [canAskMia, setCanAskMia] = useState(false)
+  const [isMiaOpen, setIsMiaOpen] = useState(false)
   function toggleShutDown() {
     const on = !shutDown
     setShutDown(on)
@@ -1404,7 +1408,7 @@ export default function App() {
   }
   // Step away and the view settles on your desk, where anyone who needs you waits.
   useEffect(() => {
-    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)) }, () => {})
+    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)); setCanAskMia(Boolean(data.miaChat)) }, () => {})
     poll()
     const timer = setInterval(poll, PRESENCE_CHECK_MS)
 
@@ -1594,13 +1598,14 @@ export default function App() {
             ))}
           </div>
         )}
+        {isPhone && canAskMia && <button className="icon mia-button" aria-label="Ask Mia" title="Ask Mia" onClick={() => { setIsPanelOpen(false); setIsMiaOpen(true) }}><MessagesSquare size={18} /></button>}
         {isPhone && <button className={`icon panel-button ${isPanelOpen ? 'on' : ''}`} aria-label={isPanelOpen ? 'Hide the team list' : 'Show the team list'} aria-expanded={isPanelOpen} title={isPanelOpen ? 'Hide the team list' : 'Show the team list'} onClick={() => setIsPanelOpen(open => !open)}>{isPanelOpen ? <X size={18} /> : <Menu size={18} />}</button>}
         {drag && createPortal(<div className="drag-chip" style={{ left: drag.x, top: drag.y }}>{drag.name}</div>, document.body)}
         {!isSplit && personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
         <div className="corner">
           {isNewsOpen && newsDay && <Drawer onClose={() => setIsNewsOpen(false)}><Newsroom day={newsDay} onClose={() => setIsNewsOpen(false)} /></Drawer>}
-          <TeamMenu onNews={() => setIsNewsOpen(true)} focus={focus} mapHost={mapHost} onPlace={goToPlace}>
+          <TeamMenu onNews={() => setIsNewsOpen(true)} onMia={canAskMia ? () => { setIsPanelOpen(false); setIsMiaOpen(true) } : null} focus={focus} mapHost={mapHost} onPlace={goToPlace}>
             {!person && !shutDown && place === 'office' && (
               <ListSection icon={Building2} title="Your office" label="Your office" onClose={() => goToPlace(null)}>
                 <div className="section-actions"><button className="section-action" onClick={() => setIsDetailOpen(true)}><Gauge size={13} /> Usage</button></div>
@@ -1641,6 +1646,7 @@ export default function App() {
       </footer>
 
       {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
+      {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={32} /> : null} onClose={() => setIsMiaOpen(false)} />}
       {isPaletteOpen && (
         <Palette
           everyone={cast}

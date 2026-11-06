@@ -57,7 +57,8 @@ class Chat(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     def test_her_tools_are_limited_on_the_command_line(self):
         command = server.chat_command("abc", False)
-        self.assertEqual(command[command.index("--tools") + 1], "")
+        # SendMessage is only there so the plugin can send an approved note. She isn't allowed to call it.
+        self.assertEqual(command[command.index("--tools") + 1], "ToolSearch,SendMessage")
         self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
         self.assertEqual(command[command.index("--allowedTools") + 1].split(","), server.CHAT_TOOLS)
         self.assertIn("--strict-mcp-config", command)

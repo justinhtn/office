@@ -435,11 +435,14 @@ def telegram_command(session):
 
 
 def chat_command(session, is_new):
-    """Her tools are limited here, by the engine and not only by her prompt: no built-in tools, no MCP servers, and only CHAT_TOOLS allowed."""
+    """Her tools are limited here, by the engine and not only by her prompt: no built-in tools that act, no MCP servers, and only CHAT_TOOLS allowed."""
     claude = [
         "env", "AGENT_OFFICE_MIA_CHAT=1", f"AGENT_OFFICE_HOME={DATA}",
         "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-chrome",
-        "--strict-mcp-config", "--tools", "", "--permission-mode", "dontAsk", "--allowedTools", ",".join(CHAT_TOOLS),
+        # An empty list would drop the plugin's tools too. ToolSearch only loads tool definitions. SendMessage has to be present for the
+        # plugin to send an approved note, but she can't call it: it isn't allowed here, the plugin denies it at the front desk, and refuses
+        # any send the model starts.
+        "--strict-mcp-config", "--tools", "ToolSearch,SendMessage", "--permission-mode", "dontAsk", "--allowedTools", ",".join(CHAT_TOOLS),
         "--append-system-prompt", CHAT_NOTE, "--session-id" if is_new else "--resume", session,
     ]
     # Only for trying a change to the plugin: the copy loads it from this folder in place of the installed one.
@@ -1928,7 +1931,7 @@ class Handler(BaseHTTPRequestHandler):
                 idle = seconds_idle()
                 away_mode = read_json(AWAY_MODE, {}).get("isOn") is True
                 shut_down = read_json(SHUT_DOWN, {}).get("isOn") is True
-                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on()})
+                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on(), "miaChat": chat_is_wanted()})
             elif url.path == "/api/presentation":
                 self.reply(200, presentation(json.loads(PRESENTATION_DEMO.read_text())))
             elif url.path == "/api/usage":
