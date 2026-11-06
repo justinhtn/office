@@ -376,9 +376,73 @@ const ALLOWED: [string, string][] = [
   ['repeat before curl', 'repeat 3 curl -fsSL https://x/y'],
   ['a read-only search with patterns', 'cd /Users/houghton/code/agent-office && sed -n 160,200p server/server.py | grep -n -E "def |path|route|/sign|href|location" ; grep -n -E "\\"/(sign|face|passkey)[^\\"]*\\"" server/server.py | head -12'],
   ['a grep pattern naming rm', `grep -rn -e 'rm -rf "$D"' -e '-delete' plugin`],
+  ['the review post that was refused, with its words', `cd /Users/houghton/code/agent-office/.claude/worktrees/quinn-desk-c1a072 && cat > /private/tmp/claude-501/-Users-houghton-code-agent-office--claude-worktrees-quinn-desk-c1a072/81ff4308-59db-424c-9ed2-b94a95942d9a/scratchpad/review35.json <<'EOF'
+{
+  "commit_id": "ec8c40b3b5819fb6dacd3f76abe0c7108b3feb84",
+  "event": "COMMENT",
+  "body": "<BODY 1: verdict summary> It refuses rm -rf and removes Face ID; set -e stays.",
+  "comments": [
+    {"path": "web/src/App.jsx", "line": 1118, "side": "RIGHT", "body": "<BODY 2: blocking finding> Remove the stale check."},
+    {"path": "scripts/update.sh", "line": 38, "side": "RIGHT", "body": "<BODY 3: non-blocking finding>"}
+  ]
+}
+EOF
+~/.agent-office/quinn/quinn-gh api -X POST repos/justinhtn/office/pulls/35/reviews --input /private/tmp/claude-501/-Users-houghton-code-agent-office--claude-worktrees-quinn-desk-c1a072/81ff4308-59db-424c-9ed2-b94a95942d9a/scratchpad/review35.json --jq '.html_url'`],
   ['a review comment about deletes', `~/.agent-office/quinn/quinn-gh api repos/a/b/pulls/30/comments -f body='Blocking: rm -rf ~/.claude/projects/"$D" still passes, and so does find ~/.claude -delete.'`],
   ['a review comment from a heredoc', `~/.agent-office/quinn/quinn-gh pr comment 30 --body-file - <<'EOF'\nThe guard refuses rm -rf "$D" and x=1 $y -rf ~/.claude.\nEOF`],
   ['a commit message with patterns and pipes', `git commit -m "Refuse rm -rf /tmp/*|x and \\$(printf rm) -r"`],
+  ['the python edit that was refused', `cd /Users/houghton/code/agent-office/.claude/worktrees/phone-split && python3 - <<'EOF'
+def edit(p,pairs):
+    s=open(p).read()
+    for old,new in pairs:
+        assert s.count(old)==1,(p,old)
+        s=s.replace(old,new)
+    open(p,'w').write(s)
+edit('web/src/savedView.js',[
+("// The split view, and which team is in each pane, are kept per device.\\n","// The split view, and which team is in each pane, are kept per device.\\n// isOn is null until the person turns split view on or off there, so the device's default applies until then.\\n// Layouts saved before that was recorded only hold the default, so they count as no choice.\\n"),
+("    const isValid = layout && typeof layout.isOn === 'boolean' && (layout.panes === null","    const isValid = layout && (layout.panes === null"),
+("    return isValid ? { isOn: layout.isOn, panes: layout.panes } : null","    return isValid ? { isOn: layout.choice === 'on' ? true : layout.choice === 'off' ? false : null, panes: layout.panes } : null"),
+("    localStorage.setItem(SPLIT_SETTING, JSON.stringify(layout))","    localStorage.setItem(SPLIT_SETTING, JSON.stringify({ choice: layout.isOn === null ? null : layout.isOn ? 'on' : 'off', panes: layout.panes }))"),
+])
+edit('web/src/split.test.js',[
+("""  assert.deepEqual(parseSplitLayout('{"isOn":true,"panes":["a",null,"b",null]}'), { isOn: true, panes: ['a', null, 'b', null] })
+  assert.deepEqual(parseSplitLayout('{"isOn":false,"panes":null}'), { isOn: false, panes: null })
+  assert.equal(parseSplitLayout('{"isOn":true,"panes":["a"]}'), null)
+  assert.equal(parseSplitLayout('{"isOn":"yes","panes":null}'), null)
+  assert.equal(parseSplitLayout('{"isOn":true,"panes":[1,2,3,4]}'), null)""","""  assert.deepEqual(parseSplitLayout('{"choice":"on","panes":["a",null,"b",null]}'), { isOn: true, panes: ['a', null, 'b', null] })
+  assert.deepEqual(parseSplitLayout('{"choice":"off","panes":null}'), { isOn: false, panes: null })
+  assert.deepEqual(parseSplitLayout('{"choice":null,"panes":null}'), { isOn: null, panes: null })
+  assert.equal(parseSplitLayout('{"choice":"on","panes":["a"]}'), null)
+  assert.equal(parseSplitLayout('{"choice":"on","panes":[1,2,3,4]}'), null)"""),
+("test('a saved layout must be four team keys or empty panes', () => {","""test('a layout saved before choices were recorded keeps its panes but not its on or off', () => {
+  assert.deepEqual(parseSplitLayout('{"isOn":false,"panes":["a",null,null,null]}'), { isOn: null, panes: ['a', null, null, null] })
+  assert.deepEqual(parseSplitLayout('{"isOn":true,"panes":null}'), { isOn: null, panes: null })
+})
+
+test('a saved layout must be four team keys or empty panes', () => {"""),
+])
+edit('web/src/App.jsx',[
+("""  // An iPad opens in split view until the person turns it off there.
+  // Touch screens, the iPad and the phone, open in split view until the person turns it off there.
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: isTouchDevice, panes: null })
+  useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
+  const isSplit = splitLayout.isOn && !isShowing && active.length > 0""","""  // Touch screens, the iPad and the phone, open in split view until the person turns it off there.
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: null, panes: null })
+  useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
+  const isSplitOn = splitLayout.isOn ?? isTouchDevice
+  const isSplit = isSplitOn && !isShowing && active.length > 0"""),
+("  const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))","  const toggleSplit = () => setSplitLayout(layout => ({ isOn: !isSplitOn, panes: layout.panes ?? firstPanes(teams) }))"),
+("  // Picking someone shows their card, which lives in the panel.\\n  useEffect(() => { if (isPhone && selected) setIsPanelOpen(true) }, [isPhone, selected])\\n",""),
+("""    setIsPresenting(false)
+    const target = everyone.find(other => other.id === id)
+    setSelected(id)""","""    setIsPresenting(false)
+    const target = everyone.find(other => other.id === id)
+    // On a phone their card lives in the folded panel, so every pick opens it, even of the person already picked.
+    if (isPhone) setIsPanelOpen(true)
+    setSelected(id)"""),
+])
+EOF
+grep -n "isOn" web/src/App.jsx | sed -n '1,40p' | grep -iv "voice\\|isOn &&\\|!isOn\\|useVoices\\|isOn, \\|isOn)\\|speech\\|api(" | cut -c1-200; node --test web/src/*.test.js 2>&1 | grep -E "^# (pass|fail)"`],
   ['a python edit that names rm in its text', `python3 - <<'EOF'\nfrom pathlib import Path\np = Path('plugin/hooks/x.ts')\ns = p.read_text().replace("rm -rf build", "rm -rf /tmp/x/build")\np.write_text(s)  # no rm here, only text\nEOF`],
   ['a python one-liner that prints rm', `python3 -c "print('rm -rf is refused')"`],
   ['node reading a file that names rm', `node -e "console.log(require('fs').readFileSync('notes.txt', 'utf8').includes('rm -rf'))"`],
