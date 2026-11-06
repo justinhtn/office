@@ -54,6 +54,7 @@ function Note({ note, onDecide }) {
         {note.status === 'draft'
           ? (
             <span className="note-actions">
+              <time>{timeOf(note.at)}</time>
               <button disabled={isDeciding} onClick={() => decide(false)}>Cancel</button>
               <button className="note-send" disabled={isDeciding} onClick={() => decide(true)}>Send</button>
             </span>

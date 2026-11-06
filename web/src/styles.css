@@ -535,7 +535,8 @@ p.bubble-text::after, .markdown > :last-child::after { content: ''; display: inl
 .note-foot.failed small { color: var(--danger); }
 .note-foot time { position: static; }
 .chat-bubble.note p.bubble-text::after { content: none; }
-.note-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.note-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.note-actions time { margin-right: 4px; }
 .note-actions button { min-height: 36px; padding: 0 14px; border-radius: 999px; font-weight: 600; }
 .note-actions button:first-child { color: var(--bubble-meta); }
 .note-send { background: var(--accent); color: var(--on-accent); }
