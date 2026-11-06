@@ -1,7 +1,7 @@
 // A timeline of how the office starts and runs on this device, sent to the Mac in small batches so a slow phone, or one that
 // crashed and reloaded, can be read there with scripts/client-log.py. Times are milliseconds since the page's navigation began.
 // Only names of steps, times, sizes and counts are kept: never what anyone wrote, and never a link's query or the token.
-import { beat, settle } from './runs.js'
+import { beat, mayBeat, settle } from './runs.js'
 
 const SEND_MS = 5000
 const BEAT_MS = 3000
@@ -144,17 +144,20 @@ function findUncleanEnds() {
 
 function keepBeating() {
   if (!run || run.isEnded) return
-  run = beat(run, Date.now(), kept, LAST_EVENTS)
-  const store = readRuns()
-  store[run.id] = run
-  writeRuns(store)
+  store(beat(run, Date.now(), kept, LAST_EVENTS))
 }
 
 function endRun(isEnded) {
-  run = { ...beat(run, Date.now(), kept, LAST_EVENTS), isEnded }
-  const store = readRuns()
-  store[run.id] = run
-  writeRuns(store)
+  store({ ...beat(run, Date.now(), kept, LAST_EVENTS), isEnded })
+}
+
+function store(next) {
+  run = next
+  const runs = readRuns()
+  // Another page already reported this one as gone while it was suspended, so it isn't stored to be reported twice.
+  if (!mayBeat(runs, run.id)) return
+  runs[run.id] = run
+  writeRuns(runs)
 }
 
 function watchPage() {
@@ -184,7 +187,7 @@ function watchPage() {
   if ('PerformanceObserver' in window && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
     new PerformanceObserver(list => list.getEntries().forEach(entry => {
       if (entry.duration < LONG_TASK_MS) return
-      mark('longtask', { ms: Math.round(entry.duration), at: Math.round(entry.startTime) })
+      mark('longtask', { ms: Math.round(entry.duration), startMs: Math.round(entry.startTime) })
     })).observe({ type: 'longtask', buffered: true })
   }
 }
@@ -240,7 +243,8 @@ async function send(isLeaving) {
   if (!queue.length || !token) return
   const batch = queue.slice(0, MAX_BATCH)
   queue = queue.slice(batch.length)
-  const body = JSON.stringify({ token, run: run.id, dropped, events: batch })
+  const sentDropped = dropped
+  const body = JSON.stringify({ token, run: run.id, dropped: sentDropped, events: batch })
   dropped = 0
   // The token goes in the body because a beacon can't carry headers, and the text type keeps the beacon a simple request.
   if (isLeaving && navigator.sendBeacon?.('/api/client-log', new Blob([body], { type: 'text/plain' }))) return
@@ -250,5 +254,6 @@ async function send(isLeaving) {
   } catch {
     // Kept for the next try, oldest first, so a dropped connection loses nothing.
     queue = [...batch, ...queue].slice(-MAX_QUEUE)
+    dropped += sentDropped
   }
 }

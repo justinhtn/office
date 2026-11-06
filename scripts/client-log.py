@@ -75,7 +75,7 @@ def fields(line):
 
 
 def unclean_text(line):
-    where = "in the background" if line.get("wasHidden") else "while on screen"
+    where = "in the background (iOS may only have put it away)" if line.get("wasHidden") else "while on screen"
     tab = ", then this same tab loaded again" if line.get("sameTab") else ""
 
     return (f"the run before, {line.get('previousRun')}, ended without a goodbye {where}{tab}. "
@@ -103,7 +103,7 @@ def flag(line, gap, slow_ms):
 def ending(lines, reported):
     leaving = [line["kind"] for line in lines if line["kind"] in ("pagehide", "pageshow")]
     if reported:
-        where = "in the background" if reported.get("wasHidden") else "while on screen"
+        where = "in the background (iOS may only have put it away)" if reported.get("wasHidden") else "while on screen"
         tab = ", and the same tab loaded again" if reported.get("sameTab") else ""
         return f"ENDED WITHOUT A GOODBYE {where}{tab}: silent for {duration(reported.get('silentMs', 0))} before the next run noticed"
     # A page restored from the back-forward cache comes back after its goodbye.

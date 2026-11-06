@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { KEEP_RUNS, STALE_MS, beat, settle } from './runs.js'
+import { KEEP_RUNS, STALE_MS, beat, mayBeat, settle } from './runs.js'
 
 const NOW = 1_000_000
 const run = (id, extra = {}) => ({ id, startedAt: NOW - 60000, beatAt: NOW - 1000, isHidden: false, isEnded: false, events: [], ...extra })
@@ -23,6 +23,28 @@ test('a run that stopped beating without a goodbye is reported once, with its la
   assert.equal(end.wasHidden, false)
   assert.deepEqual(end.lastEvents, events)
   assert.deepEqual(settle(first.store, run('newer'), NOW + 5000).unclean, [])
+})
+
+test('this tab\'s last run loading again without a goodbye is reported at once, however recently it beat', () => {
+  const { unclean } = settle({ crashed: run('crashed', { beatAt: NOW - 1500 }) }, current, NOW, 'crashed')
+  assert.equal(unclean.length, 1)
+  assert.equal(unclean[0].sameTab, true)
+})
+
+test('a suspended background tab reported as gone, waking up later, is not stored or reported again', () => {
+  const { store } = settle({ asleep: run('asleep', { beatAt: 0, isHidden: true }) }, current, NOW)
+  assert.equal(mayBeat(store, 'asleep'), false)
+  assert.equal(mayBeat(store, 'new'), true)
+  assert.ok(!settle(store, run('later'), NOW + 60000).unclean.some(end => end.previousRun === 'asleep'))
+})
+
+test('a crash loop never nests one report\'s last events inside the next', () => {
+  const report = { t: 5, kind: 'run.unclean', previousRun: 'a', lastEvents: [{ t: 1, kind: 'fps' }] }
+  const crashed = beat(run('b'), NOW - STALE_MS - 1, [report, { t: 9, kind: 'stall' }], 25)
+  assert.equal('lastEvents' in crashed.events[0], false)
+  const { unclean } = settle({ b: crashed }, current, NOW)
+  assert.deepEqual(unclean[0].lastEvents.map(event => event.kind), ['run.unclean', 'stall'])
+  assert.equal('lastEvents' in unclean[0].lastEvents[0], false)
 })
 
 test('the same tab loading again after a silent end is told apart, and so is a tab that was in the background', () => {

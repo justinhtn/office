@@ -3,19 +3,23 @@
 
 // A live page beats every few seconds, so one this quiet has stopped. Another tab of the office, still open, keeps beating.
 export const STALE_MS = 15000
-// Enough to tell a few tabs apart, small enough that storage stays tiny.
-export const KEEP_RUNS = 4
+// Enough to tell a few tabs apart, and to remember the runs already reported, small enough that storage stays tiny.
+export const KEEP_RUNS = 8
 
-// Settles the stored runs as a new one starts: the ones that ended without a goodbye are reported and forgotten,
+// Settles the stored runs as a new one starts: the ones that ended without a goodbye are reported, and remembered as reported,
 // the ones that ended well are forgotten, and live ones in other tabs are kept.
 export function settle(store, current, now, tabRunId = null) {
   const kept = {}
   const unclean = []
   Object.values(isObject(store) ? store : {}).forEach(run => {
     if (!isObject(run) || typeof run.id !== 'string' || run.id === current.id) return
+    if (run.isReported) { kept[run.id] = run; return }
     if (run.isEnded) return
-    if (!(now - Number(run.beatAt || 0) < STALE_MS)) {
+    // A tab holds one page at a time, so this tab's last run, loading again without a goodbye, has ended however recently it beat.
+    if (run.id === tabRunId || !(now - Number(run.beatAt || 0) < STALE_MS)) {
       unclean.push(uncleanEnd(run, now, tabRunId))
+      // So a background tab that wakes up later isn't reported again: its heartbeat isn't kept any more.
+      kept[run.id] = { id: run.id, isReported: true, beatAt: now }
       return
     }
     kept[run.id] = run
@@ -24,6 +28,9 @@ export function settle(store, current, now, tabRunId = null) {
 
   return { store: newest(kept), unclean: unclean.sort((a, b) => a.startedAt - b.startedAt) }
 }
+
+// Whether this run's heartbeat should still be stored. A run another page already reported as gone stays reported.
+export const mayBeat = (store, id) => !(isObject(store) && isObject(store[id]) && store[id].isReported)
 
 // What the next run says about one that ended without a goodbye.
 export function uncleanEnd(run, now, tabRunId = null) {
@@ -38,13 +45,21 @@ export function uncleanEnd(run, now, tabRunId = null) {
     wasHidden: Boolean(run.isHidden),
     // The same tab loading again is the reload iOS does after a crash.
     sameTab: Boolean(tabRunId && tabRunId === run.id),
-    lastEvents: Array.isArray(run.events) ? run.events : [],
+    lastEvents: Array.isArray(run.events) ? run.events.map(withoutNesting) : [],
   }
 }
 
 // The run with a new heartbeat, and only its latest events, since that's all the next run needs to tell what happened.
 export function beat(run, now, events, keep) {
-  return { ...run, beatAt: now, events: events.slice(-keep) }
+  return { ...run, beatAt: now, events: events.slice(-keep).map(withoutNesting) }
+}
+
+// A report of an earlier crash carries that run's last events, which mustn't nest again in every later report of a crash loop.
+function withoutNesting(event) {
+  if (!isObject(event) || !('lastEvents' in event)) return event
+  const { lastEvents, ...rest } = event
+
+  return rest
 }
 
 function newest(runs) {
