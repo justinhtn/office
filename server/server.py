@@ -72,6 +72,9 @@ NOTEBOOK = DATA / "notebook"
 NOTEBOOK_INDEX = NOTEBOOK / "index.json"
 NOTEBOOK_EVERY_S = 60
 TEAMS = DATA / "teams.json"
+LAYOUT = DATA / "layout.json"
+LAYOUT_MAX_KEYS = 300
+LAYOUT_LOCK = threading.Lock()
 PRESENTATION_DEMO = Path(__file__).resolve().parent / "fixtures" / "presentation-demo.json"
 NO_PROJECT = {"No folder", "Other", "", "front-desk"}
 TEAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$")
@@ -319,6 +322,88 @@ def write_json(path, value):
     temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(json.dumps(value))
     temporary.replace(path)
+
+
+def layout_key(value):
+    if not isinstance(value, str) or not 0 < len(value) <= 200:
+        raise ValueError("A room or seat name isn't valid.")
+    return value
+
+
+def clean_layout(value):
+    """The order of the office's rooms, and of the desks in each, as the page sends it."""
+    if not isinstance(value, dict) or not isinstance(value.get("slots"), list) or not isinstance(value.get("seats", {}), dict):
+        raise ValueError("That layout isn't valid.")
+    seats = value.get("seats", {})
+    if len(value["slots"]) > LAYOUT_MAX_KEYS or len(seats) > LAYOUT_MAX_KEYS:
+        raise ValueError("That layout is too big.")
+    for ids in seats.values():
+        if not isinstance(ids, list) or len(ids) > LAYOUT_MAX_KEYS:
+            raise ValueError("That layout isn't valid.")
+    return {
+        "slots": [layout_key(key) for key in value["slots"]],
+        "seats": {layout_key(key): [layout_key(one) for one in ids] for key, ids in seats.items()},
+    }
+
+
+def office_layout():
+    """The layout every device shares, or None before any device has saved one."""
+    stored = read_json(LAYOUT, None)
+    try:
+        return clean_layout(stored)
+    except ValueError:
+        return None
+
+
+def layout_seed_wanted():
+    """Whether a phone or iPad seeded the layout before the Mac did, so the Mac's own older layout should replace it."""
+    stored = read_json(LAYOUT, None)
+    return isinstance(stored, dict) and stored.get("isProvisional") is True
+
+
+def closed_rooms():
+    """Teams whose rooms the person closed, with when. The page brings one back once someone in it works again."""
+    closed = read_json(LAYOUT, {})
+    closed = closed.get("closed") if isinstance(closed, dict) else None
+    if not isinstance(closed, dict):
+        return {}
+    return {key: when for key, when in closed.items() if isinstance(key, str) and isinstance(when, str)}
+
+
+def close_room(team_id, people, is_closed):
+    """Closes or reopens a team's room. This only hides it in the office: no session is archived, stopped or deleted."""
+    teams = {person.get("teamId") for person in people if person.get("teamId")}
+    # Right after a restart nobody is known yet, so nothing can be checked or pruned.
+    if is_closed and not teams:
+        raise ValueError("The office is still starting. Try again in a moment.")
+    if is_closed and (team_id not in teams or team_id.startswith("solo:")):
+        raise ValueError("There's no team room by that name.")
+    with LAYOUT_LOCK:
+        stored = read_json(LAYOUT, {})
+        stored = stored if isinstance(stored, dict) else {}
+        # Teams that have gone, archived perhaps, are dropped while here.
+        closed = {key: when for key, when in closed_rooms().items() if (key in teams or not teams) and key != team_id}
+        if is_closed:
+            closed[team_id] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        write_json(LAYOUT, {**stored, "closed": closed})
+    return closed
+
+
+def save_layout(value, is_seed, from_mac):
+    """Stores the layout and returns what is now stored.
+
+    A seed is a browser's own older layout, sent when the server has none. Only the first is kept, except that
+    the Mac's replaces one a phone or iPad seeded, so rooms go back where the Mac had them.
+    """
+    layout = clean_layout(value)
+    with LAYOUT_LOCK:
+        stored = read_json(LAYOUT, None)
+        is_provisional = isinstance(stored, dict) and stored.get("isProvisional") is True
+        current = office_layout()
+        if is_seed and current is not None and not (from_mac and is_provisional):
+            return current
+        write_json(LAYOUT, {**layout, "closed": closed_rooms(), "isProvisional": not from_mac and (current is None or is_provisional)})
+    return layout
 
 
 def is_front_desk(row):
@@ -2068,7 +2153,7 @@ class Handler(BaseHTTPRequestHandler):
             query = {key: values[0] for key, values in parse_qs(url.query).items()}
             session_id = query.get("id", "")
             if url.path == "/api/sessions":
-                self.reply(200, {**sessions(), "onScreen": sessions_on_screen()})
+                self.reply(200, {**sessions(), "onScreen": sessions_on_screen(), "layout": office_layout(), "layoutSeedWanted": layout_seed_wanted() and not self.from_signed_in_device(), "closedRooms": closed_rooms()})
             elif url.path == "/api/mia":
                 self.device_only()
                 self.reply(200, MIA_CHAT.view())
@@ -2120,7 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
+            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/layout", "/api/room/close", "/api/room/reopen", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -2172,6 +2257,22 @@ class Handler(BaseHTTPRequestHandler):
                 write_json(TEAMS, with_team_name(read_json(TEAMS, {}), people, team_id, name))
                 OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
+                return
+            if route == "/api/layout":
+                try:
+                    stored = save_layout(body.get("layout"), body.get("seed") is True, not self.from_signed_in_device())
+                except ValueError as problem:
+                    raise Refused(400, str(problem)) from None
+                self.reply(200, {"layout": stored})
+                return
+            if route in ("/api/room/close", "/api/room/reopen"):
+                with OFFICE.lock:
+                    people = list(OFFICE.snapshot.get("people", []))
+                try:
+                    closed = close_room(str(body.get("teamId", "")), people, route == "/api/room/close")
+                except ValueError as problem:
+                    raise Refused(400, str(problem)) from None
+                self.reply(200, {"closedRooms": closed})
                 return
             if route in APPROVAL_ROUTES:
                 try:
