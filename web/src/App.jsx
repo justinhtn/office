@@ -6,12 +6,12 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
-import { isTablet, isTouchDevice } from './device.js'
+import { PHONE_SIZE, isTouchDevice } from './device.js'
 import { readSplitLayout, writeSplitLayout } from './savedView.js'
-import { PANE_COUNT, clearPane, firstPanes, placeTeam, shownPanes, visibleSlots } from './split.js'
+import { PANE_COUNT, clearPane, firstPanes, nextFirstSlot, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import ReactMarkdown from 'react-markdown'
 
@@ -70,6 +70,7 @@ const DRAG_SLOP = 8
 // The browser's click after a drop would otherwise also open the team.
 const CLICK_AFTER_DRAG_MS = 400
 const SPARE_TEAMS = 6
+const PHONE_PANES = 2
 
 // A teammate walks the person through finished work, claim by claim. Marks come from the server's code checks.
 function Presentation({ person, everyone, onClose }) {
@@ -189,9 +190,10 @@ function Presentation({ person, everyone, onClose }) {
   )
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onPick, onSpace, onHome, children }) {
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onSwipe = null, onPick, onSpace, onHome, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null), panes = useRef(null)
-  const pick = useRef(onPick), space = useRef(onSpace)
+  const pick = useRef(onPick), space = useRef(onSpace), swipe = useRef(onSwipe)
+  swipe.current = onSwipe
   const [hasSavedView, setHasSavedView] = useState(false)
   const [isHandTool, setIsHandTool] = useState(false)
   const homeLabel = hasSavedView ? 'Back to your default view' : 'Back to the whole office'
@@ -215,7 +217,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
         const r = pane.getBoundingClientRect()
         return { x: Math.round(r.left - box.left), y: Math.round(r.top - box.top), w: Math.round(r.width), h: Math.round(r.height) }
       })
-      scene.current.setSplit({ keys: split, rects })
+      scene.current.setSplit({ keys: split, rects, onSwipe: onSwipe ? direction => swipe.current(direction) : null })
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -224,7 +226,7 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
     panes.current.querySelectorAll('.pane').forEach(pane => observer.observe(pane))
 
     return () => observer.disconnect()
-  }, [splitKeys])
+  }, [splitKeys, Boolean(onSwipe)])
   useEffect(() => {
     scene.current.update(people, selected, focus, speaker, usage)
   }, [people, selected, focus, speaker, usage])
@@ -1134,6 +1136,20 @@ function Away({ people, onPick, onClose }) {
   )
 }
 
+// Phones get two panes at a time and a folded side panel. Only touch screens, so a narrow Mac window keeps its mouse controls.
+function useIsPhone() {
+  const [isPhone, setIsPhone] = useState(() => isTouchDevice && window.matchMedia(PHONE_SIZE).matches)
+  useEffect(() => {
+    if (!isTouchDevice) return
+    const query = window.matchMedia(PHONE_SIZE), onChange = () => setIsPhone(query.matches)
+    query.addEventListener('change', onChange)
+
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  return isPhone
+}
+
 function teamStatus(team) {
   const { members } = team, working = members.filter(member => member.isRunning).length
   if (members.some(member => member.request)) return { text: 'Asking for you', tone: 'asks' }
@@ -1425,14 +1441,22 @@ export default function App() {
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
   // An iPad opens in split view until the person turns it off there.
-  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: isTablet, panes: null })
+  // Touch screens, the iPad and the phone, open in split view until the person turns it off there.
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: isTouchDevice, panes: null })
   useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
   const isSplit = splitLayout.isOn && !isShowing && active.length > 0
   const panes = splitLayout.panes ?? firstPanes(teams)
-  const slots = visibleSlots(PANE_COUNT)
+  const isPhone = useIsPhone()
+  const [isPanelOpen, setIsPanelOpen] = useState(false)
+  const [firstSlot, setFirstSlot] = useState(0)
+  const slots = isPhone ? visibleSlots(PHONE_PANES, firstSlot) : visibleSlots(PANE_COUNT)
+  const swipePanes = direction => setFirstSlot(first => nextFirstSlot(first, direction, PHONE_PANES))
   const setPanes = next => setSplitLayout(layout => ({ ...layout, panes: next }))
   const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))
-  const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => setPanes(placeTeam(panes, key, index)))
+  // On a phone the panel covers the panes, so it closes once a team is dropped.
+  const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => { setPanes(placeTeam(panes, key, index)); if (isPhone) setIsPanelOpen(false) })
+  // Picking someone shows their card, which lives in the panel.
+  useEffect(() => { if (isPhone && selected) setIsPanelOpen(true) }, [isPhone, selected])
 
   function goToPlace(key) {
     setIsPresenting(false)
@@ -1482,7 +1506,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${isShowing ? 'presenting' : ''}`}>
+    <div className={`app ${isShowing ? 'presenting' : ''} ${isPhone ? 'phone' : ''} ${isPanelOpen ? 'panel-open' : ''} ${drag ? 'dragging' : ''}`}>
 
       {((presenter && !isPresenting) || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
       <div className="needs" aria-label="Needs you">
@@ -1502,10 +1526,18 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => shownPanes(panes, teams)[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => shownPanes(panes, teams)[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
               <SplitPanes panes={panes} slots={slots} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
             </Room>
           : !problem && <Empty text="Waiting for session data…" />}
+        {isPhone && isSplit && (
+          <div className="pane-dots" role="group" aria-label="Which panes are showing">
+            {visibleSlots(PANE_COUNT).filter(index => index % PHONE_PANES === 0).map(index => (
+              <button key={index} className={index === firstSlot ? 'on' : ''} aria-label={`Panes ${index + 1} and ${index + 2}`} aria-pressed={index === firstSlot} onClick={() => setFirstSlot(index)}><i /></button>
+            ))}
+          </div>
+        )}
+        {isPhone && <button className={`icon panel-button ${isPanelOpen ? 'on' : ''}`} aria-label={isPanelOpen ? 'Hide the team list' : 'Show the team list'} aria-expanded={isPanelOpen} title={isPanelOpen ? 'Hide the team list' : 'Show the team list'} onClick={() => setIsPanelOpen(open => !open)}>{isPanelOpen ? <X size={18} /> : <Menu size={18} />}</button>}
         {drag && createPortal(<div className="drag-chip" style={{ left: drag.x, top: drag.y }}>{drag.name}</div>, document.body)}
         {!isSplit && personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
