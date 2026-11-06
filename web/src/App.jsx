@@ -16,7 +16,7 @@ import { PHONE_SIZE, isTouchDevice } from './device.js'
 import { readSplitLayout, writeSplitLayout } from './savedView.js'
 import { PANE_COUNT, clearPane, firstPanes, nextFirstSlot, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
-import { ACTIVE_DAYS, hasRoom, onFloor } from './officeLayout.js'
+import { ACTIVE_DAYS, closedRooms, hasRoom, onFloor } from './officeLayout.js'
 import ReactMarkdown from 'react-markdown'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -369,6 +369,27 @@ function ListSection({ icon: Icon, title, label, className = '', onClose, childr
 
 function TeamName({ person }) {
   return <EditableText key={person.teamId} value={person.teamName} label="team name" className="team-rename" onSave={name => api('/api/team-name', { teamId: person.teamId, name })} />
+}
+
+// Closing a room only hides it in the office. Its sessions carry on, and it comes back when someone in it works again.
+function CloseRoom({ person, onClosed }) {
+  const [problem, setProblem] = useState('')
+  const close = async () => {
+    if (!window.confirm(`Close the ${person.teamName} room on every device?\n\nNo session is archived, stopped or deleted. The room comes back when someone in it starts working again, or from Closed rooms.`)) return
+    try {
+      await api('/api/room/close', { teamId: person.teamId })
+      onClosed()
+    } catch (failure) {
+      setProblem(failure.message)
+    }
+  }
+
+  return (
+    <div className="team-choice">
+      <button className="section-action" onClick={close}><X size={13} /> Close room</button>
+      {problem && <small className="error">{problem}</small>}
+    </div>
+  )
 }
 
 // Which team someone is on, chosen here if the office guessed wrong.
@@ -1091,6 +1112,7 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
           <summary>Teammates and team</summary>
           <Teammates person={person} teams={teams} onPick={onPick} />
           <TeamChoice person={person} teams={teams} />
+          {hasTv && !person.isIndependent && <CloseRoom person={person} onClosed={onClose} />}
         </details>
       </ListSection>
       {isOpen && (
@@ -1182,6 +1204,29 @@ function Away({ people, onPick, onClose }) {
                   <small className="row-age">{age(person.lastActivityAt)}</small>
                 </button>
               ))}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ClosedRooms({ teams, closed, onClose }) {
+  const [problem, setProblem] = useState('')
+  const reopen = team => api('/api/room/reopen', { teamId: team.lead.teamId }).then(() => setProblem(''), failure => setProblem(failure.message))
+
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <section className="away" aria-label="Closed rooms" onMouseDown={event => event.stopPropagation()}>
+        <h2>Closed rooms <small>Each comes back when someone in it starts working</small></h2>
+        {problem && <p className="error">{problem}</p>}
+        <div className="scroll">
+          {teams.length === 0 && <p>No closed rooms.</p>}
+          {teams.map(team => (
+            <div key={team.lead.teamId} className="row">
+              <span className="row-main"><b>{team.name}</b><small>{team.members.length} {team.members.length === 1 ? 'person' : 'people'} · closed {age(closed[team.lead.teamId])} ago</small></span>
+              <button className="section-action" onClick={() => reopen(team)}>Reopen</button>
             </div>
           ))}
         </div>
@@ -1323,6 +1368,9 @@ export default function App() {
   // The room order every device shares. Undefined until the server answers, null when it has none yet.
   const [layout, setLayout] = useState(undefined)
   const lastLayout = useRef(undefined)
+  const [closed, setClosed] = useState({})
+  const lastClosed = useRef('{}')
+  const [isClosedOpen, setIsClosedOpen] = useState(false)
   const [problem, setProblem] = useState('')
   const [selected, setSelected] = useState(null)
   const [tab, setTab] = useState('outputs')
@@ -1346,6 +1394,11 @@ export default function App() {
           if (latestLayout !== lastLayout.current) {
             lastLayout.current = latestLayout
             setLayout(data.layout ?? null)
+          }
+          const latestClosed = JSON.stringify(data.closedRooms || {})
+          if (latestClosed !== lastClosed.current) {
+            lastClosed.current = latestClosed
+            setClosed(data.closedRooms || {})
           }
           setUpdatedAt(data.updatedAt || '')
           setOnScreen((data.onScreen || []).join(','))
@@ -1482,7 +1535,8 @@ export default function App() {
   }, [])
 
   const cast = everyone
-  const realActive = useMemo(() => onFloor(cast), [cast])
+  const realActive = useMemo(() => onFloor(cast, Date.now(), closed), [cast, closed])
+  const closedTeams = useMemo(() => { const shut = closedRooms(cast, closed); return teamsOf(cast.filter(other => shut.has(other.teamId))) }, [cast, closed])
   // ?present is the demo: one teammate has finished work ready. ?present=Name picks who.
   const presentAs = useMemo(() => new URLSearchParams(window.location.search).get('present'), [])
   useEffect(() => {
@@ -1497,7 +1551,7 @@ export default function App() {
   const active = useMemo(() => realActive.map(other => (other.id === presenterId ? { ...other, isRunning: false, isActing: false, isFinished: true, plan: null, label: isPresenting ? 'Presenting' : 'Ready for you', readyLine: isPresenting ? 'Showing you their work' : 'Ready for you' } : other)), [realActive, presenterId, isPresenting])
   const presenter = active.find(other => other.id === presenterId)
   const isShowing = isPresenting && Boolean(presenter)
-  const away = useMemo(() => cast.filter(person => !realActive.includes(person)), [cast, realActive])
+  const away = useMemo(() => cast.filter(person => !realActive.includes(person) && !closedTeams.some(team => team.members.includes(person))), [cast, realActive, closedTeams])
   const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId || person.request)
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
@@ -1654,10 +1708,12 @@ export default function App() {
       <footer className="statusbar">
         <small>{active.length} active · {updatedAt ? `updated ${age(updatedAt)} ago` : 'no data yet'}</small>
         {isTouchDevice && <FaceIdSetup />}
+        {closedTeams.length > 0 && <button className="away-button" onClick={() => setIsClosedOpen(true)}>{closedTeams.length} closed</button>}
         <button className="away-button" onClick={() => setIsAwayOpen(true)}>{away.length} away</button>
       </footer>
 
       {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
+      {isClosedOpen && <ClosedRooms teams={closedTeams} closed={closed} onClose={() => setIsClosedOpen(false)} />}
       {isApprovalsOpen && <ApprovalCards isPhone={isPhone} isDevice={isDevice} onClose={() => setIsApprovalsOpen(false)} />}
       {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={38} /> : null} onClose={() => setIsMiaOpen(false)} />}
       {isPaletteOpen && (

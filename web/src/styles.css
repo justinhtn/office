@@ -149,6 +149,7 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .face-id-button:disabled { opacity: .6; }
 .away { width: min(520px, calc(100vw - 32px)); max-height: 70vh; display: flex; flex-direction: column; padding: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .away h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.away .row .section-action, .team-choice .section-action { flex: none; padding: 0 10px; }
 .dot.asks { background: var(--danger); }
 .pill.asks { color: var(--danger); }
 .say.asks { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; background: #e0342c; color: #fff; white-space: normal; }

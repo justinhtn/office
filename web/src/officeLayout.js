@@ -4,20 +4,25 @@ export const SHARED_SPACES = ['meeting', 'lounge', 'office']
 const LOCAL_LAYOUT = 'office-layout'
 
 export const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0
-const isProject = person => Boolean(person.teamId?.startsWith('project:'))
+const isSolo = person => !person.teamId || person.teamId.startsWith('solo:')
 const isRecent = (person, now) => now - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
+const keyOf = person => person.teamId || person.id
 
-// A project, or a team of two or more, keeps its desks however long it's been quiet. Anyone alone goes Away after a week.
-export function onFloor(cast, now = Date.now()) {
-  const sizes = new Map()
-  cast.forEach(person => sizes.set(person.teamId || person.id, (sizes.get(person.teamId || person.id) || 0) + 1))
-  const isKept = person => isProject(person) || sizes.get(person.teamId || person.id) > 1
-
-  return cast.filter(person => person.isAssistant || isKept(person) || (person.isNamedTeam && person.id === person.teamLeadId) || isBusy(person) || isRecent(person, now))
+// Rooms the person closed. One comes back by itself once someone in it works again: a job, a question, or anything new since it closed.
+export function closedRooms(cast, closed = {}) {
+  const isBack = (key, closedAt) => cast.some(person => keyOf(person) === key && (person.isRunning || Boolean(person.request) || Date.parse(person.lastActivityAt || 0) > Date.parse(closedAt)))
+  return new Set(Object.entries(closed || {}).filter(([key, closedAt]) => !isBack(key, closedAt)).map(([key]) => key))
 }
 
-// Teams with a room of their own. Anyone else idle and alone is in the lounge.
-export const hasRoom = team => team.members.length > 1 || isBusy(team.lead) || Boolean(team.lead.isNamedTeam) || isProject(team.lead)
+// A team keeps its room until the person closes it or archives its sessions. Anyone alone goes Away after a week.
+export function onFloor(cast, now = Date.now(), closed = {}) {
+  const shut = closedRooms(cast, closed)
+
+  return cast.filter(person => !shut.has(keyOf(person)) && (person.isAssistant || !isSolo(person) || isBusy(person) || isRecent(person, now)))
+}
+
+// Teams with a room of their own. Anyone else is alone, idle, and in the lounge.
+export const hasRoom = team => !isSolo(team.lead) || isBusy(team.lead)
 
 // Nobody moves when someone else arrives: a newcomer takes a place nobody is using, or a new one at the end.
 export function keepPlaces(places, present) {

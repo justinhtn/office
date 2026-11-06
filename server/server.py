@@ -355,6 +355,31 @@ def office_layout():
         return None
 
 
+def closed_rooms():
+    """Teams whose rooms the person closed, with when. The page brings one back once someone in it works again."""
+    closed = read_json(LAYOUT, {})
+    closed = closed.get("closed") if isinstance(closed, dict) else None
+    if not isinstance(closed, dict):
+        return {}
+    return {key: when for key, when in closed.items() if isinstance(key, str) and isinstance(when, str)}
+
+
+def close_room(team_id, people, is_closed):
+    """Closes or reopens a team's room. This only hides it in the office: no session is archived, stopped or deleted."""
+    teams = {person.get("teamId") for person in people if person.get("teamId")}
+    if is_closed and (team_id not in teams or team_id.startswith("solo:")):
+        raise ValueError("There's no team room by that name.")
+    with LAYOUT_LOCK:
+        stored = read_json(LAYOUT, {})
+        stored = stored if isinstance(stored, dict) else {}
+        # Teams that have gone, archived perhaps, are dropped while here.
+        closed = {key: when for key, when in closed_rooms().items() if key in teams and key != team_id}
+        if is_closed:
+            closed[team_id] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        write_json(LAYOUT, {**stored, "closed": closed})
+    return closed
+
+
 def save_layout(value, is_seed, from_mac):
     """Stores the layout and returns what is now stored.
 
@@ -368,7 +393,7 @@ def save_layout(value, is_seed, from_mac):
         current = office_layout()
         if is_seed and current is not None and not (from_mac and is_provisional):
             return current
-        write_json(LAYOUT, {**layout, "isProvisional": not from_mac and (current is None or is_provisional)})
+        write_json(LAYOUT, {**layout, "closed": closed_rooms(), "isProvisional": not from_mac and (current is None or is_provisional)})
     return layout
 
 
@@ -2119,7 +2144,7 @@ class Handler(BaseHTTPRequestHandler):
             query = {key: values[0] for key, values in parse_qs(url.query).items()}
             session_id = query.get("id", "")
             if url.path == "/api/sessions":
-                self.reply(200, {**sessions(), "onScreen": sessions_on_screen(), "layout": office_layout()})
+                self.reply(200, {**sessions(), "onScreen": sessions_on_screen(), "layout": office_layout(), "closedRooms": closed_rooms()})
             elif url.path == "/api/mia":
                 self.device_only()
                 self.reply(200, MIA_CHAT.view())
@@ -2171,7 +2196,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/layout", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
+            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/layout", "/api/room/close", "/api/room/reopen", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -2230,6 +2255,15 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as problem:
                     raise Refused(400, str(problem)) from None
                 self.reply(200, {"layout": stored})
+                return
+            if route in ("/api/room/close", "/api/room/reopen"):
+                with OFFICE.lock:
+                    people = list(OFFICE.snapshot.get("people", []))
+                try:
+                    closed = close_room(str(body.get("teamId", "")), people, route == "/api/room/close")
+                except ValueError as problem:
+                    raise Refused(400, str(problem)) from None
+                self.reply(200, {"closedRooms": closed})
                 return
             if route in APPROVAL_ROUTES:
                 try:
