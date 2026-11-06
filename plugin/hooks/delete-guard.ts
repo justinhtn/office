@@ -361,9 +361,9 @@ function runsArguments(name: string, args: Word[]) {
   const runner = args.find(arg => RUNS_A_PROGRAM.test(arg.text))
   if (runner) return `${name} ${runner.text}`
   if (name === 'git' && args.some(arg => GIT_RUNS_TEXT.test(arg.text))) return 'git with a command it runs'
-  if (name === 'gh' && args.some(arg => arg.text === '--')) return 'gh ... --'
+  if (GH.test(name) && args.some(arg => arg.text === '--' || GH_RUNS_TEXT.test(arg.text))) return `${name} with a command it runs`
   if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return `${name} exec`
-  if (name === 'sed' && args.some(arg => SED_RUNS.test(arg.text))) return 'sed with its e command'
+  if (name === 'sed' && args.some(arg => !arg.text.startsWith('-') && SED_RUNS.test(arg.text))) return 'sed with its e command'
   if (name === 'docker' && !PLAIN_DOCKER.test(args[0]?.text ?? '')) return `docker ${args[0]?.text ?? ''}`
 
   return undefined
@@ -407,17 +407,20 @@ const SHELLS = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/
 const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
 // Calls that need parentheses, and the ones Perl and Ruby make without them.
 const CODE_DELETES =
-  /\b(rmtree|remove|removedirs|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|Popen|spawnSync|execSync|execFile|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\b(system|exec|unlink|spawn|popen)\s*[("'`$@]|\bunlink\s+glob\b|\bsubprocess\b|\bchild_process\b|\bos\.exec|`|\|\s*"/
+  /\b(rmtree|remove|removedirs|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|Popen|spawnSync|execSync|execFile|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\b(system|exec|unlink|spawn|popen)\s*[("'`$@]|\bunlink\s+glob\b|subprocess|\bchild_process\b|\bos\.exec|posix_spawnp?\s*\(|\bqx\s*[^\w\s]|%x\s*[^\w\s]|`|\|\s*"/
 // GNU sed runs a shell with its e command, as an address's command or a flag of s.
-const SED_RUNS = /(^|[\d$;}\s])e(\s|$)|^s([^\w\s\\]).*\2.*\2[gpiImM\d]*e[gpiImM\d]*$/
+const SED_RUNS = /(^|[\d$;}\s])e(\s|$)|[^\w\s\\][gpiImMw\d]*e[gpiImM\d]*\s*(;|}|$)/m
 // Keywords that come before the program without being one.
 const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
 const TESTS = new Set(['[', '[['])
-const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmtree', '--recursive'])
+const DELETE_WORDS = new Set(['rm', 'grm', 'unlink', 'rmtree', 'rimraf', '--recursive'])
 // A delete an assignment can hold for a variable to run later.
 const VALUE_DELETES = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete|\$'/
 // Words of git that make it run text it's given.
-const GIT_RUNS_TEXT = /^(-c|--config.*|-u|config|submodule|bisect|rebase|filter-branch|difftool|clone)$/
+const GIT_RUNS_TEXT = /^(-c|--config.*|-u|config|submodule|bisect|rebase|filter-branch|difftool|clone|-O.*|--open-files-in-pager.*)$/
+// quinn-gh is gh signed in as Asha, so it takes gh's rules.
+const GH = /^(gh|quinn-gh)$/
+const GH_RUNS_TEXT = /^(alias|extension)$/
 
 // find deletes through -delete or a program it runs, and a substitution or a variable among its predicates could supply either.
 function findMayDelete(args: Word[]) {
