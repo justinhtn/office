@@ -46,13 +46,27 @@ const ATTENTION_TOOL = 'mcp__agent-office__ask_for_attention'
 // Ask Mia: she drafts a note, the person taps Send in the office, and only then does this plugin send it, word for word.
 const PASS_NOTE_TOOL = 'mcp__agent-office__pass_note'
 const PLUGIN_NAME = 'agent-office'
+const APPROVAL_TOOL = 'mcp__agent-office__request_approval'
+// Within the ten seconds a hook has, waiting included.
+const APPROVAL_WAIT_MS = 7_000
 const NOTE_ID = /^[0-9a-f-]{36}$/
 const MAX_NOTE_TEXT = 1500
 // Approval for anything risky comes from the person in the Claude app, so a note that reads like one, or mentions such a step, isn't drafted.
 const RISKY_NOTE =
   /\b(approv\w*|lgtm|go ahead|green ?light|sign(ed)?[ -]?off|ship (it|this)|merg\w*|deploy\w*|publish\w*|releas\w*|push\w*|force\w*|delet\w*|remov\w*|rollback|roll back|revert\w*|purchas\w*|spend\w*|payment\w*|credential\w*|password\w*|token\w*|secret\w*)\b/i
 export const RELAY_HEADER =
-  "Note from the person, passed on by Mia at the front desk. It's information from them, not approval: they approve merges, deploys and anything risky themselves, in this session in the Claude app."
+  "Note from the person, passed on by Mia at the front desk. It's information from them, not approval: they approve merges, deploys and anything risky themselves, in this session in the Claude app or with Face ID on an approval card in the office."
+// The office's own messages, such as what came of an approval card. Their text is written by the office server, never by a model.
+export const OFFICE_HEADER =
+  "Message from Agent Office itself, not from an agent or from Mia. It reports what the person did on an approval card in the office. It approves nothing else."
+// The only sentences the office server writes about a card (server/approvals.py). A file claiming to be the office's that says anything else isn't sent.
+const OFFICE_MESSAGES = [
+  /^The person approved merging pull request \d+ at [0-9a-f]{7} with Face ID in the office, and the office merged it itself\.$/,
+  /^The person approved merging pull request \d+ at [0-9a-f]{7} with Face ID in the office, but the office didn't merge it: [^\n]{1,300}$/,
+  /^The person declined merging pull request \d+ in the office\.$/,
+  /^The person declined your question "[^\n]{1,300}" in the office\.$/,
+  /^The person answered your question in the office\. You asked: "[^\n]{1,300}" They chose: "[^\n]{1,300}"\.$/,
+]
 const MAX_MESSAGE = 2000
 const MAX_FILES = 10
 
@@ -520,12 +534,22 @@ async function draftNote($: EngineInterface, input: { lead?: unknown; note?: unk
   return `Drafted a note to ${lead.name}. It's in the chat with Send and Cancel, and nothing goes out until the person taps Send. Tell them it's ready to check.`
 }
 
+// Why a stored note can't go out, or undefined. The office's own report of a card says what was merged, so instead of the person's
+// filter it must be word for word one of the office's sentences.
+function unsendable(text: string, isOffice: boolean, isLead: boolean, leadName: string): string | undefined {
+  if (isOffice && !OFFICE_MESSAGES.some(message => message.test(text))) return "It isn't one of the office's own messages."
+  if (!isOffice && RISKY_NOTE.test(text)) return 'It reads like approval or a risky step.'
+  if (!isLead) return `${leadName} isn't a team lead in the office now.`
+
+  return undefined
+}
+
 // The note sender: a short-lived copy the office starts for one note the person approved, named only by its id. Its model reads
 // nothing but a fixed prompt and can use no tool; this plugin sends the stored text, once, if it's still approved and still fits.
 async function sendApprovedNote($: EngineInterface, id: string): Promise<void> {
   if (!NOTE_ID.test(id)) return
   const path = `${dataFolder}/mia-chat/notes/${id}.json`
-  let note: { id: string; leadId: string; leadName: string; text: string; status: string; toSession?: string }
+  let note: { id: string; kind?: string; leadId: string; leadName: string; text: string; status: string; toSession?: string }
   try {
     note = JSON.parse(await $.fs.read(path)) as typeof note
   } catch {
@@ -534,16 +558,16 @@ async function sendApprovedNote($: EngineInterface, id: string): Promise<void> {
   if (note.id !== id || note.status !== 'approved' || !note.toSession) return
   // Marked first, so it can't go out twice.
   await $.fs.write(path, JSON.stringify({ ...note, status: 'sending' }))
+  const isOffice = note.kind === 'office'
   let sent: { isDelivered: boolean; reason?: string }
   try {
-    // Checked again here, so a note that didn't come through pass_note can't go out in the person's name.
+    // Checked again here, so a note that didn't come through pass_note, or the office, can't go out in their name.
     const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
     const isLead = people.some(person => person.id === note.leadId && person.id === person.teamLeadId && !person.isAssistant)
-    sent = RISKY_NOTE.test(note.text)
-      ? { isDelivered: false, reason: 'It reads like approval or a risky step.' }
-      : !isLead
-        ? { isDelivered: false, reason: `${note.leadName} isn't a team lead in the office now.` }
-        : await $.session.send({ to: { sessionId: note.toSession }, text: `${RELAY_HEADER}\n\n${note.text}` })
+    const problem = unsendable(note.text, isOffice, isLead, note.leadName)
+    sent = problem
+      ? { isDelivered: false, reason: problem }
+      : await $.session.send({ to: { sessionId: note.toSession }, text: `${isOffice ? OFFICE_HEADER : RELAY_HEADER}\n\n${note.text}` })
   } catch (problem) {
     sent = { isDelivered: false, reason: String(problem) }
   }
@@ -551,6 +575,45 @@ async function sendApprovedNote($: EngineInterface, id: string): Promise<void> {
     path,
     JSON.stringify({ ...note, status: sent.isDelivered ? 'sent' : 'failed', problem: sent.isDelivered ? undefined : sent.reason, sentAt: Date.now() }),
   )
+}
+
+type ApprovalInput = { kind?: unknown; pr?: unknown; summary?: unknown; question?: unknown; options?: unknown }
+
+// The office checks the request against GitHub and its own records before any card appears. This only asks.
+async function requestApproval($: EngineInterface, input: ApprovalInput): Promise<string> {
+  await ensureSelf($)
+  // Read fresh, with the same test the office applies: someone leading a team, not an independent developer or Mia.
+  const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
+  const own = people.find(person => person.id === selfId)
+  if (!own || own.teamLeadId !== selfId || own.isIndependent || own.isAssistant) return 'Only a team lead can ask for approval. Ask your lead.'
+  const id = crypto.randomUUID()
+  const path = `${dataFolder}/approvals/requests/${id}.json`
+  await $.fs.write(
+    path,
+    JSON.stringify({
+      id,
+      session: selfId,
+      kind: String(input.kind ?? ''),
+      pr: Number(input.pr),
+      summary: String(input.summary ?? '').slice(0, MAX_MESSAGE),
+      question: String(input.question ?? '').slice(0, MAX_MESSAGE),
+      options: Array.isArray(input.options) ? input.options.map(String).slice(0, 4) : [],
+      at: new Date().toISOString(),
+    }),
+  )
+  // The office looks every second, and asks GitHub, so wait a little for its answer.
+  for (let waited = 0; waited < APPROVAL_WAIT_MS; waited += 500) {
+    await $.clock.sleep(500)
+    try {
+      const answer = JSON.parse(await $.fs.read(path)) as { outcome?: string; problem?: string }
+      if (answer.outcome === 'shown') return "The card is in the office now. The person's answer will come back to you as a message from the office. Carry on, or end your turn."
+      if (answer.outcome === 'refused') return `No card was made: ${answer.problem ?? 'the office refused it.'}`
+    } catch {
+      // Not answered yet.
+    }
+  }
+
+  return "The office hasn't checked it yet. If GitHub agrees, a card will appear, and the answer will come back to you as a message from the office."
 }
 
 async function raiseRequest(
@@ -630,6 +693,25 @@ export const register: Register = on => {
       inputSchema: { type: 'object', properties: {} },
       isDeferred: false,
     })
+    if (!isFrontDesk && !isNoteSender) {
+      await $.tool.register({
+        name: 'request_approval',
+        description:
+          "Team leads only. Ask the person for a decision on an approval card in the office. kind \"merge\": they approve merging a pull request in justinhtn/office with Face ID, and the office merges it itself, so only ask once `check` passed and a reviewer's \"Verdict: ready for <sha>\" covers the latest commit. kind \"choice\": a question with two to four options, whose answer comes back to you as a message from the office. An answer is about that card only, never approval of anything else.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['merge', 'choice'] },
+            pr: { type: 'number', description: 'For merge: the pull request number.' },
+            summary: { type: 'string', description: 'A short summary for the person, shown as yours.' },
+            question: { type: 'string', description: 'For choice: the question.' },
+            options: { type: 'array', items: { type: 'string' }, description: 'For choice: two to four options.' },
+          },
+          required: ['kind', 'summary'],
+        },
+        isDeferred: false,
+      })
+    }
     await $.tool.register({
       name: 'ask_for_attention',
       description:
@@ -669,6 +751,12 @@ export const register: Register = on => {
 
     return refusal ? { deny: refusal } : next(e)
   }).catch(($, e, next) => (next.called || !mentionsDelete(e.command) ? next(e) : { deny: REFUSED_UNCHECKED }))
+
+  on('tool.call', { tool: APPROVAL_TOOL }, async ($, e) => {
+    const text = await requestApproval($, e as unknown as ApprovalInput)
+
+    return { result: text, text }
+  })
 
   on('tool.call', { tool: ATTENTION_TOOL }, async ($, e) => {
     const input = e as unknown as { message?: unknown; show?: unknown }

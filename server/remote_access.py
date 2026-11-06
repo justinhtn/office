@@ -171,6 +171,30 @@ class RemoteAccess:
 
         return self.changing(change)
 
+    def device_passkey(self, device_id):
+        """The credential id of the passkey this device has, or None."""
+        state = self.read()
+        passkey = state.get("passkeys", {}).get(state.get("devices", {}).get(device_id, {}).get("passkey", ""))
+
+        return passkey.get("credential") if passkey else None
+
+    def confirm_with_passkey(self, device_id, credential, check):
+        """True once this device's own passkey has answered. check(passkey) raises if the answer is wrong, or returns the new sign count.
+
+        For approving something: unlike signing in, it makes no device. It runs while the file is locked, so one answer can't count twice.
+        """
+        def change(state):
+            device = state.get("devices", {}).get(device_id)
+            passkey = state.get("passkeys", {}).get(device.get("passkey", "")) if device and time.time() < device.get("expires", 0) else None
+            if not state.get("host") or not passkey or not hmac.compare_digest(passkey.get("credential", "").encode(), str(credential).encode()):
+                return False
+            passkey["signCount"] = check(passkey)
+            passkey["lastUsed"] = time.time()
+
+            return True
+
+        return self.changing(change)
+
     def device_for(self, cookie):
         """The device id for a cookie that is still good, otherwise None."""
         device_id, _, device_secret = (cookie or "").partition(".")

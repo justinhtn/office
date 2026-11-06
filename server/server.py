@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from remote_access import COOKIE, DEVICE_S, RemoteAccess  # noqa: E402
 import passkeys  # noqa: E402
 from mia_chat import MiaChat  # noqa: E402
+from approvals import REPO as APPROVALS_REPO, Approvals  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
@@ -491,6 +492,70 @@ def lead_session(person_id):
     transcript = TRANSCRIPTS.path_for(person_id)
 
     return transcript.stem if transcript else None
+
+
+def team_lead_name(person_id):
+    """The name of someone who leads a team in the office now, or None. Independent developers and Mia don't count."""
+    with OFFICE.lock:
+        people = list(OFFICE.snapshot.get("people", []))
+    lead = next((one for one in people if one.get("id") == person_id and one.get("teamLeadId") == person_id and not one.get("isIndependent") and not one.get("isAssistant")), None)
+
+    return lead.get("name") if lead else None
+
+
+def tell_lead(person_id, text):
+    """The office's own message to a lead about an approval card, sent the way an approved note is."""
+    name, session = team_lead_name(person_id), lead_session(person_id)
+    if name and session:
+        MIA_CHAT.send_office_note(person_id, name, session, text)
+    else:
+        print(f"Couldn't tell {person_id} about an approval card: not a lead in the office now", file=sys.stderr, flush=True)
+
+
+class GitHub:
+    """The person's own gh, on this Mac. The office never reads or prints its token; gh keeps it."""
+
+    FIELDS = "number,title,url,state,isDraft,baseRefName,headRefOid,statusCheckRollup"
+    # The REST API says who really posted: an app's account is "<slug>[bot]", of type Bot. gh pr view drops both.
+    POST = '{login: .user.login, type: .user.type, app: .performed_via_github_app.slug, body, url: .html_url, at: (.created_at // .submitted_at), isEdited: (.updated_at != null and .updated_at != .created_at)}'
+
+    def run(self, *arguments):
+        # The login shell finds gh, as it finds claude. GH_PROMPT_DISABLED keeps gh from waiting on a question nobody sees.
+        command = in_login_shell("office-gh", ["env", "GH_PROMPT_DISABLED=1", "gh", *arguments])
+        return subprocess.run(command, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+
+    def lines(self, path, jq):
+        """Every item of a paged REST listing, one per line, or None if gh couldn't get them all."""
+        done = self.run("api", "--paginate", path, "--jq", jq)
+        try:
+            return [json.loads(line) for line in done.stdout.splitlines() if line.strip()] if done.returncode == 0 else None
+        except ValueError:
+            return None
+
+    def pull(self, number):
+        number = int(number)
+        done = self.run("pr", "view", str(number), "--repo", APPROVALS_REPO, "--json", self.FIELDS)
+        try:
+            pull = json.loads(done.stdout) if done.returncode == 0 else None
+        except ValueError:
+            return None
+        comments = self.lines(f"repos/{APPROVALS_REPO}/issues/{number}/comments", f".[] | {self.POST}")
+        reviews = self.lines(f"repos/{APPROVALS_REPO}/pulls/{number}/reviews", f".[] | {self.POST}")
+        # gh prints a bare string without quotes, so each name is written out as JSON.
+        files = self.lines(f"repos/{APPROVALS_REPO}/pulls/{number}/files", ".[].filename | @json")
+        if not pull or comments is None or reviews is None or files is None:
+            return None
+
+        return {**pull, "posts": comments + reviews, "files": files}
+
+    def merge(self, number, sha):
+        done = self.run("pr", "merge", str(int(number)), "--repo", APPROVALS_REPO, "--squash", "--delete-branch=false", "--match-head-commit", sha)
+        if done.returncode == 0:
+            return True, f"Merged pull request {int(number)}."
+        # Only gh's last line, which says why, goes on the card and in the log.
+        last = (done.stderr.strip().splitlines() or ["gh didn't say why."])[-1]
+
+        return False, last[:300]
 
 
 def is_away():
@@ -1464,7 +1529,19 @@ class Transcripts:
 
 
 TRANSCRIPTS = Transcripts()
+APPROVAL_ROUTES = ("/api/approvals/options", "/api/approvals/approve", "/api/approvals/decline", "/api/approvals/answer")
 MIA_CHAT = MiaChat(DATA, FRONT_DESK, chat_command, chat_is_wanted, note_sender_command)
+APPROVALS = Approvals(DATA, GitHub(), team_lead_name, tell_lead)
+
+
+def take_approval_requests():
+    while True:
+        try:
+            APPROVALS.take_requests()
+        except Exception:
+            # This runs on its own thread, where nothing else would report it.
+            traceback.print_exc()
+        time.sleep(1)
 
 
 def sessions_on_screen():
@@ -1932,9 +2009,45 @@ class Handler(BaseHTTPRequestHandler):
         # Any program on the Mac can load this port's page and read its token, agents included, so it can't speak for the person.
         return False
 
-    def device_only(self):
+    def device_only(self, what="Ask Mia"):
         if not self.from_signed_in_device():
-            raise Refused(403, "Ask Mia only works from a signed-in device.")
+            raise Refused(403, f"{what} only works from a signed-in device.")
+
+    def can_approve(self):
+        """Whether this is a signed-in device with its own Face ID passkey. The Mac shows cards read-only."""
+        return self.from_signed_in_device() and passkeys.available() and bool(REMOTE.device_passkey(self.device))
+
+    def approval_route(self, route, body):
+        """Answers a card. Approving a merge needs this device's Face ID, tied to exactly what the card would merge."""
+        self.device_only("Answering a card")
+        card_id = str(body.get("id", ""))
+        if route == "/api/approvals/options":
+            card = APPROVALS.open_card(card_id, "merge")
+            if not self.can_approve():
+                raise Refused(409, "Set up Face ID on this device to approve here.")
+            self.reply(200, {"challenge": PASSKEY_CHALLENGES.new(APPROVALS.challenge_purpose(card)), "rpId": REMOTE.host(), "credential": REMOTE.device_passkey(self.device)})
+            return
+        if route == "/api/approvals/approve":
+            answer = body.get("answer")
+            if not isinstance(answer, dict) or not passkeys.available():
+                raise Refused(400, "Face ID is needed to approve.")
+            host = REMOTE.host()
+
+            def confirmed(card):
+                check = lambda passkey: passkeys.signed_in(answer, passkey["publicKey"], passkey.get("signCount", 0), host, f"https://{host}", PASSKEY_CHALLENGES, APPROVALS.challenge_purpose(card))
+                if not REMOTE.confirm_with_passkey(self.device, answer.get("id"), check):
+                    raise passkeys.Rejected("Not this device's passkey.")
+
+            try:
+                APPROVALS.approve(card_id, self.device, confirmed)
+            except passkeys.Rejected:
+                print(f"Face ID approval refused for card {card_id}", file=sys.stderr, flush=True)
+                raise Refused(403, "Face ID didn't confirm it. Try again.") from None
+        elif route == "/api/approvals/decline":
+            APPROVALS.decline(card_id, self.device)
+        else:
+            APPROVALS.answer(card_id, str(body.get("option", "")), self.device)
+        self.reply(200, {"cards": APPROVALS.view(), "canApprove": self.can_approve()})
 
     def do_GET(self):
         try:
@@ -1965,7 +2078,9 @@ class Handler(BaseHTTPRequestHandler):
                 idle = seconds_idle()
                 away_mode = read_json(AWAY_MODE, {}).get("isOn") is True
                 shut_down = read_json(SHUT_DOWN, {}).get("isOn") is True
-                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on(), "miaChat": chat_is_wanted() and self.from_signed_in_device()})
+                self.reply(200, {"isAway": away_mode or shut_down or (idle is not None and idle > AWAY_AFTER_S), "awayMode": away_mode, "shutDown": shut_down, "voiceMode": voice_mode_on(), "miaChat": chat_is_wanted() and self.from_signed_in_device(), "approvals": APPROVALS.open_count(), "isDevice": self.from_signed_in_device()})
+            elif url.path == "/api/approvals":
+                self.reply(200, {"cards": APPROVALS.view(), "canApprove": self.can_approve()})
             elif url.path == "/api/presentation":
                 self.reply(200, presentation(json.loads(PRESENTATION_DEMO.read_text())))
             elif url.path == "/api/usage":
@@ -2005,7 +2120,7 @@ class Handler(BaseHTTPRequestHandler):
             self.guarded()
             self.authorized()
             route = urlparse(self.path).path
-            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note"):
+            if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_MESSAGE * 4:
@@ -2057,6 +2172,12 @@ class Handler(BaseHTTPRequestHandler):
                 write_json(TEAMS, with_team_name(read_json(TEAMS, {}), people, team_id, name))
                 OFFICE.refresh()
                 self.reply(200, {"status": "ok"})
+                return
+            if route in APPROVAL_ROUTES:
+                try:
+                    self.approval_route(route, body)
+                except LookupError as problem:
+                    raise Refused(409, str(problem)) from None
                 return
             if route in ("/api/mia/ask", "/api/mia/note"):
                 self.device_only()
@@ -2355,6 +2476,8 @@ if __name__ == "__main__":
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     threading.Thread(target=MIA_CHAT.keep_running, daemon=True).start()
+    APPROVALS.recover()
+    threading.Thread(target=take_approval_requests, daemon=True).start()
 
     def stop_chat_mia(*_):
         # launchd stops the server with this, on a restart and on uninstall, and she'd outlive it in her own process group.

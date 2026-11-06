@@ -144,7 +144,8 @@ class MiaChat:
         notes = []
         for path in self.notes.glob("*.json"):
             note = read_json(path, None)
-            if isinstance(note, dict) and NOTE_ID.match(str(note.get("id", ""))) and path.stem == note["id"]:
+            # The office's own messages to leads, such as a merge's result, aren't part of the chat.
+            if isinstance(note, dict) and NOTE_ID.match(str(note.get("id", ""))) and path.stem == note["id"] and note.get("kind") != "office":
                 notes.append({key: note.get(key) for key in ("id", "leadName", "text", "status", "problem", "at")})
 
         return sorted(notes, key=lambda note: note.get("at") or 0)[-NOTES_SHOWN:]
@@ -190,6 +191,14 @@ class MiaChat:
                 return
             write_json(path, {**note, "status": "approved", "toSession": session, "approvedAt": int(time.time() * 1000)})
             self.start_sender(note_id)
+
+    def send_office_note(self, lead_id, lead_name, to_session, text):
+        """A message the office itself writes to a lead, such as what came of an approval card. It goes out like an approved note,
+        under the plugin's own header for the office, never Mia's."""
+        note_id = str(uuid.uuid4())
+        self.notes.mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_json(self.notes / f"{note_id}.json", {"id": note_id, "kind": "office", "leadId": lead_id, "leadName": lead_name, "text": text, "status": "approved", "toSession": to_session, "at": int(time.time() * 1000)})
+        self.start_sender(note_id)
 
     def start_sender(self, note_id):
         """A short-lived copy, given only the note's id, whose plugin sends that one stored note. Nothing else reaches it: no stdin, a fixed prompt."""
