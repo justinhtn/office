@@ -1153,8 +1153,8 @@ function useIsPhone() {
 function teamStatus(team) {
   const { members } = team, working = members.filter(member => member.isRunning).length
   if (members.some(member => member.request)) return { text: 'Asking for you', tone: 'asks' }
-  if (members.some(member => member.isFinished)) return { text: 'Finished', tone: 'finished' }
   if (working) return { text: `${working} working`, tone: 'working' }
+  if (members.some(member => member.isFinished)) return { text: 'Finished', tone: 'finished' }
 
   return { text: `${members.length} idle`, tone: 'idle' }
 }
@@ -1451,7 +1451,12 @@ export default function App() {
   const [firstSlot, setFirstSlot] = useState(0)
   const slots = isPhone ? visibleSlots(PHONE_PANES, firstSlot) : visibleSlots(PANE_COUNT)
   const swipePanes = direction => setFirstSlot(first => nextFirstSlot(first, direction, PHONE_PANES))
+  const paneTeams = shownPanes(panes, teams)
   const setPanes = next => setSplitLayout(layout => ({ ...layout, panes: next }))
+  // The first fill is kept, so teams stay put when their status changes.
+  useEffect(() => {
+    if (isSplit && !splitLayout.panes && teams.length) setPanes(firstPanes(teams))
+  }, [isSplit, splitLayout.panes, teams])
   const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))
   // On a phone the panel covers the panes, so it closes once a team is dropped.
   const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => { setPanes(placeTeam(panes, key, index)); if (isPhone) setIsPanelOpen(false) })
@@ -1526,7 +1531,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => shownPanes(panes, teams)[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => paneTeams[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
               <SplitPanes panes={panes} slots={slots} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
             </Room>
           : !problem && <Empty text="Waiting for session data…" />}
