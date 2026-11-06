@@ -467,3 +467,42 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
   .app.phone .split { bottom: calc(34px + env(safe-area-inset-bottom)); left: calc(62px + env(safe-area-inset-left)); right: calc(62px + env(safe-area-inset-right)); }
   .app.phone .pane-dots { bottom: calc(40px + env(safe-area-inset-bottom)); }
 }
+/* Ask Mia: a chat that slides in from the right, or fills the phone's screen above its keyboard. */
+.mia-button { position: absolute; z-index: 4; right: calc(64px + env(safe-area-inset-right)); bottom: calc(34px + env(safe-area-inset-bottom)); color: #fff; background: rgba(14, 17, 24, .72); border-radius: 9px; }
+.mia-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .18); }
+.mia-sheet { position: fixed; z-index: 31; top: calc(48px + env(safe-area-inset-top)); right: 0; bottom: calc(30px + env(safe-area-inset-bottom)); width: min(420px, 100%); display: flex; flex-direction: column; font-size: 14px; background: var(--bg); color: var(--text); border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(0, 0, 0, .2); animation: drawer-in .16s ease-out; }
+.mia-sheet.full { top: var(--visible-top, 0); left: 0; bottom: auto; height: var(--visible-height, 100%); width: 100%; font-size: 15px; border-left: 0; box-shadow: none; animation: none; }
+.mia-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px; border-bottom: 1px solid var(--line); }
+.mia-sheet.full .mia-head { padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(14px + env(safe-area-inset-left)); padding-right: calc(6px + env(safe-area-inset-right)); }
+.mia-head .avatar { border-radius: 50%; }
+.mia-who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.mia-head .icon { width: 44px; height: 44px; }
+.mia-messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 16px; }
+.mia-sheet.full .mia-messages { padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
+.mia-empty { margin: auto 8px; text-align: center; color: var(--muted); }
+.mia-message { display: flex; flex-direction: column; max-width: 85%; }
+.mia-message p { margin: 0; padding: 8px 12px; border-radius: 16px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mia-message.person { align-self: flex-end; align-items: flex-end; }
+.mia-message.person p { background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 5px; }
+.mia-message.mia { align-self: flex-start; }
+.mia-message.mia p { background: var(--bg-soft); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+.mia-writing { padding: 2px 12px; }
+.mia-note { align-self: stretch; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--accent-wash); border: 1px solid var(--accent); border-radius: 12px; }
+.mia-note:not(.draft) { border-color: var(--line); background: var(--bg-soft); }
+.mia-note p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mia-note-head { display: flex; align-items: center; gap: 5px; }
+.mia-note-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.mia-note-actions button { min-height: 40px; padding: 0 14px; border-radius: 8px; }
+.mia-note-actions button:not(.primary) { border: 1px solid var(--line); background: var(--bg); }
+.mia-note.failed .mia-note-status { color: var(--danger); }
+.mia-problem { flex: none; padding: 4px 14px; }
+.mia-compose { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.mia-sheet.full .mia-compose { padding-bottom: calc(8px + env(safe-area-inset-bottom)); padding-left: calc(10px + env(safe-area-inset-left)); padding-right: calc(10px + env(safe-area-inset-right)); }
+.mia-sheet.full[data-keyboard] .mia-compose { padding-bottom: 8px; }
+/* 16px keeps iOS from zooming in when the box is tapped. */
+.mia-compose textarea { flex: 1; min-width: 0; min-height: 40px; padding: 9px 14px; font: 16px/1.35 Inter, system-ui, sans-serif; color: var(--text); background: var(--bg-soft); border: 1px solid var(--line); border-radius: 20px; resize: none; overflow-y: auto; scrollbar-width: none; }
+.mia-compose textarea::-webkit-scrollbar { display: none; }
+.mia-compose textarea:disabled { opacity: .7; }
+.mia-send { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
+.mia-send:disabled { opacity: .4; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .mia-sheet { animation: none; } }

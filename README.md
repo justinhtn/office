@@ -55,7 +55,7 @@ Installing opens one more session in the Claude app, in `~/.agent-office/front-d
 
 She keeps a notebook in `~/.agent-office/notebook` of every team and independent developer (a session with no team), including ones since archived. It holds session titles and latest updates, plus any notes she adds.
 
-She has a short tool list, so she can read what sessions are doing and add to her notebook, but can't otherwise edit files, run commands or message agents. If you've set up Telegram and turn on away mode, she also answers your texts and can attach files. See [Telegram](#telegram). The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
+She has a short tool list, so she can read what sessions are doing and add to her notebook, but can't otherwise edit files, run commands or message agents. In [Ask Mia](#ask-mia) she can draft a note to a lead, which only goes out when you tap Send. If you've set up Telegram and turn on away mode, she also answers your texts and can attach files. See [Telegram](#telegram). The office announces requests and finished work in her voice once each, stays quiet while you're away, and tells you what's waiting when you return.
 
 The TV in your office lists your [Modal](https://modal.com) apps: what's running, what stopped today, and how many deployed apps have no tasks. It needs the `modal` command on your Mac and logged in, and only reads the list, checking once a minute.
 
@@ -128,6 +128,12 @@ A signed-in device can do what the office can do on the Mac: read sessions, see 
 - Sign one out: `scripts/ipad-access.py revoke ID`, or `revoke all`. Revoking a device also forgets its Face ID passkey and signs out every device that signed in with that passkey. `devices` lists passkeys too, and `revoke` takes a passkey's ID.
 - Sign-ins and refused tries go in `~/.agent-office/server.log`, without codes or cookies.
 - Turn it all off: `scripts/ipad-access.py off`, which also forgets every passkey, then `tailscale serve --https=443 off`. Sign-in stops working at once.
+
+### Ask Mia
+
+While device access is on, the office keeps a background copy of Mia running for **Ask Mia**: the chat button beside the team list on a phone, or **Ask Mia** in the team list elsewhere. She keeps her own conversation, separate from yours with her in the Claude app and from Telegram Mia, and the last 100 messages are kept in `~/.agent-office/mia-chat`. Her copy can only read the office and her notebook, and draft notes. It's stopped when the server stops, when device access is turned off, and by uninstalling.
+
+When you ask her to pass something to a team lead, she drafts a note, and it appears in the chat with **Send** and **Cancel**. Nothing goes out until you tap Send. The office then sends your exact text, headed as a note from you passed on by Mia, which is information and not approval. Notes that read like approval, or mention merging, deploying, deleting or other risky steps, aren't drafted: approve those in the lead's session in the Claude app.
 
 ## Privacy and security
 
