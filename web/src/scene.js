@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { isTouchDevice } from './device.js'
 import { readSavedView, writeSavedView } from './savedView.js'
+import { markFailed, texturesState } from './textureState.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
@@ -36,10 +37,12 @@ const sexOf = id => (/Female/.test(id) ? 'f' : 'm')
 const fbx = url => new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject))
 const textures = new THREE.TextureLoader()
 const templates = new Map(), clips = new Map()
+// Which load each model came from, so a face whose textures failed forgets only that load, not a fresh one begun since.
+const loadedFrom = new WeakMap()
 
 // A texture that couldn't be fetched says so, so a face waiting for it fails at once instead of waiting it out.
 function avatarTexture(url) {
-  const texture = textures.load(url, undefined, undefined, () => { texture.userData.failed = true })
+  const texture = textures.load(url, undefined, undefined, () => markFailed(texture))
   return texture
 }
 
@@ -48,7 +51,8 @@ function template(id) {
   if (!templates.has(id)) {
     const folder = id === OWNER_AVATAR ? OWNER_BODY : id
     // A model that failed to load is forgotten, so a later ask can fetch it again.
-    templates.set(id, fbx(`${AVATARS}/${folder}/${folder}.fbx`).catch(failure => { templates.delete(id); throw failure }).then(model => {
+    const loading = fbx(`${AVATARS}/${folder}/${folder}.fbx`).catch(failure => { templates.delete(id); throw failure }).then(model => {
+      loadedFrom.set(model, loading)
       const strays = []
       model.traverse(o => { if (o.isLight || o.isCamera) strays.push(o) })
       strays.forEach(o => o.parent.remove(o))
@@ -71,7 +75,8 @@ function template(id) {
         o.material = made.length === 1 ? made[0] : made
       })
       return model
-    }))
+    })
+    templates.set(id, loading)
   }
   return templates.get(id)
 }
@@ -109,7 +114,7 @@ const PORTRAIT_TEXTURES_MS = 10 * 60 * 1000
 const PORTRAIT_TRIES = 5
 const PORTRAIT_RETRY_MS = 3000
 const worthRedrawing = message => Object.assign(new Error(message), { isWorthRedrawing: true })
-async function texturesLoaded(model, id) {
+async function texturesLoaded(model, id, source) {
   const wanted = []
   model.traverse(o => {
     if (!o.isSkinnedMesh) return
@@ -117,12 +122,11 @@ async function texturesLoaded(model, id) {
       for (const texture of [material.map, material.normalMap, material.specularMap]) if (texture) wanted.push(texture)
     }
   })
-  const isLoaded = texture => texture.image && (texture.image.complete !== false) && (texture.image.width || texture.image.naturalWidth)
   const deadline = Date.now() + PORTRAIT_TEXTURES_MS
-  while (!wanted.every(isLoaded)) {
-    if (wanted.some(texture => texture.userData.failed)) {
+  for (let state = texturesState(wanted); state !== 'loaded'; state = texturesState(wanted)) {
+    if (state === 'failed') {
       // The model keeps its broken texture, so it's forgotten, and a later ask loads it afresh.
-      templates.delete(id)
+      if (templates.get(id) === loadedFrom.get(source)) templates.delete(id)
       throw new Error("One of the face's textures couldn't be fetched.")
     }
     if (Date.now() > deadline) throw new Error("The face's textures didn't arrive.")
@@ -205,7 +209,7 @@ async function renderPortrait(source, id, p) {
   const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
   lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
   try {
-    await texturesLoaded(model, id)
+    await texturesLoaded(model, id, source)
     return drawPortrait(stage, lens)
   } finally {
     // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
