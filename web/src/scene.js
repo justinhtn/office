@@ -1609,10 +1609,12 @@ function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSiz
 const observer=new ResizeObserver(resize);observer.observe(stage);resize()
 // Split view: up to four rooms at once, each with its own camera, drawn into parts of the one canvas.
 // The page lays out the panes, and passes their place in the stage, in CSS pixels.
-const PANE_EASE=.2,PANE_MAX_ZOOM=12,PANE_TAG_SCALE=.85,PANE_THOUGHTS=1,PANE_DOUBLE_TAP_MS=320,SPLIT_GAP_COLOR=0x10131a
-let split=null
+const PANE_EASE=.2,PANE_MAX_ZOOM=12,PANE_TAG_SCALE=.85,PANE_THOUGHTS=1,PANE_DOUBLE_TAP_MS=320,SPLIT_GAP_COLOR=0x10131a,PANE_SWIPE_PX=50,PANE_SWIPE_SLANT=1.5
+// On a phone a sideways swipe moves to the other panes, so one finger doesn't turn the room there; two fingers still do.
+let split=null,onPaneSwipe=null
 const roomGoal=(spot,aspect)=>({x:spot.x,y:1.55,z:spot.z,az:1.28,el:.17,d:Math.max(spot.D*.62,spot.W*.36/Math.max(aspect,.55))+1.6})
 function setSplit(next){
+  onPaneSwipe=next?.onSwipe??null
   if(!next){split=null;return}
   split=next.keys.map((key,i)=>{
     const old=split?.[i]
@@ -1695,8 +1697,8 @@ function paneDown(e){
   const pane=paneGesture?.pane??paneUnder(e.clientX,e.clientY)
   if(!pane||(paneGesture&&!paneUnder(e.clientX,e.clientY)))return
   try{canvas.setPointerCapture(e.pointerId)}catch{}
-  if(!paneGesture)paneGesture={pane,pointers:new Map(),isTap:true,start:{x:e.clientX,y:e.clientY,at:performance.now()},tag:e.target.closest?.('.tag')??null,pair:null}
-  else paneGesture.isTap=false
+  if(!paneGesture)paneGesture={pane,pointers:new Map(),isTap:true,start:{x:e.clientX,y:e.clientY,at:performance.now()},tag:e.target.closest?.('.tag')??null,pair:null,isSingle:true}
+  else{paneGesture.isTap=false;paneGesture.isSingle=false}
   paneGesture.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY})
   if(paneGesture.pointers.size===2)paneGesture.pair=fingers(paneGesture.pointers)
 }
@@ -1707,7 +1709,7 @@ function paneMove(e){
   finger.x=e.clientX;finger.y=e.clientY
   if(gesture.pointers.size===1){
     if(Math.hypot(e.clientX-gesture.start.x,e.clientY-gesture.start.y)>TOUCH_SLOP)gesture.isTap=false
-    if(!gesture.isTap)adjustPane(gesture.pane,-dx*.005,dy*.004,0)
+    if(!gesture.isTap&&!onPaneSwipe)adjustPane(gesture.pane,-dx*.005,dy*.004,0)
   }else if(gesture.pointers.size===2&&gesture.pair){
     const now=fingers(gesture.pointers),turn=Math.atan2(Math.sin(now.angle-gesture.pair.angle),Math.cos(now.angle-gesture.pair.angle))
     adjustPane(gesture.pane,turn-(now.x-gesture.pair.x)*.005,(now.y-gesture.pair.y)*.004,(gesture.pair.dist-now.dist)*TOUCH_PINCH)
@@ -1721,7 +1723,8 @@ function paneUp(e){
   gesture.pair=gesture.pointers.size===2?fingers(gesture.pointers):null
   if(gesture.pointers.size)return
   paneGesture=null
-  const {pane}=gesture,now=performance.now()
+  const {pane}=gesture,now=performance.now(),across=e.clientX-gesture.start.x,down=e.clientY-gesture.start.y
+  if(onPaneSwipe&&gesture.isSingle&&Math.abs(across)>PANE_SWIPE_PX&&Math.abs(across)>Math.abs(down)*PANE_SWIPE_SLANT){onPaneSwipe(across<0?1:-1);return}
   // A finger held still is a press, not a tap. A mouse click counts however slow.
   if(!gesture.isTap||(e.pointerType==='touch'&&now-gesture.start.at>=TOUCH_TAP_MS))return
   if(now-pane.lastTap<PANE_DOUBLE_TAP_MS){pane.lastTap=0;pane.turn=pane.tilt=pane.zoom=0;return}

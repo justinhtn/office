@@ -28,6 +28,13 @@ export function visibleSlots(count, first = 0) {
   return Array.from({ length: shown }, (_, i) => (first + i) % PANE_COUNT)
 }
 
+// The first slot of the next run of panes, going forward (1) or back (-1), and wrapping round.
+export function nextFirstSlot(first, direction, shown) {
+  const runs = Math.max(1, Math.floor(PANE_COUNT / shown)), run = Math.floor(first / shown)
+
+  return (((run + direction) % runs) + runs) % runs * shown
+}
+
 // A team already on screen moves rather than showing twice, and whatever was in the pane takes its old place.
 export function placeTeam(panes, key, index) {
   const next = [...panes], from = next.indexOf(key)

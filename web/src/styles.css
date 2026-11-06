@@ -448,3 +448,20 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 @container (max-width: 280px) { .pane-head small { display: none; } }
 /* Too narrow to keep the list beside the panes, so the panes take the width and the list floats over them. */
 @media (max-width: 760px) { .split, .touch .split { right: 8px; } }
+/* Phone: two panes fill the width, and the side panel folds behind a button so it doesn't cover them. */
+.app.phone .corner { display: none; }
+.app.phone.panel-open .corner { display: flex; }
+.app.phone.panel-open .team-list { width: min(292px, calc(100vw - 20px)); }
+.app.phone.dragging .corner { opacity: 0; pointer-events: none; }
+.app.phone .split { top: calc(46px + env(safe-area-inset-top)); bottom: calc(84px + env(safe-area-inset-bottom)); left: calc(6px + env(safe-area-inset-left)); right: calc(6px + env(safe-area-inset-right)); }
+.panel-button { position: absolute; z-index: 4; right: calc(12px + env(safe-area-inset-right)); bottom: calc(34px + env(safe-area-inset-bottom)); color: #fff; background: rgba(14, 17, 24, .72); border-radius: 9px; }
+.panel-button.on { background: rgba(14, 17, 24, .92); }
+.pane-dots { position: absolute; z-index: 3; left: 50%; bottom: calc(34px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; gap: 2px; padding: 0 4px; background: rgba(14, 17, 24, .72); border-radius: 999px; }
+.pane-dots button { width: 32px; height: 44px; display: grid; place-items: center; background: none; border: 0; cursor: pointer; }
+.pane-dots i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, .4); }
+.pane-dots button.on i { background: #fff; }
+/* Sideways, the controls sit over the bottom of the panes, so the rooms keep their height. */
+@media (orientation: landscape) {
+  .app.phone .split { bottom: calc(34px + env(safe-area-inset-bottom)); left: calc(62px + env(safe-area-inset-left)); right: calc(62px + env(safe-area-inset-right)); }
+  .app.phone .pane-dots { bottom: calc(40px + env(safe-area-inset-bottom)); }
+}
