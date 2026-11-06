@@ -4,11 +4,11 @@ import type { EngineInterface } from 'claude-code'
 // It's an allow-list. A command that mentions a delete runs only if every part of it is something this can vouch for.
 type Word = { text: string; isDynamic: boolean; globAt: number }
 // A command's words, with its own source text, the heredocs and here-strings fed to it, whether a pipe feeds it,
-// whether what's fed to it holds a variable or substitution, and whether it runs inside a group, subshell or loop,
-// which passes on whatever is fed to the group.
-type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean }
-// The whole command as sent, and whether any part of it is fed by a pipe, heredoc or here-string.
-type Line = { text: string; isFed: boolean }
+// whether what's fed to it holds a variable or substitution, whether it runs inside a group, subshell or loop,
+// which passes on whatever is fed to the group, and whether it sends its output to a file.
+type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean }
+// The whole command as sent, its commands, and whether any of them is fed by a pipe, heredoc or here-string.
+type Line = { text: string; commands: Command[]; isFed: boolean }
 type Target = { path: string; shown: string }
 
 const MAX_NESTING = 8
@@ -36,7 +36,7 @@ const MENTIONS_DELETE = /(?<![\w.]|[\w.]-)g?rm(?![\w.-])|(?<![\w.]|[\w.]-)trash(
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
 const newCommand = (): Command =>
-  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false })
+  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false, writesFile: false })
 // Syntax this reader doesn't model, which makes a command it was checking a refusal.
 const unsure = (what: string) => new Error(`can't read ${what}`)
 
@@ -151,6 +151,7 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
     let word: Word | undefined
     let skipsWord = false
     let isHereString = false
+    let isOutput = false
     let parens = 0
     // Groups and loops opened by { and do, which only count before the program.
     let blocks = 0
@@ -166,6 +167,10 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
     }
     const endWord = () => {
       if (word && isHereString) feed(fedCommands(), word.text, word.isDynamic)
+      // Output to a file descriptor or /dev/null leaves nothing for another program to run.
+      if (word && isOutput) {
+        for (const owner of fedCommands()) owner.writesFile ||= word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text)
+      }
       if (word && !skipsWord) {
         if (!word.isDynamic && cmd.every(each => BEFORE_PROGRAM.has(each.text))) {
           if (word.text === '{' || word.text === 'do') blocks++
@@ -174,12 +179,12 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
         cmd.push(word)
         cmd.isNested ||= parens + blocks > 0
       }
-      if (word) skipsWord = isHereString = false
+      if (word) skipsWord = isHereString = isOutput = false
       word = undefined
     }
     const endCommand = () => {
       endWord()
-      skipsWord = isHereString = false
+      skipsWord = isHereString = isOutput = false
       if (cmd.length) {
         cmd.text = src.slice(start, i)
         out.push(cmd)
@@ -260,6 +265,7 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
           if (isQuoted && !/^(['"]?)[\w.-]+\1$|^\\[\w.-]+$/.test(src.slice(startOfEnd, i))) throw unsure('an unusual heredoc end')
           heredocs.push({ end, stripsTabs, isQuoted, owners: fedCommands() })
         } else {
+          isOutput = c !== '<'
           i += c === '&' ? 2 : 1
           while (src[i] === '>' || src[i] === '&' || src[i] === '|') i++
           skipsWord = true
@@ -560,17 +566,37 @@ const isFed = (words: Command, line: Line) => words.isPiped || words.stdin !== '
 const ownText = (words: Command) => `${words.text}\n${words.stdin}`
 const hasDynamic = (words: Command) => words.isFedDynamic || words.some(word => word.isDynamic)
 
+// Programs that only read and print, so they can't put code in a file that another part of the line runs.
+const READ_ONLY = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'diff', 'stat', 'file', 'jq', 'pwd', 'date', 'basename', 'dirname', 'which', 'true', 'false', 'test', '[', '[[', 'cd', 'less', 'more', 'gh', 'quinn-gh'])
+// What the read-only programs can do that writes a file: sort -o, uniq's second file, and gh downloading or checking out.
+const WRITES_A_FILE = /^(-[A-Za-z]*o|--output.*|clone|checkout|download|--dir.*)$/
+
+// Whether a command only reads: a read-only program, or only assignments, with no output to a file.
+function isReadOnly(words: Command) {
+  const program = words.find(word => !ASSIGNMENT.test(word.text) && !BEFORE_PROGRAM.has(word.text))
+  if (words.writesFile) return false
+  if (!program) return true
+  const name = nameOf(program)
+  const args = words.slice(words.indexOf(program) + 1)
+  if (program.isDynamic || !READ_ONLY.has(name)) return false
+  if (name === 'uniq' && args.filter(arg => !arg.text.startsWith('-')).length > 1) return false
+
+  return !((name === 'sort' || GH.test(name)) && args.some(arg => WRITES_A_FILE.test(arg.text)))
+}
+
 // What a shell or language at `k` among the launched programs could run: its own text only when its code is plainly an
-// argument that nothing in front of it fills and no variable supplies. A shell given input could read more code from it,
-// such as sh -c sh, and so could a language whose code runs what it reads. Otherwise its code could come from a file
-// or input that the rest of the line supplies, so it's the whole line.
+// argument that nothing in front of it fills and no variable supplies, and everything else in the line only reads, so
+// that code can't load a file the line writes. A shell given input could read more code from it, such as sh -c sh, and
+// so could a language whose code runs what it reads. Otherwise its code could come from a file or input that the rest
+// of the line supplies, so it's the whole line.
 function codeOf(words: Command, at: number, launched: string[], k: number, line: Line) {
   const isArgument = takesCodeArgument(launched[k], words.slice(at + k + 1)) && !hasDynamic(words)
   const isFilled = launched.slice(0, k).some(each => FILLS_ARGUMENTS.test(each))
+  const isAmongReaders = line.commands.every(other => other === words || isReadOnly(other))
   const own = ownText(words)
   const readsInput = isFed(words, line) && (SHELLS.test(launched[k]) || RUNS_ITS_INPUT.test(own))
 
-  return isArgument && !isFilled && !readsInput ? own : line.text
+  return isArgument && !isFilled && isAmongReaders && !readsInput ? own : line.text
 }
 
 function wordsMentionDelete(words: Command, line: Line) {
@@ -617,7 +643,7 @@ function wordsMentionDelete(words: Command, line: Line) {
 // Whether any part of a command might delete. It's read whole if the reader can't split it.
 function anyMentionDelete(commands: Command[] | undefined, command: string) {
   if (!commands) return textMentionsDelete(command)
-  const line = { text: command, isFed: commands.some(words => words.isPiped || words.stdin !== '') }
+  const line = { text: command, commands, isFed: commands.some(words => words.isPiped || words.stdin !== '') }
 
   return commands.some(words => wordsMentionDelete(words, line))
 }

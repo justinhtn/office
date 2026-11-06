@@ -639,7 +639,12 @@ const STILL_REFUSED: [string, string][] = [
   ['env git worktree remove', 'env git worktree remove --force /Users/me/.claude/x'],
   ['yarn node removing a folder', `yarn node -e "require('fs').rmSync('/Users/me/.claude', {recursive: true})"`],
   ['yarn rimraf', 'yarn rimraf /Users/me/.claude'],
-  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
+  // From the second review: code given as an argument loading a file the line writes.
+  ['python -c importing a module the line writes', `cp /dev/stdin evil.py <<< 'import shutil; shutil.rmtree("/Users/me/.claude")'; python3 -c 'import evil'`],
+  ['node -e requiring a file the line writes', `cp /dev/stdin /tmp/x.js <<< 'require("fs").rmSync("/Users/me/.claude", { recursive: true })'; node -e 'require("/tmp/x.js")'`],
+  ['ruby -e loading a file the line writes', `cat > /tmp/x.rb <<'EOF'\nrequire "fileutils"; FileUtils.rm_rf("/Users/me/.claude")\nEOF\nruby -e 'load "/tmp/x.rb"'`],
+  ['perl -e requiring a file written by echo', `echo 'system("rm -rf /Users/me/.claude");' > /tmp/x.pl; perl -e 'require "/tmp/x.pl"'`],
+  ['python -c running a module written by sort -o', `sort -o /tmp/m.py <<< 'import os; os.remove("/Users/me/.claude/x")'; python3 -c 'import runpy'`],  ['perl backticks from a heredoc', `perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
 ]
 
 for (const [why, command] of STILL_REFUSED) {
