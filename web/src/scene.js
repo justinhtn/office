@@ -95,6 +95,14 @@ const portraits = new Map()
 
 function drawPortrait(stage, lens) {
   if (roomRenderer) {
+    // A lost context draws nothing and reads back zeros, which would be kept as a blank face, so it fails and is tried again later.
+    if (roomRenderer.getContext().isContextLost()) throw new Error("The room's WebGL context is lost.")
+    // A renderer made before the room existed isn't needed any more, and its context counts against the phone's limit.
+    if (portraitRenderer) {
+      portraitRenderer.dispose()
+      portraitRenderer.forceContextLoss()
+      portraitRenderer = null
+    }
     const target = new THREE.WebGLRenderTarget(PORTRAIT_SIZE, PORTRAIT_SIZE)
     const before = roomRenderer.getRenderTarget()
     const pixels = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4)
@@ -140,7 +148,12 @@ export function portrait(p) {
       const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
       lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
       await new Promise(resolve => setTimeout(resolve, 400))
-      return drawPortrait(stage, lens)
+      try {
+        return drawPortrait(stage, lens)
+      } finally {
+        // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
+        model.traverse(o => { if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose() })
+      }
     }).catch(failure => {
       // Not remembered, so the face is tried again the next time it's shown.
       portraits.delete(key)
@@ -2162,6 +2175,6 @@ return {
     boards.forEach(drawBoard);drawDirectory();drawModal();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
   map,
-  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
+  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();if(roomRenderer===renderer)roomRenderer=null;renderer.dispose();map.remove()},
 }
 }
