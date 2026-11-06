@@ -22,8 +22,8 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
 const ADVICE = 'Run the delete as its own command with the full literal path, starting with /. Check it with ls first, and prefer moving it to a trash folder (mv <path> ~/.Trash/) over deleting it.'
 
 // Anything that could be a delete, once quotes are out of the way, including rm pieced together from variables.
-// A pattern or variable counts only as the program itself, perhaps after assignments, a wrapper, !, { or a keyword, or inside a function body or case arm, followed anywhere on its line by a flag rm could use.
-const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*([A-Za-z_]\w*\+?=\S*\s+)*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*([A-Za-z_]\w*\+?=\S*\s+)*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s)\S*[?*[]\S*(\s|$)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*([A-Za-z_]\w*\+?=\S*\s+)*((sudo|doas|env|command|builtin|exec|nohup|nice|time|timeout|xargs|arch|caffeinate)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=)(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
+// A pattern or variable counts only as the program itself, perhaps after assignments, redirections, a wrapper, !, { or a keyword, or inside a function body or case arm, followed anywhere on its line by a flag rm could use.
+const MENTIONS_DELETE = /\bg?rm\b|\bunlink\b|\brmtree\b|(^|\s)--?delete\b|--recursive|\br\$|\$\{[^}]*\}m\b|\)m\b|\bg?find\b[^;&|\n]*(\$\(|`)|\benv\b[^;&|\n]*\s-S|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*(\$\(|`)[^\n]*\s(-[A-Za-z]*[rRf]|--rec)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|[A-Za-z_]\w*\+?=)\S*[?*[]\S*(\s|$)|(^|[\n;&|()]|\s\{)\s*((!|\{|if|then|else|elif|do|while|until|coproc|repeat\s+\S+)\s+)*(([A-Za-z_]\w*\+?=\S*|\d*[<>]+&?\s*\S*)\s+)*((sudo|doas|env|command|builtin|exec|eval|nohup|nice|time|timeout|xargs|arch|caffeinate|stdbuf|ionice|noglob|nocorrect|-|sh|bash|zsh|dash|ksh)\s+(\S+\s+)*?)?(?!\[\[?\s|\{\s|[A-Za-z_]\w*\+?=)(\S*[?*[{$`]\S*)[^;&|\n]*\s(-[A-Za-z]*[rRf]|--rec)/i
 
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
@@ -382,10 +382,13 @@ function checkCommand(words: Word[], home: string, targets: Target[]) {
 }
 
 const withoutQuotes = (command: string) => command.replace(/\\\n|['"\\]/g, '')
+// The same, but keeping each quoted value one word, so a quoted assignment can't make the program look like its second half.
+const withQuotedWordsJoined = (command: string) =>
+  withoutQuotes(command.replace(/(["'])(.*?)\1/gs, (_, quote: string, inner: string) => quote + inner.replace(/[\s;&|()<>]/g, '_') + quote))
 
 // True if a command might delete something, which is what puts it under this check at all.
 export const mentionsDelete = (command: unknown) =>
-  typeof command === 'string' && (command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)))
+  typeof command === 'string' && (command.includes("$'") || MENTIONS_DELETE.test(withoutQuotes(command)) || MENTIONS_DELETE.test(withQuotedWordsJoined(command)))
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
