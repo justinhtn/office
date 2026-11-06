@@ -24,6 +24,9 @@ else
   echo "Skipping plugin tests: no claude command with plugin tests here. CI still runs them."
 fi
 
+echo "Running interface tests"
+node --test web/src/*.test.js
+
 echo "Building the interface"
 [ -d web/node_modules ] || (cd web && npm ci --silent)
 out="$(mktemp -d)"

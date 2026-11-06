@@ -6,10 +6,12 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Hand, Maximize, Minus, Pin, Plus, RotateCcw,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2,
 } from 'lucide-react'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { isTouchDevice } from './device.js'
+import { readSplitLayout, writeSplitLayout } from './savedView.js'
+import { clearPane, firstPanes, placeTeam, shownPanes } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import ReactMarkdown from 'react-markdown'
 
@@ -62,6 +64,12 @@ const PRESENTATION_CHOICE = 'office-presentation-choice'
 const PRESENTATION_SHIFT = .29
 const ignoreRoomClick = () => {}
 const ZOOM_STEP = 8
+// A long press picks a team up from the floor plan, so a plain touch can still scroll the list or tap.
+const LONG_PRESS_MS = 300
+const DRAG_SLOP = 8
+// The browser's click after a drop would otherwise also open the team.
+const CLICK_AFTER_DRAG_MS = 400
+const SPARE_TEAMS = 6
 
 // A teammate walks the person through finished work, claim by claim. Marks come from the server's code checks.
 function Presentation({ person, everyone, onClose }) {
@@ -181,8 +189,8 @@ function Presentation({ person, everyone, onClose }) {
   )
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, onPick, onSpace, onHome }) {
-  const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null)
+function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onPick, onSpace, onHome, children }) {
+  const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null), panes = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace)
   const [hasSavedView, setHasSavedView] = useState(false)
   const [isHandTool, setIsHandTool] = useState(false)
@@ -192,10 +200,30 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   useEffect(() => {
     scene.current = createScene(stage.current, canvas.current, tags.current, (id, isMap) => pick.current(id, isMap), (key, isMap) => space.current(key, isMap))
     mapHost.current?.appendChild(scene.current.map)
+    sceneHandle.current = scene.current
     setHasSavedView(scene.current.hasSavedView())
 
-    return () => scene.current.dispose()
+    return () => { sceneHandle.current = null; scene.current.dispose() }
   }, [])
+  // The page lays out the panes, and the scene draws each room where its pane sits.
+  const splitKeys = split?.join()
+  useEffect(() => {
+    if (!split) { scene.current.setSplit(null); return }
+    const measure = () => {
+      const box = stage.current.getBoundingClientRect()
+      const rects = [...panes.current.querySelectorAll('.pane')].map(pane => {
+        const r = pane.getBoundingClientRect()
+        return { x: Math.round(r.left - box.left), y: Math.round(r.top - box.top), w: Math.round(r.width), h: Math.round(r.height) }
+      })
+      scene.current.setSplit({ keys: split, rects })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage.current)
+    observer.observe(panes.current)
+
+    return () => observer.disconnect()
+  }, [splitKeys])
   useEffect(() => {
     scene.current.update(people, selected, focus, speaker, usage)
   }, [people, selected, focus, speaker, usage])
@@ -223,8 +251,10 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   return (
     <div className="room" ref={stage}>
       <canvas ref={canvas} aria-label="3D office floor showing active agents" />
+      {split && <div className="split" ref={panes}>{children}</div>}
       <div className="tags" ref={tags} />
-      <div className="zoom-controls" role="group" aria-label="Zoom the office" onMouseUp={event => event.target.closest('button')?.blur()}>
+      <div className={`zoom-controls ${split ? 'is-split' : ''}`} role="group" aria-label="Zoom the office" onMouseUp={event => event.target.closest('button')?.blur()}>
+        {onSplit && <button className={`split-toggle ${split ? 'on' : ''}`} aria-label={split ? 'Back to the whole office' : 'Split view: four teams at once'} aria-pressed={Boolean(split)} title={split ? 'Back to the whole office' : 'Split view: four teams at once'} onClick={onSplit}><Grid2x2 size={15} /></button>}
         <button aria-label="Zoom in" title="Zoom in" onClick={() => scene.current.zoomBy(-ZOOM_STEP)}><Plus size={16} /></button>
         <button aria-label="Zoom out" title="Zoom out" onClick={() => scene.current.zoomBy(ZOOM_STEP)}><Minus size={16} /></button>
         <button className={isHandTool ? 'on' : ''} aria-label="Hand tool: drag to pan" aria-pressed={isHandTool} title={isHandTool ? 'Hand tool on: drag to pan' : 'Hand tool: drag to pan'} onClick={() => setIsHandTool(!isHandTool)}><Hand size={15} /></button>
@@ -1103,6 +1133,117 @@ function Away({ people, onPick, onClose }) {
   )
 }
 
+function teamStatus(team) {
+  const { members } = team, working = members.filter(member => member.isRunning).length
+  if (members.some(member => member.request)) return { text: 'Asking for you', tone: 'asks' }
+  if (members.some(member => member.isFinished)) return { text: 'Finished', tone: 'finished' }
+  if (working) return { text: `${working} working`, tone: 'working' }
+
+  return { text: `${members.length} idle`, tone: 'idle' }
+}
+const teamNameOf = team => team.lead.teamName || team.lead.name
+
+// Four rooms at once. Each pane's header names its team and can be dragged onto another pane to swap them.
+function SplitPanes({ panes, teams, drag, onDragStart, onPlace, onClear, onOpen }) {
+  const spare = teams.filter(team => !panes.includes(team.lead.id)).slice(0, SPARE_TEAMS)
+
+  return shownPanes(panes, teams).map((team, index) => {
+    const status = team && teamStatus(team)
+
+    return (
+      <div key={index} data-pane={index} className={`pane ${team ? '' : 'empty'} ${drag?.over === index ? 'drop' : ''}`}>
+        {team ? (
+          <header className="pane-head" onPointerDown={event => onDragStart(event, team.lead.id, index)}>
+            <span className={`dot ${status.tone}`} /><b>{teamNameOf(team)}</b><small>{status.text}</small>
+            <button className="icon" aria-label={`Open ${teamNameOf(team)} in the whole office`} title="Open in the whole office" onClick={() => onOpen(team)}><Maximize2 size={13} /></button>
+            <button className="icon" aria-label={`Take ${teamNameOf(team)} out of this pane`} title="Take out of this pane" onClick={() => onClear(index)}><X size={13} /></button>
+          </header>
+        ) : (
+          <div className="pane-empty">
+            <p>Drag a team here from the floor plan</p>
+            {spare.length > 0 && <div className="pane-spare">{spare.map(one => <button key={one.lead.id} onClick={() => onPlace(one.lead.id, index)}>{teamNameOf(one)}</button>)}</div>}
+          </div>
+        )}
+      </div>
+    )
+  })
+}
+
+// Drags a team from the floor plan, or a pane's header, into a pane.
+function useTeamDrag(isOn, mapHost, sceneHandle, teams, onDrop) {
+  const [drag, setDrag] = useState(null)
+  const live = useRef(null), pending = useRef(null), latest = useRef(null)
+  latest.current = { teams, onDrop }
+  const nameOf = key => { const team = latest.current.teams.find(one => one.lead.id === key); return team ? teamNameOf(team) : null }
+  // Panes let touches through to the room, so they're found by position rather than by what's under the finger.
+  const paneAt = (x, y) => {
+    const pane = [...document.querySelectorAll('[data-pane]')].find(one => { const r = one.getBoundingClientRect(); return x >= r.left && x < r.right && y >= r.top && y < r.bottom })
+    return pane ? Number(pane.dataset.pane) : null
+  }
+  const show = next => { live.current = next; setDrag(next) }
+  const begin = (start, x, y) => { pending.current = null; show({ key: start.key, name: nameOf(start.key), pointerId: start.pointerId, x, y, over: paneAt(x, y) }) }
+
+  useEffect(() => {
+    if (!isOn) return
+    const host = mapHost.current
+    let quietUntil = 0
+    const onDown = event => {
+      if (event.button > 0) return
+      const key = sceneHandle.current?.mapSpaceAt(event.clientX, event.clientY)
+      if (!key || !nameOf(key)) return
+      const start = { key, pointerId: event.pointerId, x: event.clientX, y: event.clientY, isTouch: event.pointerType !== 'mouse' }
+      if (start.isTouch) start.timer = setTimeout(() => { if (pending.current === start) begin(start, start.x, start.y) }, LONG_PRESS_MS)
+      pending.current = start
+    }
+    const onMove = event => {
+      const start = pending.current
+      if (start?.pointerId === event.pointerId && Math.hypot(event.clientX - start.x, event.clientY - start.y) > DRAG_SLOP) {
+        // Moving before the long press is a scroll.
+        if (start.isTouch) { clearTimeout(start.timer); pending.current = null } else begin(start, event.clientX, event.clientY)
+      }
+      const now = live.current
+      if (now?.pointerId === event.pointerId) show({ ...now, x: event.clientX, y: event.clientY, over: paneAt(event.clientX, event.clientY) })
+    }
+    const onUp = event => {
+      if (pending.current?.pointerId === event.pointerId) { clearTimeout(pending.current.timer); pending.current = null }
+      const now = live.current
+      if (now?.pointerId !== event.pointerId) return
+      show(null)
+      quietUntil = performance.now() + CLICK_AFTER_DRAG_MS
+      if (event.type === 'pointerup' && now.over !== null) latest.current.onDrop(now.key, now.over)
+    }
+    const onClick = event => { if (performance.now() < quietUntil) event.stopPropagation() }
+    // Touch events stay with the element they started on, so this keeps the list from scrolling under a drag.
+    const onTouchMove = event => { if (live.current) event.preventDefault() }
+    host.addEventListener('pointerdown', onDown)
+    host.addEventListener('click', onClick, true)
+    host.addEventListener('touchmove', onTouchMove, { passive: false })
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+
+    return () => {
+      host.removeEventListener('pointerdown', onDown)
+      host.removeEventListener('click', onClick, true)
+      host.removeEventListener('touchmove', onTouchMove)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      clearTimeout(pending.current?.timer)
+      pending.current = null
+      show(null)
+    }
+  }, [isOn])
+
+  // A pane's header doesn't scroll, so it drags straight away.
+  function dragFromPane(event, key) {
+    if (event.button > 0 || event.target.closest('button')) return
+    pending.current = { key, pointerId: event.pointerId, x: event.clientX, y: event.clientY, isTouch: false }
+  }
+
+  return [drag, dragFromPane]
+}
+
 export default function App() {
   const [everyone, setEveryone] = useState([])
   const [updatedAt, setUpdatedAt] = useState('')
@@ -1142,6 +1283,7 @@ export default function App() {
   const [newsDay, setNewsDay] = useState(null)
   const [isNewsOpen, setIsNewsOpen] = useState(false)
   const mapHost = useRef(null)
+  const sceneHandle = useRef(null)
   const [newsRead, setNewsRead] = useState(() => {
     try { return localStorage.getItem(NEWS_READ_SETTING) } catch { return null }
   })
@@ -1279,6 +1421,14 @@ export default function App() {
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: false, panes: null })
+  useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
+  const isSplit = splitLayout.isOn && !isShowing && active.length > 0
+  const panes = splitLayout.panes ?? firstPanes(teams)
+  const setPanes = next => setSplitLayout(layout => ({ ...layout, panes: next }))
+  const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))
+  const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => setPanes(placeTeam(panes, key, index)))
+
   function goToPlace(key) {
     setIsPresenting(false)
     setSelected(null)
@@ -1347,9 +1497,12 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)} />
+          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? shownPanes(panes, teams).map(team => team?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+              <SplitPanes panes={panes} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
+            </Room>
           : !problem && <Empty text="Waiting for session data…" />}
-        {personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
+        {drag && createPortal(<div className="drag-chip" style={{ left: drag.x, top: drag.y }}>{drag.name}</div>, document.body)}
+        {!isSplit && personTeam && !personTeam.isIndependent && <div className="room-title"><TeamName person={personTeam.lead} /></div>}
         {isShowing && <Presentation person={presenter} everyone={everyone} onClose={() => { setIsPresenting(false); setSelected(null) }} />}
         <div className="corner">
           {isNewsOpen && newsDay && <Drawer onClose={() => setIsNewsOpen(false)}><Newsroom day={newsDay} onClose={() => setIsNewsOpen(false)} /></Drawer>}
