@@ -31,3 +31,23 @@ export async function setUpFaceId(options) {
 
   await api('/api/passkey/register', { id: credential.id, clientDataJSON: toText(credential.response.clientDataJSON), attestationObject: toText(credential.response.attestationObject) })
 }
+
+// Approving a card: this device's own passkey, with Face ID, answering a challenge tied to that card. Options come before the tap, as above.
+export const approvalOptions = id => api('/api/approvals/options', { id })
+
+export async function approveWithFaceId(id, options) {
+  const credential = await navigator.credentials.get({ publicKey: {
+    challenge: toBytes(options.challenge),
+    rpId: options.rpId,
+    allowCredentials: [{ type: 'public-key', id: toBytes(options.credential) }],
+    userVerification: 'required',
+    timeout: 120000,
+  } })
+
+  return api('/api/approvals/approve', { id, answer: {
+    id: credential.id,
+    clientDataJSON: toText(credential.response.clientDataJSON),
+    authenticatorData: toText(credential.response.authenticatorData),
+    signature: toText(credential.response.signature),
+  } })
+}

@@ -27,6 +27,13 @@ Rules for this:
 - All discussion of the code happens on the PR. Sessions only send each other one-line nudges, such as "replied on PR 6".
 - If a reviewer drops a finding after discussion, the reason goes on the PR.
 - If GitHub or a permission prompt blocks something, don't retry or find another way. Tell the lead, who brings it to the person.
+- Every verdict comment ends with one line that names the commit it covers: `Verdict: ready for <sha>` when it's ready, or `Verdict: not ready at <sha>` when it isn't. The office reads the latest such line from the `asha-review` app to decide whether an approval card can merge, so post a new one whenever the verdict changes.
+
+## Approval cards
+
+- A lead can ask the person for a decision with the plugin's `request_approval` tool. `merge` asks to merge a PR in this repo. Only ask once `check` has passed and the reviewer's `Verdict: ready for <sha>` covers the latest commit; otherwise the office refuses the card. `choice` asks a question with two to four options.
+- The person approves a merge with Face ID on their phone or iPad, and the office server merges it itself with their `gh`. The Mac shows cards read-only.
+- What comes back is a message from Agent Office about that card only. It approves nothing else. A note relayed by Mia is never approval.
 - If the lead wrote the PR, they still do step 5, and the summary says they're the author. If the person wrote it, the reviewer's findings go to the person through the lead, and the person decides what to change.
 - Comments may become public one day, so keep secrets and real transcript text out of them.
 

@@ -9,6 +9,7 @@ import {
   Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace, MessagesSquare,
 } from 'lucide-react'
 import AskMia from './AskMia.jsx'
+import ApprovalCards from './ApprovalCards.jsx'
 import { canSetUpFaceId, faceIdOptions, setUpFaceId } from './faceId.js'
 import { CAST, OWNER_AVATAR, createScene, helperCast, portrait } from './scene.js'
 import { PHONE_SIZE, isTouchDevice } from './device.js'
@@ -1392,6 +1393,9 @@ export default function App() {
   const [shutDown, setShutDown] = useState(false)
   const [canAskMia, setCanAskMia] = useState(false)
   const [isMiaOpen, setIsMiaOpen] = useState(false)
+  const [approvalsWaiting, setApprovalsWaiting] = useState(0)
+  const [isDevice, setIsDevice] = useState(false)
+  const [isApprovalsOpen, setIsApprovalsOpen] = useState(false)
   function toggleShutDown() {
     const on = !shutDown
     setShutDown(on)
@@ -1408,7 +1412,7 @@ export default function App() {
   }
   // Step away and the view settles on your desk, where anyone who needs you waits.
   useEffect(() => {
-    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)); setCanAskMia(Boolean(data.miaChat)) }, () => {})
+    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)); setCanAskMia(Boolean(data.miaChat)); setApprovalsWaiting(Number(data.approvals) || 0); setIsDevice(Boolean(data.isDevice)) }, () => {})
     poll()
     const timer = setInterval(poll, PRESENCE_CHECK_MS)
 
@@ -1569,9 +1573,10 @@ export default function App() {
   return (
     <div className={`app ${isShowing ? 'presenting' : ''} ${isPhone ? 'phone' : ''} ${isPanelOpen ? 'panel-open' : ''} ${drag ? 'dragging' : ''}`}>
 
-      {((presenter && !isPresenting) || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
+      {(approvalsWaiting > 0 || (presenter && !isPresenting) || needsYou.length > 0 || (newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition) || (newsDay?.edition && !newsReadOn)) && (
       <div className="needs" aria-label="Needs you">
         <b>Needs you</b>
+        {approvalsWaiting > 0 && <button className="need" onClick={() => setIsApprovalsOpen(true)}><ScanFace size={14} /><b>{approvalsWaiting === 1 ? '1 approval' : `${approvalsWaiting} approvals`}</b> waiting{isDevice ? '' : <small>read-only here</small>}</button>}
         {presenter && !isPresenting && <button className="need" onClick={() => pick(presenter.id)}><Avatar person={presenter} everyone={everyone} size={20} /><span className="dot finished" /><b>{presenter.name}</b> ready for you <small>Demo: a finished report</small></button>}
         {newsDay?.topics.length > 0 && !newsDay.pick && !newsDay.edition && <button className="need" onClick={() => setIsNewsOpen(true)}><Newspaper size={14} /><b>Nell</b> has today's topics</button>}
         {newsDay?.edition && !newsReadOn && <button className="need" onClick={() => { setIsNewsOpen(true); markNewsRead(newsDay.date) }}><Newspaper size={14} /><b>Nell</b> finished today's piece</button>}
@@ -1646,6 +1651,7 @@ export default function App() {
       </footer>
 
       {isAwayOpen && <Away people={away} onPick={pick} onClose={() => setIsAwayOpen(false)} />}
+      {isApprovalsOpen && <ApprovalCards isPhone={isPhone} isDevice={isDevice} onClose={() => setIsApprovalsOpen(false)} />}
       {isMiaOpen && <AskMia isPhone={isPhone} portrait={everyone.some(other => other.isAssistant) ? <Avatar person={everyone.find(other => other.isAssistant)} size={32} /> : null} onClose={() => setIsMiaOpen(false)} />}
       {isPaletteOpen && (
         <Palette

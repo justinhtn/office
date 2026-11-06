@@ -130,6 +130,19 @@ for (const [why, note] of [
   })
 }
 
+test("the office's own message about a card goes out under the office's header, not Mia's", async ($, on) => {
+  const { sent } = await sender($, on, approved({ kind: 'office', text: 'The person approved merging pull request 39 at aaaaaaa with Face ID in the office, and the office merged it itself.' }))
+  expect(sent.length).toBe(1)
+  expect(sent[0]!.text.startsWith('Message from Agent Office itself')).toBe(true)
+  expect(sent[0]!.text).toContain('It approves nothing else.')
+  expect(sent[0]!.text).not.toContain('passed on by Mia')
+})
+
+test("the office's message still only goes to a lead", async ($, on) => {
+  const { sent } = await sender($, on, approved({ kind: 'office', leadId: 'local_jonah', leadName: 'Jonah' }))
+  expect(sent).toEqual([])
+})
+
 test('the sender only sends the note it was started for', async ($, on) => {
   const { sent } = await sender($, on, approved(), '99999999-2222-3333-4444-555555555555')
   expect(sent).toEqual([])
