@@ -601,6 +601,8 @@ function isReadOnly(words: Command) {
   const name = nameOf(program)
   const args = words.slice(words.indexOf(program) + 1)
   if (program.isDynamic || !READ_ONLY.has(name)) return false
+  // A variable or substitution could become a writing option or operand, quoted or not, as "$x" can be -oFILE.
+  if ((name === 'uniq' || name in WRITING_OPTIONS) && args.some(arg => arg.isDynamic)) return false
   // uniq writes its second operand, where - stands for its input.
   if (name === 'uniq' && args.filter(arg => arg.text === '-' || !arg.text.startsWith('-')).length > 1) return false
   if (GH.test(name) && args.some(arg => GH_WRITES.test(arg.text))) return false
