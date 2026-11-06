@@ -138,13 +138,14 @@ class MiaChat:
         with self.lock:
             if not self.is_running():
                 raise RuntimeError("Mia isn't here right now. She'll be back in a moment.")
-            self.add("person", text)
             try:
                 self.process.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}).encode() + b"\n")
                 self.process.stdin.flush()
             except (OSError, ValueError) as problem:
                 log(f"Couldn't reach chat Mia: {problem}")
                 raise RuntimeError("Mia isn't here right now. She'll be back in a moment.") from None
+            # Kept only once she has it, so the chat never shows a message she didn't get.
+            self.add("person", text)
             self.waiting += 1
             if self.reply is None:
                 self.reply = {"at": int(time.time() * 1000), "parts": {}, "order": [], "step": None}

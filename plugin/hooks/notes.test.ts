@@ -9,6 +9,7 @@ const PEOPLE = {
   people: [
     { id: 'local_zoe', name: 'Zoe', title: 'agent office application', teamLeadId: 'local_zoe' },
     { id: 'local_jonah', name: 'Jonah', title: 'tests and CI', teamLeadId: 'local_zoe' },
+    { id: 'local_mia', name: 'Mia', title: 'Introduction', teamLeadId: 'local_mia', isIndependent: true, isAssistant: true },
   ],
 }
 
@@ -95,6 +96,7 @@ test('a draft nobody approved never goes out', async ($, on) => {
 test('only team leads get notes', async ($, on) => {
   const { files } = await mia($, on)
   expect(await passNote($, 'Jonah', 'Hello.')).toContain("isn't a team lead")
+  expect(await passNote($, 'Mia', 'Hello.')).toContain("isn't a team lead")
   expect(await passNote($, 'Nobody', 'Hello.')).toContain('The leads now: Zoe')
   expect(notesIn(files)).toEqual([])
 })

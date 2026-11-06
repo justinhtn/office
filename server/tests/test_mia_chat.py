@@ -121,6 +121,15 @@ class AskTests(Chat):
             self.chat.ask("Hello")
         self.assertEqual(self.chat.history(), [])
 
+    def test_a_message_she_never_got_isnt_kept(self):
+        process = self.running()
+        process.stdin = mock.Mock()
+        process.stdin.write.side_effect = BrokenPipeError()
+        with self.assertRaises(RuntimeError):
+            self.chat.ask("Hello")
+        self.assertEqual(self.chat.history(), [])
+        self.assertFalse(self.chat.view()["isAnswering"])
+
     def test_empty_and_overlong_messages_are_refused(self):
         self.running()
         for text in ("", "   ", "x" * (mia_chat.MAX_ASK + 1)):
@@ -179,10 +188,11 @@ class NoteTests(Chat):
                 self.chat.decide(note_id, True, lambda lead: "engine-zoe")
 
     def test_only_leads_in_the_office_get_a_session(self):
-        people = [{"id": LEAD, "teamLeadId": LEAD}, {"id": "local_x", "teamLeadId": LEAD}]
+        people = [{"id": LEAD, "teamLeadId": LEAD}, {"id": "local_x", "teamLeadId": LEAD}, {"id": "local_mia", "teamLeadId": "local_mia", "isAssistant": True}]
         with mock.patch.object(server.OFFICE, "snapshot", {"people": people}), mock.patch.object(server.TRANSCRIPTS, "path_for", return_value=WORK / "engine-zoe.jsonl"):
             self.assertEqual(server.lead_session(LEAD), "engine-zoe")
             self.assertIsNone(server.lead_session("local_x"))
+            self.assertIsNone(server.lead_session("local_mia"))
             self.assertIsNone(server.lead_session("local_nobody"))
 
 

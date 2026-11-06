@@ -90,6 +90,7 @@ type Person = {
   teamGroup?: string
   teamLeadId?: string
   isIndependent?: boolean
+  isAssistant?: boolean
 }
 
 let selfId = ''
@@ -100,6 +101,7 @@ let leadsTeam = false
 let isOnTeam = false
 let isFrontDesk = false
 let isMiaChat = false
+let isSendingNotes = false
 
 // A worktree belongs to the repo that holds it, not to its own folder.
 function projectOf(session: Listed): string {
@@ -504,7 +506,7 @@ async function draftNote($: EngineInterface, input: { lead?: unknown; note?: unk
     return "Not drafted. A note can't carry approval or mention a risky step such as merging, deploying, publishing or removing something. Tell the person to say that to the lead themselves, in that session in the Claude app."
   }
   const { people } = JSON.parse(await $.fs.read(`${dataFolder}/people.json`)) as { people: Person[] }
-  const leads = people.filter(person => person.id === person.teamLeadId)
+  const leads = people.filter(person => person.id === person.teamLeadId && !person.isAssistant)
   const wanted = String(input.lead ?? '').trim().toLowerCase()
   const lead = leads.find(person => person.name.toLowerCase() === wanted || `${person.name} · ${person.title}`.toLowerCase() === wanted)
   if (!lead) return `Not drafted. ${String(input.lead ?? 'That')} isn't a team lead in the office. The leads now: ${leads.map(person => person.name).join(', ')}.`
@@ -519,6 +521,9 @@ async function draftNote($: EngineInterface, input: { lead?: unknown; note?: unk
 
 // The office marks a note approved, with the lead's session, only when the person taps Send. Each one is sent once, as it was drafted.
 async function sendApprovedNotes($: EngineInterface): Promise<void> {
+  // One pass at a time, so a slow send can't let the next pass pick up the same note.
+  if (isSendingNotes) return
+  isSendingNotes = true
   try {
     const folder = `${dataFolder}/mia-chat/notes`
     if (!(await $.fs.exists(folder))) return
@@ -547,6 +552,8 @@ async function sendApprovedNotes($: EngineInterface): Promise<void> {
     }
   } catch {
     // A note that wasn't marked sending is tried again next time.
+  } finally {
+    isSendingNotes = false
   }
 }
 

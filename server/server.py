@@ -437,7 +437,8 @@ def telegram_command(session):
 def chat_command(session, is_new):
     """Her tools are limited here, by the engine and not only by her prompt: no built-in tools that act, no MCP servers, and only CHAT_TOOLS allowed."""
     claude = [
-        "env", "AGENT_OFFICE_MIA_CHAT=1", f"AGENT_OFFICE_HOME={DATA}",
+        # Resolved, as her folder is, because the plugin knows her by comparing the two.
+        "env", "AGENT_OFFICE_MIA_CHAT=1", f"AGENT_OFFICE_HOME={DATA.resolve()}",
         "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-chrome",
         # An empty list would drop the plugin's tools too. ToolSearch only loads tool definitions. SendMessage has to be present for the
         # plugin to send an approved note, but she can't call it: it isn't allowed here, the plugin denies it at the front desk, and refuses
@@ -462,8 +463,12 @@ def lead_session(person_id):
     """The engine's id for a team lead who is in the office now, which is how the plugin addresses a note."""
     with OFFICE.lock:
         people = list(OFFICE.snapshot.get("people", []))
-    is_lead = any(one.get("id") == person_id and one.get("teamLeadId") == person_id for one in people)
-    transcript = TRANSCRIPTS.path_for(person_id) if is_lead else None
+    is_lead = any(one.get("id") == person_id and one.get("teamLeadId") == person_id and not one.get("isAssistant") for one in people)
+    if not is_lead:
+        return None
+    # Looked up afresh, so a session the app has moved to a new transcript gets the note there.
+    TRANSCRIPTS.paths.pop(person_id, None)
+    transcript = TRANSCRIPTS.path_for(person_id)
 
     return transcript.stem if transcript else None
 
