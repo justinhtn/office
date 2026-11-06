@@ -7,7 +7,7 @@ export function markFailed(texture) {
   failed.add(texture)
 }
 
-export function isLoaded(texture) {
+function isLoaded(texture) {
   const image = texture.image
   return Boolean(image && image.complete !== false && (image.width || image.naturalWidth))
 }
