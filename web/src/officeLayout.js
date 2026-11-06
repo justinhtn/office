@@ -25,8 +25,9 @@ export function onFloor(cast, now = Date.now(), closed = {}) {
 export const hasRoom = team => !isSolo(team.lead) || isBusy(team.lead)
 
 // Nobody moves when someone else arrives: a newcomer takes a place nobody is using, or a new one at the end.
-export function keepPlaces(places, present) {
-  const kept = [...places], live = new Set([...present, ...SHARED_SPACES])
+// A closed room's place is held for it too.
+export function keepPlaces(places, present, held = []) {
+  const kept = [...places], live = new Set([...present, ...held, ...SHARED_SPACES])
   present.filter(key => !kept.includes(key)).forEach(key => {
     const free = kept.findIndex(one => !live.has(one))
     if (free < 0) kept.push(key)
@@ -49,6 +50,13 @@ export function parseLayout(layout) {
   const kept = Object.entries(seats).filter(([key, ids]) => isKey(key) && Array.isArray(ids) && ids.every(isKey))
 
   return { slots: layout.slots, seats: Object.fromEntries(kept) }
+}
+
+// Where planning starts. This browser's own older layout seeds the server's when there is none, or on the Mac when a phone or iPad seeded it first.
+export function layoutStart(shared, local, isSeedWanted) {
+  const own = shared === undefined || shared === null || isSeedWanted ? local : null
+
+  return { start: own || shared || {}, isSeed: shared === null || Boolean(own && isSeedWanted) }
 }
 
 // What this browser kept before the server held the layout, used once to seed it.

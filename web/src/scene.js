@@ -11,7 +11,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 const cloneSkinned = model => SkeletonUtils.clone(model)
 
 import { api, teamsOf } from './api.js'
-import { SHARED_SPACES, hasRoom, keepPlaces, localLayout, parseLayout, shownSlots } from './officeLayout.js'
+import { SHARED_SPACES, hasRoom, keepPlaces, layoutStart, localLayout, parseLayout, shownSlots } from './officeLayout.js'
 
 const AVATARS = '/assets/avatars'
 // The person's own avatar: one of the cast with red hair.
@@ -957,7 +957,7 @@ const LOUNGE_SIDE_ACROSS=-3
 const LOUNGE_SIDE_FORWARD=1.15
 const ROOM_COLUMNS=3
 // The server keeps the room order, so every device lays the floor out the same. Undefined until it answers, null when it has none yet.
-let sharedLayout,plannedLayout=''
+let sharedLayout,plannedLayout='',isSeedWanted=false,heldRooms=[],isLayoutDirty=false
 function saveLayout(layout,isSeed){
   plannedLayout=JSON.stringify(layout)
   if(sharedLayout!==undefined&&plannedLayout!==JSON.stringify(sharedLayout))api('/api/layout',{layout,seed:isSeed}).catch(()=>{})
@@ -966,11 +966,11 @@ function saveLayout(layout,isSeed){
 function planSpaces(){
   const teams=teamsIn(people),groups=teams.filter(hasRoom),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
   // This browser's own layout seeds the server's once, so rooms stay where they were.
-  const teamKey=t=>t.lead.teamId||t.lead.id,start=sharedLayout||localLayout()||{}
+  const teamKey=t=>t.lead.teamId||t.lead.id,{start,isSeed}=layoutStart(sharedLayout,localLayout(),isSeedWanted)
   groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project))
   // The Newsroom joined after the first layout, so it starts at the end like any newcomer.
   const firstSlots=[...groups.map(teamKey).filter(key=>key!=='project:Newsroom'),...SHARED_SPACES]
-  const slots=keepPlaces(start.slots||firstSlots,groups.map(teamKey)),seats=Object.fromEntries(Object.entries(start.seats||{}).filter(([key])=>slots.includes(key)))
+  const slots=keepPlaces(start.slots||firstSlots,groups.map(teamKey),heldRooms),seats=Object.fromEntries(Object.entries(start.seats||{}).filter(([key])=>slots.includes(key)))
   const onBreak=people.filter(p=>p.isOnBreak).length
   const spaces=shownSlots(slots,groups.map(teamKey)).map(key=>{
     if(key==='meeting')return {kind:'meeting',W:8.4,D:7}
@@ -980,7 +980,7 @@ function planSpaces(){
     team.seats=seats[key]=keepPlaces(seats[key]||[],team.members.map(m=>m.id))
     return {kind:'team',team,W:Math.max(6.4,Math.ceil(team.seats.length/2)*2.5+1.6),D:7.4}
   })
-  saveLayout({slots,seats},!sharedLayout)
+  saveLayout({slots,seats},isSeed)
   return spaces
 }
 // Add ?perf to the address to read frame costs from window.__office in the console.
@@ -2086,14 +2086,16 @@ return {
     if(nextFocus!==focusKey){focusKey=nextFocus;isManual=false;isAdjusted=false}
     const sig=JSON.stringify(nextPeople.map(p=>[p.id,p.name,p.label,p.project,p.startedBy,p.title,p.isRunning,p.isFinished,p.avatar,p.startedBy,p.teamId,p.teamName,p.teamLeadId,p.isNamedTeam,p.meetingWith,p.talkingTo,p.helpers,p.jobs,p.isWaiting,p.isOnBreak,p.request&&p.request.id,p.isOnScreen,p.isAssistant]))
     people=nextPeople
-    if(sig!==signature&&people.length){signature=sig;build()}
+    if((sig!==signature||isLayoutDirty)&&people.length){signature=sig;isLayoutDirty=false;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
   },
-  setLayout(next){
-    const layout=next===undefined?undefined:parseLayout(next),was=sharedLayout
-    sharedLayout=layout
-    // Another device moved a room, or the server only now answered.
-    if(JSON.stringify(layout)!==JSON.stringify(was)&&JSON.stringify(layout)!==plannedLayout&&people.length)build()
+  // Called just before update, which then rebuilds once if anything here changed.
+  setLayout(next,{seedWanted=false,held=[]}={}){
+    const layout=next===undefined?undefined:parseLayout(next)
+    // Another device moved a room, the server only now answered, or a room closed or reopened. This page's own save comes back unchanged.
+    const isNew=JSON.stringify(layout)!==JSON.stringify(sharedLayout)&&JSON.stringify(layout)!==plannedLayout
+    if(isNew||seedWanted!==isSeedWanted||JSON.stringify(held)!==JSON.stringify(heldRooms))isLayoutDirty=true
+    sharedLayout=layout;isSeedWanted=seedWanted;heldRooms=held
   },
   zoomBy,
   resetView(){isManual=false;isAdjusted=false},

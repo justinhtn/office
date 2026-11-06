@@ -60,6 +60,14 @@ class LayoutTests(Case):
         self.assertEqual(status, 403)
         self.assertIsNone(self.shared())
 
+    def test_only_the_mac_is_asked_for_its_layout_and_only_while_a_device_seed_stands(self):
+        self.assertFalse(self.mac("GET", "/api/sessions")[1]["layoutSeedWanted"])
+        self.device("POST", "/api/layout", {"layout": PHONE_LAYOUT, "seed": True})
+        self.assertTrue(self.mac("GET", "/api/sessions")[1]["layoutSeedWanted"])
+        self.assertFalse(self.device("GET", "/api/sessions")[1]["layoutSeedWanted"])
+        self.mac("POST", "/api/layout", {"layout": MAC_LAYOUT, "seed": True})
+        self.assertFalse(self.mac("GET", "/api/sessions")[1]["layoutSeedWanted"])
+
 
 PEOPLE = [{"id": "leo", "teamId": "project:Clancy"}, {"id": "priya", "teamId": "project:Clancy"}, {"id": "kofi", "teamId": "solo:kofi"}]
 
@@ -111,3 +119,10 @@ class ClosedRoomTests(Case):
     def test_teams_that_have_left_the_office_leave_the_list(self):
         server.write_json(server.LAYOUT, {"closed": {"project:Archived": "2026-11-01T00:00:00Z"}})
         self.assertEqual(list(self.mac("/api/room/close", {"teamId": "project:Clancy"})[1]["closedRooms"]), ["project:Clancy"])
+
+    def test_reopening_before_the_first_refresh_keeps_the_other_closed_rooms(self):
+        self.mac("/api/room/close", {"teamId": "project:Clancy"})
+        with mock.patch.object(server.OFFICE, "snapshot", {"people": []}):
+            self.assertEqual(self.mac("/api/room/close", {"teamId": "project:Clancy"})[0], 400)
+            self.assertEqual(self.mac("/api/room/reopen", {"teamId": "project:Legal RAG"})[0], 200)
+        self.assertEqual(list(self.closed()), ["project:Clancy"])

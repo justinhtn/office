@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { closedRooms, hasRoom, keepPlaces, onFloor, parseLayout, shownSlots } from './officeLayout.js'
+import { closedRooms, hasRoom, keepPlaces, layoutStart, onFloor, parseLayout, shownSlots } from './officeLayout.js'
 
 // api.js reads the page's token when it loads, so it gets a stand-in page.
 globalThis.document = { querySelector: () => ({ content: '' }) }
@@ -65,4 +65,25 @@ test('a team that has gone keeps its place for when it comes back, but leaves no
 test('a stored layout is read only when it is well formed', () => {
   assert.deepEqual(parseLayout({ slots: ['a', 'meeting'], seats: { a: ['x'], bad: 'y' } }), { slots: ['a', 'meeting'], seats: { a: ['x'] } })
   for (const odd of [null, {}, { slots: 'a' }, { slots: [''] }, { slots: [3] }]) assert.equal(parseLayout(odd), null)
+})
+
+test("the Mac's own older order replaces a phone's seed, and a phone's never does", () => {
+  const phone = { slots: ['b', 'a', 'meeting'], seats: {} }, mac = { slots: ['a', 'meeting', 'clancy', 'b'], seats: {} }
+  assert.deepEqual(layoutStart(phone, mac, true), { start: mac, isSeed: true })
+  assert.deepEqual(layoutStart(phone, mac, false), { start: phone, isSeed: false })
+  assert.deepEqual(layoutStart(phone, null, true), { start: phone, isSeed: false })
+})
+
+test('with no shared layout yet, this browser seeds from its own, or from nothing', () => {
+  const mine = { slots: ['a'], seats: {} }
+  assert.deepEqual(layoutStart(null, mine, false), { start: mine, isSeed: true })
+  assert.deepEqual(layoutStart(null, null, false), { start: {}, isSeed: true })
+  // Until the server answers, the page draws from its own but saves nothing.
+  assert.deepEqual(layoutStart(undefined, mine, false), { start: mine, isSeed: false })
+})
+
+test("a closed room's place is held, even at the end, but not shown", () => {
+  const slots = keepPlaces(['a', 'clancy', 'b', 'meeting', 'legal'], ['a', 'b', 'new'], ['clancy', 'legal'])
+  assert.deepEqual(slots, ['a', 'clancy', 'b', 'meeting', 'legal', 'new'])
+  assert.deepEqual(shownSlots(slots, ['a', 'b', 'new']), ['a', 'b', 'meeting', 'new'])
 })

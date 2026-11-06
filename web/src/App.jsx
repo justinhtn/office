@@ -194,7 +194,7 @@ function Presentation({ person, everyone, onClose }) {
   )
 }
 
-function Room({ people, layout, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onSwipe = null, onPick, onSpace, onHome, children }) {
+function Room({ people, layout, heldRooms, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onSwipe = null, onPick, onSpace, onHome, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null), panes = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace), swipe = useRef(onSwipe)
   swipe.current = onSwipe
@@ -231,13 +231,11 @@ function Room({ people, layout, selected, focus, speaker, usage, boardFont, ligh
 
     return () => observer.disconnect()
   }, [splitKeys, Boolean(onSwipe)])
-  // Before the update below, so the first build already uses the shared layout.
+  // Together, so a poll that changes both the layout and the people rebuilds the room once.
   useEffect(() => {
-    scene.current.setLayout(layout)
-  }, [layout])
-  useEffect(() => {
+    scene.current.setLayout(layout?.shared, { seedWanted: layout?.seedWanted, held: heldRooms })
     scene.current.update(people, selected, focus, speaker, usage)
-  }, [people, selected, focus, speaker, usage])
+  }, [people, layout, heldRooms, selected, focus, speaker, usage])
   useEffect(() => {
     scene.current.setLightsOut(lightsOut)
   }, [lightsOut])
@@ -372,8 +370,9 @@ function TeamName({ person }) {
 }
 
 // Closing a room only hides it in the office. Its sessions carry on, and it comes back when someone in it works again.
-function CloseRoom({ person, onClosed }) {
+function CloseRoom({ person, room, onClosed }) {
   const [problem, setProblem] = useState('')
+  const isWorking = room.members.some(member => member.isRunning || member.request)
   const close = async () => {
     if (!window.confirm(`Close the ${person.teamName} room on every device?\n\nNo session is archived, stopped or deleted. The room comes back when someone in it starts working again, or from Closed rooms.`)) return
     try {
@@ -386,7 +385,8 @@ function CloseRoom({ person, onClosed }) {
 
   return (
     <div className="team-choice">
-      <button className="section-action" onClick={close}><X size={13} /> Close room</button>
+      <button className="section-action" disabled={isWorking} title={isWorking ? 'Someone in this room is working or asking for you, so it would come straight back' : undefined} onClick={close}><X size={13} /> Close room</button>
+      {isWorking && <small>Close it once nobody in it is working.</small>}
       {problem && <small className="error">{problem}</small>}
     </div>
   )
@@ -1081,7 +1081,8 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
   }
   const boss = everyone.find(other => other.id === person.startedBy)
   // Their room's TV already says what they're doing. Mia, the lounge and anyone away have none.
-  const hasTv = teams.some(team => team.members.some(member => member.id === person.id))
+  const room = teams.find(team => team.members.some(member => member.id === person.id))
+  const hasTv = Boolean(room)
 
   return (
     <>
@@ -1112,7 +1113,7 @@ function Session({ person, everyone, teams, tab, isOpen, onOpen, onCloseDetails,
           <summary>Teammates and team</summary>
           <Teammates person={person} teams={teams} onPick={onPick} />
           <TeamChoice person={person} teams={teams} />
-          {hasTv && !person.isIndependent && <CloseRoom person={person} onClosed={onClose} />}
+          {room && !person.isIndependent && <CloseRoom person={person} room={room} onClosed={onClose} />}
         </details>
       </ListSection>
       {isOpen && (
@@ -1365,7 +1366,8 @@ function useTeamDrag(isOn, mapHost, sceneHandle, teams, onDrop) {
 export default function App() {
   const [everyone, setEveryone] = useState([])
   const [updatedAt, setUpdatedAt] = useState('')
-  // The room order every device shares. Undefined until the server answers, null when it has none yet.
+  // The room order every device shares: shared is undefined until the server answers, and null when it has none yet.
+  // seedWanted is set on the Mac when a phone or iPad seeded it first, so the Mac's own older order replaces it.
   const [layout, setLayout] = useState(undefined)
   const lastLayout = useRef(undefined)
   const [closed, setClosed] = useState({})
@@ -1390,10 +1392,10 @@ export default function App() {
             lastPeople.current = latest
             setEveryone(data.people || [])
           }
-          const latestLayout = JSON.stringify(data.layout ?? null)
-          if (latestLayout !== lastLayout.current) {
-            lastLayout.current = latestLayout
-            setLayout(data.layout ?? null)
+          const nextLayout = { shared: data.layout ?? null, seedWanted: data.layoutSeedWanted === true }
+          if (JSON.stringify(nextLayout) !== lastLayout.current) {
+            lastLayout.current = JSON.stringify(nextLayout)
+            setLayout(nextLayout)
           }
           const latestClosed = JSON.stringify(data.closedRooms || {})
           if (latestClosed !== lastClosed.current) {
@@ -1536,7 +1538,8 @@ export default function App() {
 
   const cast = everyone
   const realActive = useMemo(() => onFloor(cast, Date.now(), closed), [cast, closed])
-  const closedTeams = useMemo(() => { const shut = closedRooms(cast, closed); return teamsOf(cast.filter(other => shut.has(other.teamId))) }, [cast, closed])
+  const heldRooms = useMemo(() => [...closedRooms(cast, closed)].sort(), [cast, closed])
+  const closedTeams = useMemo(() => teamsOf(cast.filter(other => heldRooms.includes(other.teamId))), [cast, heldRooms])
   // ?present is the demo: one teammate has finished work ready. ?present=Name picks who.
   const presentAs = useMemo(() => new URLSearchParams(window.location.search).get('present'), [])
   useEffect(() => {
@@ -1653,7 +1656,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} layout={layout} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => paneTeams[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+          ? <Room people={active} layout={layout} heldRooms={heldRooms} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => paneTeams[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
               <SplitPanes panes={panes} slots={slots} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
             </Room>
           : !problem && <Empty text="Waiting for session data…" />}

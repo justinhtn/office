@@ -355,6 +355,12 @@ def office_layout():
         return None
 
 
+def layout_seed_wanted():
+    """Whether a phone or iPad seeded the layout before the Mac did, so the Mac's own older layout should replace it."""
+    stored = read_json(LAYOUT, None)
+    return isinstance(stored, dict) and stored.get("isProvisional") is True
+
+
 def closed_rooms():
     """Teams whose rooms the person closed, with when. The page brings one back once someone in it works again."""
     closed = read_json(LAYOUT, {})
@@ -367,13 +373,16 @@ def closed_rooms():
 def close_room(team_id, people, is_closed):
     """Closes or reopens a team's room. This only hides it in the office: no session is archived, stopped or deleted."""
     teams = {person.get("teamId") for person in people if person.get("teamId")}
+    # Right after a restart nobody is known yet, so nothing can be checked or pruned.
+    if is_closed and not teams:
+        raise ValueError("The office is still starting. Try again in a moment.")
     if is_closed and (team_id not in teams or team_id.startswith("solo:")):
         raise ValueError("There's no team room by that name.")
     with LAYOUT_LOCK:
         stored = read_json(LAYOUT, {})
         stored = stored if isinstance(stored, dict) else {}
         # Teams that have gone, archived perhaps, are dropped while here.
-        closed = {key: when for key, when in closed_rooms().items() if key in teams and key != team_id}
+        closed = {key: when for key, when in closed_rooms().items() if (key in teams or not teams) and key != team_id}
         if is_closed:
             closed[team_id] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         write_json(LAYOUT, {**stored, "closed": closed})
@@ -2144,7 +2153,7 @@ class Handler(BaseHTTPRequestHandler):
             query = {key: values[0] for key, values in parse_qs(url.query).items()}
             session_id = query.get("id", "")
             if url.path == "/api/sessions":
-                self.reply(200, {**sessions(), "onScreen": sessions_on_screen(), "layout": office_layout(), "closedRooms": closed_rooms()})
+                self.reply(200, {**sessions(), "onScreen": sessions_on_screen(), "layout": office_layout(), "layoutSeedWanted": layout_seed_wanted() and not self.from_signed_in_device(), "closedRooms": closed_rooms()})
             elif url.path == "/api/mia":
                 self.device_only()
                 self.reply(200, MIA_CHAT.view())
