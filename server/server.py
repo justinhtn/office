@@ -35,6 +35,7 @@ from remote_access import COOKIE, DEVICE_S, RemoteAccess  # noqa: E402
 import passkeys  # noqa: E402
 from mia_chat import MiaChat  # noqa: E402
 from approvals import REPO as APPROVALS_REPO, Approvals  # noqa: E402
+import client_log  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
@@ -105,6 +106,7 @@ TELEGRAM_PLUGIN = "telegram@claude-plugins-official"
 TELEGRAM_CHANNEL = f"plugin:{TELEGRAM_PLUGIN}"
 TELEGRAM_STATE = Path.home() / ".claude" / "channels" / "telegram"
 TELEGRAM_LOG = DATA / "logs" / "mia-telegram.log"
+CLIENT_LOGS = DATA / "logs" / "client"
 TELEGRAM_QUIET_S = 10
 TELEGRAM_WAIT_S = 60
 TELEGRAM_CONNECT_S = 3
@@ -1724,6 +1726,7 @@ def conversation(session_id, before=None):
 
 
 VIEWABLE = {}
+CLIENT_LOG = client_log.ClientLog(CLIENT_LOGS, redacted)
 APPROVAL_ROUTES = ("/api/approvals/options", "/api/approvals/approve", "/api/approvals/decline", "/api/approvals/answer")
 MIA_CHAT = MiaChat(DATA, FRONT_DESK, chat_command, chat_is_wanted, note_sender_command)
 APPROVALS = Approvals(DATA, GitHub(), team_lead_name, tell_lead)
@@ -2191,11 +2194,32 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ALLOWED_ORIGINS:
             raise Refused(403, "Bad origin.")
 
-    def authorized(self):
-        supplied = self.headers.get("X-Office-Token", "")
+    def authorized(self, supplied=None):
+        supplied = self.headers.get("X-Office-Token", "") if supplied is None else supplied
         # Compared as bytes, because compare_digest raises on text that isn't ASCII.
-        if not secrets.compare_digest(supplied.encode(), TOKEN.encode()):
+        if not isinstance(supplied, str) or not secrets.compare_digest(supplied.encode(), TOKEN.encode()):
             raise Refused(403, "Bad token.")
+
+    def device_label(self):
+        """Which device a page's timeline is filed under, and the name the person gave it."""
+        return "mac", "Mac"
+
+    def keep_client_log(self):
+        """A page's timeline. It may come as a beacon as the page goes away, which can't carry headers, so the token is in the body."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if not 0 < length <= client_log.MAX_BODY:
+            raise Refused(413, "That log is too long.")
+        body = json.loads(self.rfile.read(length))
+        if not isinstance(body, dict):
+            raise ValueError("Not an object.")
+        supplied = body.get("token")
+        self.authorized(supplied if isinstance(supplied, str) else "")
+        device, name = self.device_label()
+        try:
+            kept = CLIENT_LOG.write(device, name, body, hidden=(supplied,))
+        except client_log.Rejected as rejected:
+            raise Refused(400, str(rejected)) from None
+        self.reply(200, {"kept": kept})
 
     def page_token(self):
         return TOKEN
@@ -2321,8 +2345,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             self.guarded()
-            self.authorized()
             route = urlparse(self.path).path
+            if route == "/api/client-log":
+                self.keep_client_log()
+                return
+            self.authorized()
             if route not in ("/api/seen", "/api/open", "/api/speak", "/api/announce", "/api/voice-mode", "/api/away-mode", "/api/shut-down", "/api/newsroom/pick", "/api/newsroom/listen", "/api/assistant", "/api/team", "/api/team-name", "/api/layout", "/api/room/close", "/api/room/reopen", "/api/rename", "/api/dismiss", "/api/label", "/api/reroll", "/api/mia/ask", "/api/mia/note", *APPROVAL_ROUTES):
                 raise Refused(404, "Not found.")
             length = int(self.headers.get("Content-Length") or 0)
@@ -2545,10 +2572,13 @@ class RemoteHandler(Handler):
     def from_signed_in_device(self):
         return bool(self.device)
 
-    def authorized(self):
-        supplied = self.headers.get("X-Office-Token", "")
-        if not self.device or not secrets.compare_digest(supplied.encode(), self.page_token().encode()):
+    def authorized(self, supplied=None):
+        supplied = self.headers.get("X-Office-Token", "") if supplied is None else supplied
+        if not self.device or not isinstance(supplied, str) or not secrets.compare_digest(supplied.encode(), self.page_token().encode()):
             raise Refused(403, "Bad token.")
+
+    def device_label(self):
+        return self.device, REMOTE.devices().get(self.device, {}).get("name") or "Device"
 
     def do_GET(self):
         try:

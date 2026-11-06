@@ -6,7 +6,7 @@ import { Tree } from 'react-arborist'
 import {
   Building2, ChevronDown, ChevronRight, File as FileIcon, FileDiff, Folder, FolderTree, Images, ExternalLink,
   Check, Circle, Gauge, CircleDot, Dices, LayoutGrid, Maximize2, Pause, Pencil, Play, MessageCircle, Newspaper, Power, Search, Moon, Users, Volume2, VolumeX, SkipForward, X,
-  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace, MessagesSquare,
+  Hand, Maximize, Minus, Pin, Plus, RotateCcw, Grid2x2, Menu, ScanFace, MessagesSquare, Activity,
 } from 'lucide-react'
 import AskMia from './AskMia.jsx'
 import AgentConversation from './AgentConversation.jsx'
@@ -18,6 +18,7 @@ import { readSplitLayout, writeSplitLayout } from './savedView.js'
 import { PANE_COUNT, clearPane, firstPanes, nextFirstSlot, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
 import { ACTIVE_DAYS, closedRooms, hasRoom, onFloor } from './officeLayout.js'
+import { events as timelineEvents, mark, once, plain, uncleanEnds } from './timeline.js'
 import ReactMarkdown from 'react-markdown'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -597,6 +598,39 @@ function useVoices(everyone, listening, isAway, isOn, setIsOn) {
   }
 
   return { isOn, speaker, problem, toggle, skip, hear, speaksWhileWorking, toggleWhileWorking }
+}
+
+// This page's own timeline, for a quick look on the device. The Mac shows every device's with scripts/client-log.py.
+const DIAGNOSTICS_SHOWN = 200
+const DIAGNOSTICS_HIDDEN = new Set(['t', 'kind', 'userAgent', 'lastEvents'])
+function Diagnostics({ onClose }) {
+  const [shown, setShown] = useState(timelineEvents)
+  useEffect(() => {
+    const timer = setInterval(() => setShown(timelineEvents()), 2000)
+
+    return () => clearInterval(timer)
+  }, [])
+  const detail = event => Object.entries(event).filter(([key, value]) => !DIAGNOSTICS_HIDDEN.has(key) && value !== null && value !== '').map(([key, value]) => `${key} ${value}`).join(' · ')
+
+  return (
+    <section className="session usage">
+      <header className="session-head">
+        <div className="session-who"><b className="name">Diagnostics</b></div>
+        <button className="icon" aria-label="Back to the floor" title="Back to the floor" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="scroll pad usage-list">
+        <small>How this page started and is running, in seconds since it began loading. Newest first.</small>
+        {uncleanEnds().map(end => (
+          <p key={end.previousRun} className="error">The page before this one stopped without closing {end.wasHidden ? 'in the background' : 'while on screen'}, {Math.round(end.ranMs / 1000)}s after it opened.</p>
+        ))}
+        <ol className="diagnostics">
+          {shown.slice(-DIAGNOSTICS_SHOWN).reverse().map((event, index) => (
+            <li key={`${event.t}-${index}`}><time>{(event.t / 1000).toFixed(1)}s</time><b>{event.kind}</b><small>{plain(detail(event), 160)}</small></li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  )
 }
 
 function Meter({ label, percent, detail }) {
@@ -1380,15 +1414,19 @@ export default function App() {
   const [selected, setSelected] = useState(null)
   const [tab, setTab] = useState('outputs')
   const [isDetailOpen, setIsDetailOpen] = useState(false)
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
   const [isPaletteOpen, setIsPaletteOpen] = useState(false)
   const [isAwayOpen, setIsAwayOpen] = useState(false)
   const [place, setPlace] = useState(null)
   const lastPeople = useRef('')
 
   useEffect(() => {
-    const poll = () =>
-      api('/api/sessions').then(
+    mark('app.mount')
+    const poll = () => {
+      const asked = performance.now()
+      return api('/api/sessions').then(
         data => {
+          once('sessions.first', { ms: Math.round(performance.now() - asked), people: (data.people || []).length })
           // Checked often for quick voices, so only redraw the room when something changed.
           const latest = JSON.stringify(data.people || [])
           if (latest !== lastPeople.current) {
@@ -1409,8 +1447,9 @@ export default function App() {
           setOnScreen((data.onScreen || []).join(','))
           setProblem('')
         },
-        failure => setProblem(failure.message),
+        failure => { once('sessions.failed', { message: plain(failure.message) }); setProblem(failure.message) },
       )
+    }
     poll()
     const timer = setInterval(poll, 1000)
 
@@ -1478,7 +1517,7 @@ export default function App() {
   }
   // Step away and the view settles on your desk, where anyone who needs you waits.
   useEffect(() => {
-    const poll = () => api('/api/presence').then(data => { setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)); setCanAskMia(Boolean(data.miaChat)); setApprovalsWaiting(Number(data.approvals) || 0); setIsDevice(Boolean(data.isDevice)) }, () => {})
+    const poll = () => api('/api/presence').then(data => { once('signin.ready', { isDevice: Boolean(data.isDevice), miaChat: Boolean(data.miaChat) }); setIsAway(Boolean(data.isAway)); setVoiceMode(Boolean(data.voiceMode)); setAwayMode(Boolean(data.awayMode)); setShutDown(Boolean(data.shutDown)); setCanAskMia(Boolean(data.miaChat)); setApprovalsWaiting(Number(data.approvals) || 0); setIsDevice(Boolean(data.isDevice)) }, () => {})
     poll()
     const timer = setInterval(poll, PRESENCE_CHECK_MS)
 
@@ -1688,12 +1727,13 @@ export default function App() {
           <TeamMenu onNews={() => setIsNewsOpen(true)} onMia={canAskMia ? () => { setIsPanelOpen(false); setIsMiaOpen(true) } : null} focus={focus} mapHost={mapHost} onPlace={goToPlace}>
             {!person && !shutDown && place === 'office' && (
               <ListSection icon={Building2} title="Your office" label="Your office" onClose={() => goToPlace(null)}>
-                <div className="section-actions"><button className="section-action" onClick={() => setIsDetailOpen(true)}><Gauge size={13} /> Usage</button></div>
+                <div className="section-actions"><button className="section-action" onClick={() => setIsDetailOpen(true)}><Gauge size={13} /> Usage</button><button className="section-action" onClick={() => setIsDiagnosticsOpen(true)}><Activity size={13} /> Diagnostics</button></div>
                 {isDetailOpen && (
                   <Drawer onClose={() => setIsDetailOpen(false)}>
                     <Usage usage={usage} people={cast} boardFont={boardFont} onBoardFont={chooseBoardFont} onPick={pick} onClose={() => setIsDetailOpen(false)} />
                   </Drawer>
                 )}
+                {isDiagnosticsOpen && <Drawer onClose={() => setIsDiagnosticsOpen(false)}><Diagnostics onClose={() => setIsDiagnosticsOpen(false)} /></Drawer>}
               </ListSection>
             )}
             {person && (

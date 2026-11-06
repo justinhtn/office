@@ -1,3 +1,5 @@
+import { mark, startTimeline } from './timeline.js'
+import { token } from './api.js'
 import { isTouchDevice } from './device.js'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
@@ -11,5 +13,7 @@ import './styles.css'
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
 loader.config({ monaco })
 
+startTimeline(token)
 createRoot(document.getElementById('root')).render(<App />)
+mark('app.render')
 if (isTouchDevice) document.documentElement.classList.add('touch')

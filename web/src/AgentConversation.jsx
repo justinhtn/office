@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, Eye, Wrench } from 'lucide-react'
 import { api, withId } from './api.js'
+import { mark } from './timeline.js'
 import { BUSY_POLL_MS, IDLE_POLL_MS, grouped, merge } from './conversation.js'
 import { dayLabel, timeOf } from './miaChat.js'
 
@@ -42,10 +43,13 @@ export default function AgentConversation({ person, state, team, portrait, onClo
     setMessages([])
     setIsLoaded(false)
     isNearEnd.current = true
+    const opened = performance.now()
+    let isShown = false
     const load = async () => {
       try {
         const page = await api(withId('/api/conversation', person.id))
         if (isStopped) return
+        if (!isShown) { isShown = true; mark('conversation.ready', { ms: Math.round(performance.now() - opened), messages: page.messages?.length || 0 }) }
         setMessages(known => merge(known, page))
         setIsLoaded(true)
         setProblem('')
