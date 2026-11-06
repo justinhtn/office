@@ -165,6 +165,10 @@ class OfficeReviewTests(unittest.TestCase):
             'client_secret: "' + "w" * 20 + '"',
             "Authorization: Bearer " + "t" * 30,
             "https://user:hunter22@example.com/x",
+            "password: Xy9k2LmQ8vRt3Wp",
+            "The password: Xy9k2LmQ8vRt3Wp.",
+            "secret: Xy9k2LmQ8vRt3Wp.example",
+            "Use api_key=Xy9k2LmQ8vRt3Wp, then retry.",
         ]
         for text in secrets:
             with self.subTest(text[:20]), self.assertRaisesRegex(office_review.Refused, "secret"):
