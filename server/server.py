@@ -2112,7 +2112,16 @@ class RemoteHandler(Handler):
         except Refused as refused:
             self.reply(refused.status, {"error": str(refused)})
             return
-        if self.device:
+        if self.device and urlparse(self.path).path == "/api/passkey/status":
+            # So the office can offer Face ID to a device that skipped it after its code.
+            try:
+                self.authorized()
+            except Refused as refused:
+                self.reply(refused.status, {"error": str(refused)})
+                return
+            has_passkey = bool(REMOTE.devices().get(self.device, {}).get("passkey"))
+            self.reply(200, {"canSetUp": passkeys.available() and not has_passkey})
+        elif self.device:
             super().do_GET()
         elif urlparse(self.path).path == "/":
             page = SIGN_IN_PAGE.replace("__PASSKEYS_ON__", json.dumps(passkeys.available())).replace("__HAS_PASSKEYS__", json.dumps(REMOTE.has_passkeys()))

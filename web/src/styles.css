@@ -140,6 +140,8 @@ kbd { font: 10px Inter, sans-serif; border: 1px solid var(--line); background: v
 .session .messages { max-width: 860px; width: 100%; margin: 0 auto; }
 .session .away-button { font-size: 11px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; }
 .away-button:hover { color: var(--text); background: var(--bg-hover); }
+.statusbar .face-id-button, .statusbar small:has(svg) { display: inline-flex; align-items: center; gap: 5px; }
+.face-id-button:disabled { opacity: .6; }
 .away { width: min(520px, calc(100vw - 32px)); max-height: 70vh; display: flex; flex-direction: column; padding: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .away h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
 .dot.asks { background: var(--danger); }
