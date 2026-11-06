@@ -57,5 +57,5 @@ test('she is busy while answering or while a note goes out', () => {
 test('a note says where it got to', () => {
   assert.equal(noteStatus({ status: 'sent', leadName: 'Zoe' }), 'Sent to Zoe')
   assert.equal(noteStatus({ status: 'failed', problem: 'Zoe is not running' }), "Didn't send: Zoe is not running")
-  assert.equal(noteStatus({ status: 'draft' }), 'Waiting for you')
+  assert.equal(noteStatus({ status: 'draft' }), 'Nothing goes out until you tap Send')
 })

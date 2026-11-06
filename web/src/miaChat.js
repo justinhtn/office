@@ -54,8 +54,9 @@ export function dayLabel(at, now = Date.now()) {
   return day.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
+// While a note waits, it says itself that nothing has gone, so Mia never has to, and once sent the same line says so instead.
 const NOTE_STATUS = {
-  draft: 'Waiting for you',
+  draft: 'Nothing goes out until you tap Send',
   approved: 'Sending…',
   sending: 'Sending…',
   failed: "Didn't send",

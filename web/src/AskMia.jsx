@@ -50,7 +50,7 @@ function Note({ note, onDecide }) {
       <small className="note-to"><Send size={12} /> Note to {note.leadName}</small>
       <p className="bubble-text">{note.text}</p>
       <div className={`note-foot ${note.status}`}>
-        <small>{note.status === 'sent' && <Check size={13} />}{noteStatus(note)}{note.status === 'draft' ? ` · ${timeOf(note.at)}` : ''}</small>
+        <small>{note.status === 'sent' && <Check size={13} />}{noteStatus(note)}</small>
         {note.status === 'draft'
           ? (
             <span className="note-actions">
