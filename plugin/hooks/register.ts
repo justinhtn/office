@@ -531,7 +531,8 @@ async function draftNote($: EngineInterface, input: { lead?: unknown; note?: unk
     JSON.stringify({ id, leadId: lead.id, leadName: lead.name, text, status: 'draft', at: Date.now() }),
   )
 
-  return `Drafted a note to ${lead.name}. It's in the chat with Send and Cancel, and nothing goes out until the person taps Send. Tell them it's ready to check.`
+  // The chat shows the note just below her reply, with its own Send button and its own status, so she needn't explain either.
+  return `Drafted a note to ${lead.name}. The chat shows it just below your reply, with a Send button and whether it was sent. Say in a few words that it's there to check. Don't repeat its text, and don't explain how sending works or say it hasn't gone yet: the note shows that itself.`
 }
 
 // Why a stored note can't go out, or undefined. The office's own report of a card says what was merged, so instead of the person's
