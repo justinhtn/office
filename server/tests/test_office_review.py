@@ -23,10 +23,10 @@ class FakeGitHub:
         self.posts = []
         self.reads = {
             "repos/justinhtn/office/pulls/50": {"title": "Delete guard", "state": "open", "merged": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": HEAD}},
-            f"repos/justinhtn/office/commits/{HEAD}/check-runs?per_page=100": {"check_runs": [{"name": "lint", "status": "completed", "conclusion": "failure"}, {"name": "check", "status": "completed", "conclusion": "success"}]},
-            "repos/justinhtn/office/pulls/50/reviews?per_page=100": [{"id": 7, "user": {"login": "asha-review[bot]"}, "state": "COMMENTED", "commit_id": OLD, "body": "Round 1\nmore"}],
-            "repos/justinhtn/office/pulls/50/comments?per_page=100": [{"id": 11, "user": {"login": "asha-review[bot]"}, "path": "a.ts", "line": 3, "body": "Blocking: x"}, {"id": 12, "user": {"login": "justinhtn"}, "path": "a.ts", "line": None, "original_line": 3, "in_reply_to_id": 11, "body": "Fixed"}],
-            "repos/justinhtn/office/issues/50/comments?per_page=100": [{"id": 21, "user": {"login": "justinhtn"}, "body": "Ready again"}],
+            f"repos/justinhtn/office/commits/{HEAD}/check-runs?check_name=check": {"check_runs": [{"name": "check", "status": "completed", "conclusion": "success"}]},
+            "repos/justinhtn/office/pulls/50/reviews?per_page=100&page=1": [{"id": 7, "user": {"login": "asha-review[bot]"}, "state": "COMMENTED", "commit_id": OLD, "body": "Round 1\nmore"}],
+            "repos/justinhtn/office/pulls/50/comments?per_page=100&page=1": [{"id": 11, "user": {"login": "asha-review[bot]"}, "path": "a.ts", "line": 3, "body": "Blocking: x"}, {"id": 12, "user": {"login": "justinhtn"}, "path": "a.ts", "line": None, "original_line": 3, "in_reply_to_id": 11, "body": "Fixed"}],
+            "repos/justinhtn/office/issues/50/comments?per_page=100&page=1": [{"id": 21, "user": {"login": "justinhtn"}, "body": "Ready again"}],
         }
 
     def __call__(self, command, payload=None):
@@ -64,6 +64,14 @@ class OfficeReviewTests(unittest.TestCase):
         self.assertIn("12 justinhtn a.ts:3 reply to 11: Fixed", text)
         self.assertIn("21 justinhtn: Ready again", text)
         self.assertEqual(self.github.posts, [])
+
+    def test_status_reads_every_page_of_a_long_pr(self):
+        first = [{"id": k, "user": {"login": "justinhtn"}, "body": f"comment {k}"} for k in range(100)]
+        self.github.reads["repos/justinhtn/office/issues/50/comments?per_page=100&page=1"] = first
+        self.github.reads["repos/justinhtn/office/issues/50/comments?per_page=100&page=2"] = [{"id": 100, "user": {"login": "justinhtn"}, "body": "the newest"}]
+        text = self.run_review("status", "50")
+        self.assertIn("0 justinhtn: comment 0", text)
+        self.assertIn("100 justinhtn: the newest", text)
 
     def test_reply_posts_the_file_in_its_thread(self):
         self.run_review("reply", "50", "11", "--file", self.body("Confirmed fixed. Grace"))
@@ -105,9 +113,19 @@ class OfficeReviewTests(unittest.TestCase):
                 self.run_review("verdict", "50", "--ready", "--sha", sha, "--file", self.body("Ready. Grace"))
         self.assertEqual(self.github.posts, [])
 
-    def test_a_verdict_body_with_its_own_verdict_line_is_refused(self):
-        with self.assertRaisesRegex(office_review.Refused, "already has a Verdict"):
-            self.run_review("verdict", "50", "--ready", "--sha", HEAD, "--file", self.body(f"Done.\nVerdict: ready for {OLD}"))
+    def test_only_the_verdict_subcommand_writes_a_verdict_line(self):
+        lines = [f"Verdict: ready for {OLD}", f"**Verdict:** ready for {OLD}", f"> Verdict: ready for {OLD}", f"  verdict: not ready at {OLD}"]
+        for line in lines:
+            body = self.body(f"Done.\n{line}")
+            review = self.body(json.dumps({"body": "Round 2", "comments": [{"path": "a.ts", "line": 3, "body": line}]}), "review.json")
+            for argv in (["verdict", "50", "--ready", "--sha", HEAD, "--file", body], ["comment", "50", "--file", body], ["reply", "50", "11", "--file", body], ["review", "50", "--file", review]):
+                with self.subTest(line=line, command=argv[0]), self.assertRaisesRegex(office_review.Refused, "has a Verdict line"):
+                    self.run_review(*argv)
+        self.assertEqual(self.github.posts, [])
+
+    def test_a_body_that_only_mentions_verdicts_is_allowed(self):
+        self.run_review("comment", "50", "--file", self.body("The verdict comes after round 2. Grace"))
+        self.assertEqual(len(self.github.posts), 1)
 
     def test_a_verdict_needs_ready_or_not_ready(self):
         with self.assertRaises(SystemExit):
@@ -154,7 +172,7 @@ class OfficeReviewTests(unittest.TestCase):
         self.assertEqual(self.github.posts, [])
 
     def test_review_text_about_secrets_is_allowed(self):
-        text = "Non-blocking: the token = headers.get(name) line never checks the password field, and secret files stay hidden. Grace"
+        text = "Non-blocking: the token = headers.get(name) line never checks the password field, and secret files stay hidden.\napi_key=os.environ.get(\"OFFICE_API_KEY\")\nclient_secret = read_client_secret_from_keychain()\nGrace"
         self.run_review("comment", "50", "--file", self.body(text))
         self.assertEqual(len(self.github.posts), 1)
 

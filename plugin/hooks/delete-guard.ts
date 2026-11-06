@@ -7,8 +7,9 @@ type Word = { text: string; isDynamic: boolean; globAt: number }
 // whether what's fed to it holds a variable or substitution, whether it runs inside a group, subshell or loop,
 // which passes on whatever is fed to the group, and whether it sends its output to a file.
 type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean }
-// The whole command as sent, its commands, and whether any of them is fed by a pipe, heredoc or here-string.
-type Line = { text: string; commands: Command[]; isFed: boolean }
+// The whole command as sent, its commands, whether any of them is fed by a pipe, heredoc or here-string, and the
+// spellings of the one office-review it trusts.
+type Line = { text: string; commands: Command[]; isFed: boolean; trusted: string[] }
 type Target = { path: string; shown: string }
 
 const MAX_NESTING = 8
@@ -459,7 +460,7 @@ const textMentionsDelete = (command: string) =>
 
 // Programs that only read their arguments as data, so delete words in quotes there don't count. Every other program
 // is read as text, so an unlisted program that runs its arguments fails closed.
-const DATA_PROGRAMS = new Set([...PLAIN_PROGRAMS, 'sed', 'curl', 'quinn-gh', 'office-review'])
+const DATA_PROGRAMS = new Set([...PLAIN_PROGRAMS, 'sed', 'curl', 'quinn-gh'])
 const SHELLS = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/
 // Other languages are read for calls that delete or start a shell, so code that only names rm in its text runs.
 const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
@@ -660,6 +661,8 @@ function wordsMentionDelete(words: Command, line: Line) {
   if (program.globAt >= 0 && !TESTS.has(program.text) && (args.length > 0 || /[{/]/.test(program.text))) return true
   // Programs that only read their arguments as data delete nothing however their arguments read, as with gh's --delete-branch.
   if (DATA_PROGRAMS.has(name) && !program.isDynamic && !runsArguments(name, args)) return false
+  // The main checkout's office-review reads its arguments as data too. Any other copy could do anything with them.
+  if (line.trusted.includes(program.text)) return false
   if (args.some(arg => DELETE_WORDS.has(nameOf(arg)) || DELETE_FLAGS.test(arg.text))) return true
   // A program that reads its input as data could still run its own arguments, as xargs does.
   if (READS_PIPE_AS_DATA.has(name) && !hasDynamic(words) && !runsArguments(name, args)) return textMentionsDelete(ownText(words))
@@ -669,9 +672,9 @@ function wordsMentionDelete(words: Command, line: Line) {
 }
 
 // Whether any part of a command might delete. It's read whole if the reader can't split it.
-function anyMentionDelete(commands: Command[] | undefined, command: string) {
+function anyMentionDelete(commands: Command[] | undefined, command: string, trusted: string[] = []) {
   if (!commands) return textMentionsDelete(command)
-  const line = { text: command, commands, isFed: commands.some(words => words.isPiped || words.stdin !== '') }
+  const line = { text: command, commands, isFed: commands.some(words => words.isPiped || words.stdin !== ''), trusted }
 
   return commands.some(words => wordsMentionDelete(words, line))
 }
@@ -715,12 +718,15 @@ export function mentionsDelete(command: unknown) {
 
 export const REFUSED_UNCHECKED = `Agent Office blocked this delete because its safety check couldn't read the command. ${ADVICE}`
 
-// office-review posts reviews through fixed subcommands and reads every body from a file. It's trusted only as written
-// out in full, so a variable, substitution or pattern that could build it or its arguments is refused, delete or not.
+// office-review posts reviews through fixed subcommands and reads every body from a file. Only the main checkout's copy
+// is trusted, since a worktree's copy could be a pull request's own version, and only as written out in full, so a
+// variable, substitution or pattern that could build it or its arguments is refused, delete or not.
+const OFFICE_REVIEW = 'code/agent-office/scripts/office-review'
 const OFFICE_REVIEW_COMMANDS = /^(status|reply|comment|review|verdict|-h|--help)$/
-const REVIEW_ADVICE = 'Run it as office-review <subcommand> with each argument written out, and put the body in a file passed with --file.'
+const REVIEW_ADVICE = `Run it as ~/${OFFICE_REVIEW} <subcommand> with each argument written out, and put the body in a file passed with --file.`
+const trustedReview = (home: string | undefined) => (home ? [`${normalize(home)}/${OFFICE_REVIEW}`, `~/${OFFICE_REVIEW}`] : [])
 
-function refuseOfficeReview(commands: Command[] | undefined, command: string) {
+function refuseOfficeReview(commands: Command[] | undefined, command: string, home: string | undefined) {
   if (!/office-review/i.test(command)) return undefined
   if (!commands) return `Agent Office blocked this office-review command because its safety check couldn't read it. ${REVIEW_ADVICE}`
   for (const words of commands) {
@@ -729,9 +735,16 @@ function refuseOfficeReview(commands: Command[] | undefined, command: string) {
     if (held) return `Agent Office blocked this office-review command because \`${held.text}\` keeps it in a variable. ${REVIEW_ADVICE}`
     const program = words[at]
     if (!program) continue
-    if (program.isDynamic) return `Agent Office blocked this command because \`${program.text}\` could be office-review built from a variable or substitution. ${REVIEW_ADVICE}`
-    if (nameOf(program) !== 'office-review') continue
     const args = words.slice(at + 1)
+    // A program from a variable could be office-review when it's named in its path or given one of its subcommands.
+    const looksLikeReview = /office-review/i.test(program.text) || OFFICE_REVIEW_COMMANDS.test(args[0]?.text ?? '')
+    if (program.isDynamic && looksLikeReview) {
+      return `Agent Office blocked this command because \`${program.text}\` could be office-review built from a variable or substitution. ${REVIEW_ADVICE}`
+    }
+    if (program.isDynamic || nameOf(program) !== 'office-review') continue
+    if (!trustedReview(home).includes(program.text)) {
+      return `Agent Office blocked this office-review command because \`${program.text}\` isn't the main checkout's copy, which is the only one trusted to post as the review App. ${REVIEW_ADVICE}`
+    }
     const unclear = args.find(arg => arg.isDynamic || arg.globAt >= 0)
     if (unclear) return `Agent Office blocked this office-review command because \`${unclear.text}\` isn't written out in full. ${REVIEW_ADVICE}`
     if (!OFFICE_REVIEW_COMMANDS.test(args[0]?.text ?? '')) {
@@ -745,9 +758,10 @@ function refuseOfficeReview(commands: Command[] | undefined, command: string) {
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
   const commands = read(command)
-  const review = refuseOfficeReview(commands, command)
+  const reviewHome = /office-review/i.test(command) ? await $.env.get('HOME') : undefined
+  const review = refuseOfficeReview(commands, command, reviewHome)
   if (review) return review
-  if (!anyMentionDelete(commands, command)) return undefined
+  if (!anyMentionDelete(commands, command, trustedReview(reviewHome))) return undefined
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
   const targets: Target[] = []

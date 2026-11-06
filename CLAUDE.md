@@ -21,13 +21,13 @@ There are two reviewers, Asha and Grace. One of them reviews each PR, and the pe
 
 Rules for this:
 
-- Both reviewers post as the `asha-review` GitHub App and sign their comments with their own name, through `scripts/office-review`, never raw `quinn-gh` or `gh`. Write each body to a file first, then run one of these from your own reviewer worktree, with every argument written out (no variables or `$(…)`):
-  - `scripts/office-review status <pr>`: the head commit, the `check` result, mergeability, and the reviews and comments so far, with the ids to reply to.
-  - `scripts/office-review reply <pr> <comment-id> --file <path>`: a reply in a review thread.
-  - `scripts/office-review comment <pr> --file <path>`: a comment on the PR.
-  - `scripts/office-review review <pr> --file <review.json>`: one review with inline comments, as `{"body": "…", "comments": [{"path": "…", "line": 12, "body": "…"}]}`.
-  - `scripts/office-review verdict <pr> --ready|--not-ready --sha <head sha> --file <path>`: it refuses unless the sha is the PR's current head, and adds the `Verdict:` line itself.
-  It runs only from a worktree listed in `~/.agent-office/reviewers.json`, which only the person edits, and refuses bodies over 64 KB or that look like they hold a secret. Read the code with git, for example `git fetch origin pull/<pr>/head`. Never post as the person, and never print the App's token or read its key. Reviewers don't set required checks or approve PRs on GitHub; the verdict is a comment.
+- Both reviewers post as the `asha-review` GitHub App and sign their comments with their own name, through the main checkout's `/Users/houghton/code/agent-office/scripts/office-review`, never raw `quinn-gh` or `gh`. Always run it by that full path, never as `scripts/office-review` from a worktree, which could be a PR's own version of it. Write each body to a file first, then run one of these from your own reviewer worktree, with every argument written out (no variables or `$(…)`):
+  - `office-review status <pr>`: the head commit, the `check` result, mergeability, and the reviews and comments so far, with the ids to reply to.
+  - `office-review reply <pr> <comment-id> --file <path>`: a reply in a review thread.
+  - `office-review comment <pr> --file <path>`: a comment on the PR.
+  - `office-review review <pr> --file <review.json>`: one review with inline comments, as `{"body": "…", "comments": [{"path": "…", "line": 12, "body": "…"}]}`.
+  - `office-review verdict <pr> --ready|--not-ready --sha <head sha> --file <path>`: it refuses unless the sha is the PR's current head, and adds the `Verdict:` line itself. No other body may hold a `Verdict:` line.
+  It refuses bodies over 64 KB or that look like they hold a secret, and runs only when its working folder is in a worktree listed in `~/.agent-office/reviewers.json`. That list guards against mistakes, not against other sessions, which could change folder or edit the file: what limits who posts is the person's permission rules. Read the code with git, for example `git fetch origin pull/<pr>/head`. Never post as the person, and never print the App's token or read its key. Reviewers don't set required checks or approve PRs on GitHub; the verdict is a comment.
 - Authors reply in threads and comment with plain `gh`, as themselves.
 - The reviewer confirms `check` directly, with `office-review status`. If it can't read it, they ask the lead, and the verdict says the result came second-hand.
 - Two reviewers never review the same PR. If a PR has to be updated after another one merges, its reviewer checks only what the update changed.

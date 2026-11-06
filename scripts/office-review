@@ -31,12 +31,15 @@ SECRETS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\b(?:sk-ant-[\w-]{10,}|sk-(?:proj-)?[\w-]{20,}|[sr]k_(?:live|test)_\w{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}|hf_\w{30,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|npm_\w{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"),
     re.compile(r"(?i)\b(?:bearer|token)\s+[\w.~+/=-]{24,}"),
-    re.compile(r"(?i)\b[\w.-]*(?:api[_-]?key|secret|passw(?:or)?d|access[_-]?key|private[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?[\w.~+/=-]{12,}"),
+    # A name that says it holds a secret, then a value that isn't code, such as os.environ.get("X") or read_key().
+    re.compile(r"(?i)\b[\w.-]*(?:api[_-]?key|secret|passw(?:or)?d|access[_-]?key|private[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?[\w~+/=-]{12,}(?![\w.(])"),
     re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
 ]
 COMMENT_KEYS = {"path", "line", "side", "start_line", "start_side", "body"}
 SHA = re.compile(r"^[0-9a-f]{40}$")
-VERDICT_LINE = re.compile(r"(?mi)^\s*verdict\s*:")
+# The server's own pattern for a verdict, in server/approvals.py. Its latest match in anything the App posts counts.
+VERDICT_LINE = re.compile(r"^\W*Verdict:", re.I | re.M)
+PAGE = 100
 
 
 class Refused(Exception):
@@ -73,6 +76,9 @@ def check_text(text, what):
         raise Refused(f"{what} is empty.")
     if any(pattern.search(text) for pattern in SECRETS):
         raise Refused(f"{what} looks like it holds a secret, so it wasn't posted. Take the secret out and try again.")
+    # The office reads any such line as the verdict, so only the verdict subcommand writes one, for the current head.
+    if VERDICT_LINE.search(text):
+        raise Refused(f"{what} has a Verdict line. Leave it out: only office-review verdict writes one, for the PR's current head.")
 
 
 def read_file(path, what):
@@ -110,6 +116,17 @@ class GitHub:
     def get(self, path):
         return json.loads(self.run(["api", f"repos/{REPO}/{path}"]) or "null")
 
+    def get_all(self, path):
+        """Every page of a list, which GitHub gives oldest first, so the newest would otherwise drop off a long PR."""
+        items = []
+        for page in range(1, 51):
+            batch = self.get(f"{path}?per_page={PAGE}&page={page}")
+            items.extend(batch)
+            if len(batch) < PAGE:
+                return items
+
+        raise Refused(f"{path} has more than {50 * PAGE} entries, which is more than this will read.")
+
     def post(self, path, fields):
         return json.loads(self.run(["api", "-X", "POST", f"repos/{REPO}/{path}", "--input", "-"], json.dumps(fields)) or "null")
 
@@ -126,7 +143,7 @@ def first_line(text, width=100):
 def status(github, pr):
     info = github.get(f"pulls/{pr}")
     head = info["head"]["sha"]
-    runs = [run for run in github.get(f"commits/{head}/check-runs?per_page=100")["check_runs"] if run["name"] == CHECK_NAME]
+    runs = [run for run in github.get(f"commits/{head}/check-runs?check_name={CHECK_NAME}")["check_runs"] if run["name"] == CHECK_NAME]
     check = (runs[0]["conclusion"] or runs[0]["status"]) if runs else "not run"
     lines = [
         f"PR {pr}: {info['title']} ({info['state']}{', merged' if info.get('merged') else ''})",
@@ -136,15 +153,15 @@ def status(github, pr):
         "",
         "reviews:",
     ]
-    for review in github.get(f"pulls/{pr}/reviews?per_page=100"):
+    for review in github.get_all(f"pulls/{pr}/reviews"):
         lines.append(f"  {review['id']} {review['user']['login']} {review['state']} at {review['commit_id'][:7]}: {first_line(review['body'])}")
     lines.append("review comments (reply to one by its id):")
-    for comment in github.get(f"pulls/{pr}/comments?per_page=100"):
+    for comment in github.get_all(f"pulls/{pr}/comments"):
         where = f"{comment['path']}:{comment.get('line') or comment.get('original_line')}"
         reply = f" reply to {comment['in_reply_to_id']}" if comment.get("in_reply_to_id") else ""
         lines.append(f"  {comment['id']} {comment['user']['login']} {where}{reply}: {first_line(comment['body'])}")
     lines.append("comments:")
-    for comment in github.get(f"issues/{pr}/comments?per_page=100"):
+    for comment in github.get_all(f"issues/{pr}/comments"):
         lines.append(f"  {comment['id']} {comment['user']['login']}: {first_line(comment['body'])}")
 
     return "\n".join(lines)
@@ -177,9 +194,6 @@ def review_fields(text, head):
 
 
 def verdict_body(text, is_ready, sha):
-    if VERDICT_LINE.search(text):
-        raise Refused("The body already has a Verdict line. Leave it out, and this adds it for the commit you name.")
-
     return f"{text.rstrip()}\n\nVerdict: {'ready for' if is_ready else 'not ready at'} {sha}"
 
 

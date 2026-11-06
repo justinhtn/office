@@ -745,14 +745,16 @@ test('other commands never reach the check', async ($, on) => {
 
 // office-review is how reviewers post. It's trusted only when written out in full, and refused when built from
 // variables or substitutions, whether or not the line deletes anything.
-const REVIEW = '/Users/houghton/code/agent-office/scripts/office-review'
+const REVIEW = `${HOME}/code/agent-office/scripts/office-review`
 const REVIEW_ALLOWED: [string, string][] = [
   ['status', `${REVIEW} status 50`],
   ['a reply from a file', `${REVIEW} reply 50 4497497723 --file /private/tmp/x/reply.md`],
   ['a comment from a file named for deletes', `${REVIEW} comment 50 --file /private/tmp/x/rm-rf-old-logs.md`],
   ['a review from a file', `${REVIEW} review 50 --file /private/tmp/x/review.json`],
   ['a verdict', `${REVIEW} verdict 50 --not-ready --sha ${'a'.repeat(40)} --file /private/tmp/x/verdict.md`],
-  ['a relative path from the worktree', 'cd /Users/houghton/code/agent-office/.claude/worktrees/w && scripts/office-review status 50'],
+  ['the main checkout by its tilde path, from a worktree', 'cd /Users/me/code/agent-office/.claude/worktrees/w && ~/code/agent-office/scripts/office-review status 50'],
+  ['delete words as its arguments, which it reads as data', `${REVIEW} status 'rm -rf ~'`],
+  ['an editor from a variable opening it', '$EDITOR scripts/office-review'],
   ['a body written by a heredoc, then posted', `cat > /private/tmp/x/body.md <<'EOF'\nBlocking: rm -rf "$D" still passes. Grace\nEOF\n${REVIEW} comment 50 --file /private/tmp/x/body.md`],
   ['its help', `${REVIEW} --help`],
   ['a search that names it', 'grep -rn office-review CLAUDE.md scripts'],
@@ -779,6 +781,10 @@ const REVIEW_REFUSED: [string, string][] = [
   ['an unknown subcommand', `${REVIEW} post 50 --file /tmp/x/b.md`],
   ['no subcommand', REVIEW],
   ['unreadable syntax', `((1)); ${REVIEW} status 50`],
+  ["a worktree's copy, which could be a pull request's version", 'cd /Users/me/code/agent-office/.claude/worktrees/w && scripts/office-review status 50'],
+  ["a worktree's copy by its full path", `${HOME}/code/agent-office/.claude/worktrees/w/scripts/office-review status 50`],
+  ['a planted copy given delete words', `/private/tmp/x/office-review status 'rm -rf ~'`],
+  ['the program from a variable folder, given a subcommand', '"$DIR"/office-review verdict 50 --ready --sha x --file /tmp/x/v.md'],
 ]
 
 for (const [why, command] of REVIEW_REFUSED) {
