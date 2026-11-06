@@ -533,6 +533,102 @@ for (const [why, command] of ALLOWED) {
   })
 }
 
+// Commands the guard refused although nothing in them deletes a file: words in text, flags that only sound like a delete,
+// and programs it can't vouch for that share a line with no delete at all.
+const QUINN = '/Users/houghton/.agent-office/quinn/quinn-gh'
+const FALSE_ALARMS: [string, string][] = [
+  ['a review comment in -f body= about deleting old logs', `${QUINN} api -X POST repos/justinhtn/office/issues/40/comments -f body='Non-blocking: the cleanup deletes old log files with rm -rf "$LOG_DIR"/*.log; find /x -delete would be clearer. Asha'`],
+  ['a review comment in a double-quoted -f body=', `${QUINN} api repos/justinhtn/office/issues/40/comments -f body="Blocking: rm -rf \\"\\$D\\" and unlink(path) still pass. Grace"`],
+  ['quinn-gh kept in a variable', `Q=${QUINN}; $Q api -X POST repos/justinhtn/office/issues/40/comments -f body='The script deletes old log files with rm -rf; delete them by literal path. Asha'`],
+  ['quinn-gh kept in a quoted variable', `Q="${QUINN}" && "$Q" pr comment 40 --body 'Remove the rm -rf of old logs. Grace'`],
+  ['quinn-gh in a braced variable', `Q=${QUINN}\n\${Q} pr review 40 --comment --body 'unlink and rmtree are fine here. Asha'`],
+  ['a body file whose path is in a variable', `F=/private/tmp/x/body.md; cat > "$F" <<'EOF'\nBlocking: rm -rf "$D" deletes old log files.\nEOF\n${QUINN} pr comment 40 --body-file "$F"`],
+  ['a body file and quinn-gh both in variables', `Q=${QUINN}; F=/private/tmp/x/body.md; $Q api repos/justinhtn/office/pulls/40/reviews --input "$F" --jq .html_url`],
+  ['a review from a heredoc piped to quinn-gh', `cat <<'EOF' | ${QUINN} api repos/justinhtn/office/pulls/40/reviews --input -\n{"body": "It still runs rm -rf ~/.claude/projects/$D. Verdict: not ready at abc123"}\nEOF`],
+  ['a merge that keeps the branch, then the update script', 'gh pr merge 40 --repo justinhtn/office --squash --delete-branch=false && /Users/houghton/code/agent-office/scripts/update.sh'],
+  ['a merge that deletes the branch, then the update script', 'gh pr merge 40 --squash --delete-branch && scripts/update.sh'],
+  ['the update script beside a git push --delete', 'git push origin --delete old-branch && scripts/update.sh'],
+  ['a branch named for deletes beside a script', 'git checkout -b fix-rm-guard && scripts/check.sh'],
+  ['pushing a branch named delete-guard after the checks', 'scripts/check.sh && git push -u origin claude/delete-guard-false-alarms'],
+  ['a worktree for a branch about rm', 'git worktree add ../rm-old-logs -b rm-old-logs && make -C ../rm-old-logs'],
+  ['a search for unlink calls through awk', `grep -rn "unlink(" server | awk -F: '{print $1}' | sort -u`],
+  ['a search for os.remove through python', `rg -n 'rmtree|os.remove\\(' server | python3 -c "import sys; print(len(sys.stdin.read().splitlines()))"`],
+  ['a search for rm -rf counted by xargs', `grep -rln 'rm -rf' scripts | xargs wc -l`],
+  ['a search for --delete paged through less', "grep -rn -- '--delete' scripts | less"],
+  ['a python edit whose text names a delete', `python3 - <<'EOF'\np = 'plugin/hooks/x.test.ts'\ns = open(p).read().replace("  ['a prompt', \`claude -p 'rm -rf'\`],\\n", '')\nopen(p, 'w').write(s)\nEOF`],
+  ['node printing a template literal', "node -e 'console.log(`${1 + 1} files`)'"],
+]
+
+for (const [why, command] of FALSE_ALARMS) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
+  })
+}
+
+// What the guard exists for, next to the false alarms above: each still has a real delete it can't vouch for.
+const STILL_REFUSED: [string, string][] = [
+  ['a merge beside a recursive delete of a variable', 'gh pr merge 40 --delete-branch=false && rm -rf "$D"'],
+  ['the update script beside a literal delete', 'scripts/update.sh && rm -rf /tmp/guard-test/build'],
+  ['a branch named for deletes beside a delete of ~/.claude', 'git checkout -b delete-x && rm -rf ~/.claude/projects'],
+  ['rm kept in a variable', 'Q=/bin/rm; $Q -rf ~/.claude'],
+  ['quinn-gh in a variable that is read again', `Q=${QUINN}; read Q; $Q -rf ~/.claude`],
+  ['quinn-gh in a variable after a sourced script', `Q=${QUINN}; source x.sh; $Q -rf ~/.claude`],
+  ['quinn-gh in a variable set only in a subshell', `(Q=${QUINN}); $Q -rf ~/.claude`],
+  ['quinn-gh in a variable set after a condition', `false && Q=${QUINN}; $Q -rf ~/.claude`],
+  ['a program in a variable given a delete', `Q=/usr/local/bin/runner; $Q 'rm -rf ~/.claude'`],
+  ['a review post beside a delete', `${QUINN} pr comment 40 --body ok && rm -rf "$D"`],
+  ['a search piped to python that reads code from it', `grep -rh 'shutil.rmtree' notes | python3`],
+  ['text piped to a program that runs it', `echo 'rm -rf ~/.claude' | parallel`],
+  ['an unknown program given a delete', `scripts/run.sh 'rm -rf ~/.claude'`],
+  ['an unknown program with --delete', 'aws s3 sync s3://b ~/.claude --delete'],
+  ['rmdir of a variable', 'rmdir "$D"'],
+  ['shred of a pattern in ~/.claude', 'shred -u ~/.claude/projects/*/*.jsonl'],
+  ['trash of ~/.claude', 'trash ~/.claude/projects'],
+  ['trash of a relative folder', 'trash build'],
+  ['xargs trash', 'cat list | xargs trash'],
+  ['git clean', 'git clean -fdx'],
+  ['git clean in another folder', 'git -C /tmp/guard-test clean -fd'],
+  ['git worktree remove of a variable', 'git worktree remove --force "$W"'],
+  ['git worktree remove of a relative path', 'git worktree remove ../other'],
+  ['git worktree remove inside ~/.claude', 'git worktree remove ~/.claude/worktrees/x'],
+  ['rclone sync', 'rclone sync /tmp/a remote:b'],
+  ['rclone purge', 'rclone purge remote:b'],
+  ['rsync --remove-source-files', 'rsync -a --remove-source-files ~/.claude/ /tmp/b/'],
+  ['shred through sh -c', `sh -c 'shred -u ~/.claude/x'`],
+  ['trash through sh -c', `sh -c 'trash ~/.claude'`],
+  ['a script written then run by sh', `echo 'rm -rf ~/.claude' > /tmp/x.sh && sh /tmp/x.sh`],
+  ['a script written then run directly', `printf 'rm -rf ~/.claude' > /tmp/x.sh; chmod +x /tmp/x.sh; /tmp/x.sh`],
+  ['a script written by tee then run', `echo 'rm -rf ~/.claude' | tee /tmp/x.sh; bash /tmp/x.sh`],
+  ['python code written then run', `cat > /tmp/x.py <<'EOF'\nimport shutil; shutil.rmtree('/Users/me/.claude')\nEOF\npython3 /tmp/x.py`],
+  ['python code from a variable', `CODE='import os; os.remove("/Users/me/.claude/x")'; python3 -c "$CODE"`],
+  ['an unknown program given a variable holding a delete', `X='rm -rf ~/.claude'; scripts/run.sh "$X"`],
+  ['python code from an unquoted heredoc with a variable', `python3 - <<EOF\n$CODE\nEOF\nX='os.remove(1)'`],
+  ['a delete exported for a program', `export CMD='rm -rf ~/.claude'; make run`],
+  ['a script written by python then run', `python3 -c "open('/tmp/x.sh', 'w').write('rm -rf ~/.claude')"; sh /tmp/x.sh`],
+  ['a script edited by sed -i then run', `sed -i '' 's/^/rm -rf ~\\/.claude/' /tmp/x.sh && /tmp/x.sh`],
+  ['perl backticks from a heredoc',`perl <<'EOF'\nprint \`rm -rf ~\`;\nEOF`],
+]
+
+for (const [why, command] of STILL_REFUSED) {
+  test(`still refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command)
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/trash folder/)
+  })
+}
+
+test('git clean with --dry-run deletes nothing', async ($, on) => {
+  const { deny } = await bash($, on, 'git clean -nd && scripts/update.sh')
+  expect(deny).toBeUndefined()
+})
+
+test('git worktree remove of a full literal path is checked like rm -rf', async ($, on) => {
+  const { deny } = await bash($, on, `git worktree remove ${PROJECT}/.claude/worktrees/w`)
+  expect(deny).toBeUndefined()
+})
+
 test('a home folder deeper than usual still protects the folders above it', async ($, on) => {
   const { deny } = await bash($, on, 'rm -rf /srv/people', { home: '/srv/people/me' })
   expect(deny).toMatch(/home folder/)
