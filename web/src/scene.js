@@ -10,7 +10,8 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 
 const cloneSkinned = model => SkeletonUtils.clone(model)
 
-import { teamsOf } from './api.js'
+import { api, teamsOf } from './api.js'
+import { SHARED_SPACES, hasRoom, keepPlaces, localLayout, parseLayout, shownSlots } from './officeLayout.js'
 
 const AVATARS = '/assets/avatars'
 // The person's own avatar: one of the cast with red hair.
@@ -954,36 +955,32 @@ const LOUNGE_MAIN_X=.41
 const LOUNGE_MAIN_Z=.1
 const LOUNGE_SIDE_ACROSS=-3
 const LOUNGE_SIDE_FORWARD=1.15
-const LAYOUT_SETTING='office-layout'
 const ROOM_COLUMNS=3
-const SHARED_SPACES=['meeting','lounge','office']
-function rememberedLayout(){try{return JSON.parse(localStorage.getItem(LAYOUT_SETTING))||{}}catch{return {}}}
-// Nobody moves when someone else arrives: a newcomer takes a place nobody is using, or a new one at the end.
-function keepPlaces(places,present){
-  const kept=[...places],live=new Set([...present,...SHARED_SPACES])
-  present.filter(key=>!kept.includes(key)).forEach(key=>{const free=kept.findIndex(one=>!live.has(one));if(free<0)kept.push(key);else kept[free]=key})
-  while(kept.length&&!live.has(kept[kept.length-1]))kept.pop()
-  return kept
+// The server keeps the room order, so every device lays the floor out the same. Undefined until it answers, null when it has none yet.
+let sharedLayout,plannedLayout=''
+function saveLayout(layout,isSeed){
+  plannedLayout=JSON.stringify(layout)
+  if(sharedLayout!==undefined&&plannedLayout!==JSON.stringify(sharedLayout))api('/api/layout',{layout,seed:isSeed}).catch(()=>{})
 }
 // Every team gets its own space, so teams read apart without closing up the floor.
 function planSpaces(){
-  const teams=teamsIn(people),groups=teams.filter(t=>t.members.length>1||busy(t.lead)||t.lead.isNamedTeam||t.lead.teamId==='project:Newsroom'),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
-  const teamKey=t=>t.lead.teamId||t.lead.id,layout=rememberedLayout(),seats=layout.seats||{}
+  const teams=teamsIn(people),groups=teams.filter(hasRoom),idle=teams.filter(t=>!groups.includes(t)).map(t=>t.lead)
+  // This browser's own layout seeds the server's once, so rooms stay where they were.
+  const teamKey=t=>t.lead.teamId||t.lead.id,start=sharedLayout||localLayout()||{}
   groups.sort((a,b)=>a.lead.project.localeCompare(b.lead.project))
   // The Newsroom joined after the first layout, so it starts at the end like any newcomer.
   const firstSlots=[...groups.map(teamKey).filter(key=>key!=='project:Newsroom'),...SHARED_SPACES]
-  const slots=keepPlaces(layout.slots||firstSlots,groups.map(teamKey))
+  const slots=keepPlaces(start.slots||firstSlots,groups.map(teamKey)),seats=Object.fromEntries(Object.entries(start.seats||{}).filter(([key])=>slots.includes(key)))
   const onBreak=people.filter(p=>p.isOnBreak).length
-  const spaces=slots.map(key=>{
+  const spaces=shownSlots(slots,groups.map(teamKey)).map(key=>{
     if(key==='meeting')return {kind:'meeting',W:8.4,D:7}
     if(key==='lounge')return {kind:'lounge',people:idle,W:Math.max(9,(idle.length+onBreak)*2.3+3.6),D:7.8,breaks:onBreak}
     if(key==='office')return {kind:'office',W:7.4,D:7}
     const team=groups.find(t=>teamKey(t)===key)
-    if(!team)return {kind:'empty',W:6.4,D:7.4}
     team.seats=seats[key]=keepPlaces(seats[key]||[],team.members.map(m=>m.id))
     return {kind:'team',team,W:Math.max(6.4,Math.ceil(team.seats.length/2)*2.5+1.6),D:7.4}
   })
-  try{localStorage.setItem(LAYOUT_SETTING,JSON.stringify({slots,seats}))}catch{}
+  saveLayout({slots,seats},!sharedLayout)
   return spaces
 }
 // Add ?perf to the address to read frame costs from window.__office in the console.
@@ -1518,7 +1515,6 @@ function drawThought(el,p,showWords,detailed){
   el.textContent=line
 }
 function drawSpace(space,x0,z0){
-  if(space.kind==='empty')return
   const {W,D,kind}=space,cx=x0+W/2,cz=z0+D/2,front=z0+D+AISLE_GAP/2,key=kind==='team'?space.team.lead.id:kind
   spots[key]={x:cx,z:cz,W,D}
   drawingKey=key
@@ -2092,6 +2088,12 @@ return {
     people=nextPeople
     if(sig!==signature&&people.length){signature=sig;build()}
     usage=nextUsage;drawUsage();drawDirectory();drawModal()
+  },
+  setLayout(next){
+    const layout=next===undefined?undefined:parseLayout(next),was=sharedLayout
+    sharedLayout=layout
+    // Another device moved a room, or the server only now answered.
+    if(JSON.stringify(layout)!==JSON.stringify(was)&&JSON.stringify(layout)!==plannedLayout&&people.length)build()
   },
   zoomBy,
   resetView(){isManual=false;isAdjusted=false},

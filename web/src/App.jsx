@@ -16,6 +16,7 @@ import { PHONE_SIZE, isTouchDevice } from './device.js'
 import { readSplitLayout, writeSplitLayout } from './savedView.js'
 import { PANE_COUNT, clearPane, firstPanes, nextFirstSlot, placeTeam, shownPanes, visibleSlots } from './split.js'
 import { age, announce, api, listenToEdition, speak, teamsOf, withId } from './api.js'
+import { ACTIVE_DAYS, hasRoom, onFloor } from './officeLayout.js'
 import ReactMarkdown from 'react-markdown'
 
 const isDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -193,7 +194,7 @@ function Presentation({ person, everyone, onClose }) {
   )
 }
 
-function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onSwipe = null, onPick, onSpace, onHome, children }) {
+function Room({ people, layout, selected, focus, speaker, usage, boardFont, lightsOut, pace, viewShift = 0, mapHost, sceneHandle, split = null, onSplit, onSwipe = null, onPick, onSpace, onHome, children }) {
   const stage = useRef(null), canvas = useRef(null), tags = useRef(null), scene = useRef(null), panes = useRef(null)
   const pick = useRef(onPick), space = useRef(onSpace), swipe = useRef(onSwipe)
   swipe.current = onSwipe
@@ -230,6 +231,10 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
 
     return () => observer.disconnect()
   }, [splitKeys, Boolean(onSwipe)])
+  // Before the update below, so the first build already uses the shared layout.
+  useEffect(() => {
+    scene.current.setLayout(layout)
+  }, [layout])
   useEffect(() => {
     scene.current.update(people, selected, focus, speaker, usage)
   }, [people, selected, focus, speaker, usage])
@@ -272,11 +277,9 @@ function Room({ people, selected, focus, speaker, usage, boardFont, lightsOut, p
   )
 }
 
-const isBusy = person => person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0
-
-// Teams as the office lays them out: anyone idle and alone is in the lounge, unless their team has a name.
+// Teams as the office lays them out: anyone idle and alone is in the lounge, unless their team is a project or has a name.
 function officeTeams(active) {
-  return teamsOf(active).filter(team => team.members.length > 1 || isBusy(team.lead) || team.lead.isNamedTeam || team.lead.teamId === 'project:Newsroom')
+  return teamsOf(active).filter(hasRoom)
 }
 
 const OWNER = { name: 'You', avatar: OWNER_AVATAR, project: 'Your office' }
@@ -972,10 +975,6 @@ function Palette({ everyone, rooms, onClose, onRoom, onPerson }) {
   )
 }
 
-const ACTIVE_DAYS = 7
-const isActive = person =>
-  person.isAssistant || (person.isNamedTeam && person.id === person.teamLeadId) || person.teamId === 'project:Newsroom' || person.isRunning || person.isFinished || Boolean(person.request) || person.meetingWith?.length > 0 ||
-  Date.now() - Date.parse(person.lastActivityAt || 0) < ACTIVE_DAYS * 86400000
 const SESSION_TABS = [
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'changes', label: 'Changes', icon: FileDiff },
@@ -1321,6 +1320,9 @@ function useTeamDrag(isOn, mapHost, sceneHandle, teams, onDrop) {
 export default function App() {
   const [everyone, setEveryone] = useState([])
   const [updatedAt, setUpdatedAt] = useState('')
+  // The room order every device shares. Undefined until the server answers, null when it has none yet.
+  const [layout, setLayout] = useState(undefined)
+  const lastLayout = useRef(undefined)
   const [problem, setProblem] = useState('')
   const [selected, setSelected] = useState(null)
   const [tab, setTab] = useState('outputs')
@@ -1339,6 +1341,11 @@ export default function App() {
           if (latest !== lastPeople.current) {
             lastPeople.current = latest
             setEveryone(data.people || [])
+          }
+          const latestLayout = JSON.stringify(data.layout ?? null)
+          if (latestLayout !== lastLayout.current) {
+            lastLayout.current = latestLayout
+            setLayout(data.layout ?? null)
           }
           setUpdatedAt(data.updatedAt || '')
           setOnScreen((data.onScreen || []).join(','))
@@ -1475,7 +1482,7 @@ export default function App() {
   }, [])
 
   const cast = everyone
-  const realActive = useMemo(() => cast.filter(isActive), [cast])
+  const realActive = useMemo(() => onFloor(cast), [cast])
   // ?present is the demo: one teammate has finished work ready. ?present=Name picks who.
   const presentAs = useMemo(() => new URLSearchParams(window.location.search).get('present'), [])
   useEffect(() => {
@@ -1490,7 +1497,7 @@ export default function App() {
   const active = useMemo(() => realActive.map(other => (other.id === presenterId ? { ...other, isRunning: false, isActing: false, isFinished: true, plan: null, label: isPresenting ? 'Presenting' : 'Ready for you', readyLine: isPresenting ? 'Showing you their work' : 'Ready for you' } : other)), [realActive, presenterId, isPresenting])
   const presenter = active.find(other => other.id === presenterId)
   const isShowing = isPresenting && Boolean(presenter)
-  const away = useMemo(() => cast.filter(person => !isActive(person)), [cast])
+  const away = useMemo(() => cast.filter(person => !realActive.includes(person)), [cast, realActive])
   const needsYou = [...active.filter(person => person.request), ...active.filter(person => person.isFinished && !person.request)].filter(person => person.id !== presenterId || person.request)
   const working = active.filter(person => person.isRunning)
   const person = cast.find(other => other.id === selected)
@@ -1592,7 +1599,7 @@ export default function App() {
       {problem && <p className="error banner">{problem}</p>}
       <div className="work floor">
         {active.length > 0
-          ? <Room people={active} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => paneTeams[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
+          ? <Room people={active} layout={layout} selected={selected} focus={focus} speaker={voices.speaker} usage={usage} boardFont={boardFont} lightsOut={shutDown || roomPace === 'asleep'} pace={roomPace} viewShift={isShowing ? PRESENTATION_SHIFT : 0} mapHost={mapHost} sceneHandle={sceneHandle} split={isSplit ? slots.map(index => paneTeams[index]?.lead.id ?? null) : null} onSplit={isShowing ? null : toggleSplit} onSwipe={isPhone ? swipePanes : null} onPick={isShowing ? ignoreRoomClick : pickInRoom} onSpace={isShowing ? ignoreRoomClick : goToSpace} onHome={() => goToPlace(null)}>
               <SplitPanes panes={panes} slots={slots} teams={teams} drag={drag} onDragStart={dragFromPane} onPlace={(key, index) => setPanes(placeTeam(panes, key, index))} onClear={index => setPanes(clearPane(panes, index))} onOpen={team => { setSplitLayout(layout => ({ ...layout, isOn: false })); pick(team.lead.id) }} />
             </Room>
           : !problem && <Empty text="Waiting for session data…" />}
