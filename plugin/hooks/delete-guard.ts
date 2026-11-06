@@ -363,7 +363,7 @@ function runsArguments(name: string, args: Word[]) {
   if (name === 'git' && args.some(arg => GIT_RUNS_TEXT.test(arg.text))) return 'git with a command it runs'
   if (GH.test(name) && args.some(arg => arg.text === '--' || GH_RUNS_TEXT.test(arg.text))) return `${name} with a command it runs`
   if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return `${name} exec`
-  if (name === 'sed' && args.some(arg => !arg.text.startsWith('-') && SED_RUNS.test(arg.text))) return 'sed with its e command'
+  if (name === 'sed' && args.map(sedScript).some(text => !text.startsWith('-') && SED_RUNS.test(text))) return 'sed with its e command'
   if (name === 'docker' && !PLAIN_DOCKER.test(args[0]?.text ?? '')) return `docker ${args[0]?.text ?? ''}`
 
   return undefined
@@ -407,9 +407,11 @@ const SHELLS = /^(sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/
 const LANGUAGES = /^(python[\d.]*|pypy\d*|perl|ruby|node|deno|bun|php|lua|awk|gawk|mawk|nawk)$/
 // Calls that need parentheses, and the ones Perl and Ruby make without them.
 const CODE_DELETES =
-  /\b(rmtree|remove|removedirs|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|Popen|spawnSync|execSync|execFile|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\b(system|exec|unlink|spawn|popen)\s*[("'`$@]|\bunlink\s+glob\b|subprocess|\bchild_process\b|\bos\.exec|posix_spawnp?\s*\(|\bqx\s*[^\w\s]|%x\s*[^\w\s]|`|\|\s*"/
+  /\b(rmtree|remove|removedirs|unlinkSync|rmdir|rmdirSync|rm|rmSync|rm_rf|rm_r|rimraf|Popen|spawnSync|execSync|execFile|execFileSync|exec[lv]p?e?|shell_exec|passthru|proc_open)\s*\(|\b(system|exec|unlink|spawn|popen)\s*[("'`$@]|\bunlink\s+glob\b|\brmtree\b|\breadpipe\b|\bOpen3\b|\bos\.spawn|\bexeca\b|Deno\.(Command|run)\b|\|\s*getline\b|subprocess|\bchild_process\b|\bos\.exec|posix_spawnp?\s*\(|\bqx\s*[^\w\s]|%x\s*[^\w\s]|`|\|\s*"/
 // GNU sed runs a shell with its e command, as an address's command or a flag of s.
-const SED_RUNS = /(^|[\d$;}\s])e(\s|$)|[^\w\s\\][gpiImMw\d]*e[gpiImM\d]*\s*(;|}|$)/m
+const SED_RUNS = /(^|[\d$;}\s])e(\s|$)|[^\w\s\\][gpiImMw\d]*e[gpiImM\d]*(w.*|\s*#.*)?\s*(;|}|$)/m
+// A script can be attached to its option, as in -e's/…/e' or --expression=….
+const sedScript = (arg: Word) => arg.text.replace(/^(-[nEsrz]*e|--expression=)/, '')
 // Keywords that come before the program without being one.
 const BEFORE_PROGRAM = new Set(['!', '{', '}', 'if', 'then', 'else', 'elif', 'do', 'done', 'fi', 'while', 'until'])
 const TESTS = new Set(['[', '[['])

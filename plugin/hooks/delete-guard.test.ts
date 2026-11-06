@@ -337,6 +337,18 @@ const REFUSED: [string, string][] = [
   ['quinn-gh alias storing a delete', "~/.agent-office/quinn/quinn-gh alias set --shell wipe 'rm -rf ~'"],
   ['quinn-gh passing a delete after --', "~/.agent-office/quinn/quinn-gh repo clone a/b -- --config core.sshCommand='rm -rf ~'"],
   ['npm exec rimraf', 'npm exec -- rimraf ~'],
+  ['sed with an e script attached to -e', "sed -e's/.*/rm -rf ~/e' f"],
+  ['sed with an e command attached to -e after -n', "sed -n -e'1e rm -rf ~' f"],
+  ['sed with an e script in --expression=', "sed --expression='s/.*/rm -rf ~/e' f"],
+  ['sed e flag followed by w', "sed 's/.*/rm -rf ~/ew out' f"],
+  ['sed e flag followed by a comment', "sed 's/.*/rm -rf ~/e # run' f"],
+  ['perl readpipe', `perl -e 'readpipe("rm -rf ~")'`],
+  ['ruby Open3', `ruby -e 'require "open3"; Open3.capture2("rm -rf ~")'`],
+  ['python os.spawnl', `python3 -c "import os; os.spawnl(os.P_WAIT, '/bin/rm', 'rm', '-rf', '/x')"`],
+  ['node execa', `node -e "import('execa').then(m => m.execa('rm', ['-rf', '/x']))"`],
+  ['deno Command', `deno eval "new Deno.Command('rm', { args: ['-rf', '/x'] }).outputSync()"`],
+  ['awk getline from a command', `awk 'BEGIN { "rm -rf ~" | getline }'`],
+  ['python rmtree held in a variable', `python3 -c "import shutil; f = shutil.rmtree; f('/x')"`],
   ['the app session folder', 'rm -rf ~/Library/Application\\ Support/Claude'],
 ]
 
