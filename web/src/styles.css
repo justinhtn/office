@@ -516,7 +516,6 @@ p.bubble-text::after, .markdown > :last-child::after { content: ''; display: inl
 .markdown code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 4px; border-radius: 4px; background: rgba(127, 127, 127, .18); }
 .markdown pre { margin: 4px 0 6px; padding: 8px; border-radius: 8px; background: rgba(127, 127, 127, .14); overflow-x: auto; white-space: pre; }
 .markdown pre code { padding: 0; background: none; }
-.markdown a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .markdown blockquote { margin: 2px 0 6px; padding-left: 8px; border-left: 3px solid rgba(127, 127, 127, .4); }
 .bubble-step { color: var(--bubble-meta); }
 .typing { display: inline-flex; gap: 4px; padding: 6px 2px; }

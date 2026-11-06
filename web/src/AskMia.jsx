@@ -25,9 +25,9 @@ function useVisibleHeight(sheet) {
   }, [])
 }
 
-// Her words may use bold, lists, code and links. Nothing else in Markdown is drawn, and raw HTML never is.
-const MARKDOWN = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'a', 'br', 'blockquote', 'del']
-const markdownParts = { a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }
+// Her words may use bold, italics, lists, code and quotes. Nothing else in Markdown is drawn, and raw HTML never is. Links aren't
+// either: her replies can carry other agents' words, and a link's label can hide where it goes, so only its text is shown.
+const MARKDOWN = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'br', 'blockquote']
 
 function Bubble({ item, children }) {
   return (
@@ -72,7 +72,7 @@ function Message({ item }) {
   return (
     <Bubble item={item}>
       {item.role === 'mia'
-        ? <div className="bubble-text markdown"><ReactMarkdown allowedElements={MARKDOWN} unwrapDisallowed skipHtml components={markdownParts}>{item.text}</ReactMarkdown></div>
+        ? <div className="bubble-text markdown"><ReactMarkdown allowedElements={MARKDOWN} unwrapDisallowed skipHtml>{item.text}</ReactMarkdown></div>
         : <p className="bubble-text">{item.text}</p>}
       {/* The time sits in the bubble's bottom corner, as in a messaging app. */}
       <time>{item.isWriting ? (item.step ? `${item.step}…` : 'writing…') : timeOf(item.at)}</time>

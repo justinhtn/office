@@ -16,6 +16,19 @@ test('a note comes just after the reply that drafted it, and her reply in progre
   assert.deepEqual(chatItems(chat).map(item => item.id), ['a', 'b', 'n', 'c', 'm', 'reply'])
 })
 
+test('a note from a turn with no reply stays in its own turn, before the next message', () => {
+  const chat = {
+    messages: [
+      { id: 'a', role: 'person', text: 'Tell Zoe hi', at: 1 },
+      // Her turn ended without any words, so nothing marks its end but the person's next message.
+      { id: 'b', role: 'person', text: 'ok?', at: 10 },
+      { id: 'c', role: 'mia', text: 'Yes, all quiet.', at: 15 },
+    ],
+    notes: [{ id: 'n', leadName: 'Zoe', text: 'Hi', status: 'draft', at: 3 }],
+  }
+  assert.deepEqual(chatItems(chat).map(item => item.id), ['a', 'n', 'b', 'c'])
+})
+
 test('nothing to show before the first answer', () => {
   assert.deepEqual(chatItems(null), [])
 })

@@ -19,10 +19,12 @@ export function chatItems(chat) {
   const notes = (chat?.notes ?? []).map(note => ({ kind: 'note', ...note })).sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
   const items = []
   const waiting = [...notes]
+  const release = at => { while (waiting.length && (waiting[0].at ?? 0) <= (at ?? 0)) items.push(waiting.shift()) }
   messages.forEach(message => {
+    // A turn can end with no reply from her, so a note never waits past the person's next message: it stays in its own turn.
+    if (message.role === 'person') release(message.at)
     items.push(message)
-    if (message.role !== 'mia') return
-    while (waiting.length && (waiting[0].at ?? 0) <= (message.at ?? 0)) items.push(waiting.shift())
+    if (message.role === 'mia') release(message.at)
   })
 
   return [...items, ...waiting, ...writing]
