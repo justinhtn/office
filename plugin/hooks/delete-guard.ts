@@ -364,6 +364,8 @@ function runsArguments(name: string, args: Word[]) {
   if (GH.test(name) && args.some(arg => arg.text === '--' || GH_RUNS_TEXT.test(arg.text))) return `${name} with a command it runs`
   if (['npm', 'pnpm', 'yarn'].includes(name) && args.some(arg => RUNS_ARGUMENTS.test(arg.text))) return `${name} exec`
   if (name === 'sed' && args.map(sedScript).some(text => !text.startsWith('-') && SED_RUNS.test(text))) return 'sed with its e command'
+  // A script read from a file can't be checked, so it's treated like one that runs a command.
+  if (name === 'sed' && args.some(arg => /^(-[nEsrzi]*f|--file)/.test(arg.text))) return 'sed with a script file'
   if (name === 'docker' && !PLAIN_DOCKER.test(args[0]?.text ?? '')) return `docker ${args[0]?.text ?? ''}`
 
   return undefined
