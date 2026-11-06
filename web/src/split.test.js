@@ -50,12 +50,17 @@ test('swiping moves between runs of panes, wrapping round', () => {
   assert.equal(nextFirstSlot(1, 1, 1), 2)
 })
 
+test('a layout saved before choices were recorded keeps its panes but not its on or off', () => {
+  assert.deepEqual(parseSplitLayout('{"isOn":false,"panes":["a",null,null,null]}'), { isOn: null, panes: ['a', null, null, null] })
+  assert.deepEqual(parseSplitLayout('{"isOn":true,"panes":null}'), { isOn: null, panes: null })
+})
+
 test('a saved layout must be four team keys or empty panes', () => {
-  assert.deepEqual(parseSplitLayout('{"isOn":true,"panes":["a",null,"b",null]}'), { isOn: true, panes: ['a', null, 'b', null] })
-  assert.deepEqual(parseSplitLayout('{"isOn":false,"panes":null}'), { isOn: false, panes: null })
-  assert.equal(parseSplitLayout('{"isOn":true,"panes":["a"]}'), null)
-  assert.equal(parseSplitLayout('{"isOn":"yes","panes":null}'), null)
-  assert.equal(parseSplitLayout('{"isOn":true,"panes":[1,2,3,4]}'), null)
+  assert.deepEqual(parseSplitLayout('{"choice":"on","panes":["a",null,"b",null]}'), { isOn: true, panes: ['a', null, 'b', null] })
+  assert.deepEqual(parseSplitLayout('{"choice":"off","panes":null}'), { isOn: false, panes: null })
+  assert.deepEqual(parseSplitLayout('{"choice":null,"panes":null}'), { isOn: null, panes: null })
+  assert.equal(parseSplitLayout('{"choice":"on","panes":["a"]}'), null)
+  assert.equal(parseSplitLayout('{"choice":"on","panes":[1,2,3,4]}'), null)
   assert.equal(parseSplitLayout('not json'), null)
   assert.equal(parseSplitLayout(null), null)
 })

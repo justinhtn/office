@@ -29,14 +29,16 @@ export function writeSavedView(view) {
 }
 
 // The split view, and which team is in each pane, are kept per device.
+// isOn is null until the person turns split view on or off there, so the device's default applies until then.
+// Layouts saved before that was recorded only hold the default, so they count as no choice.
 const SPLIT_SETTING = 'office-split-view'
 
 export function parseSplitLayout(text, paneCount = 4) {
   try {
     const layout = JSON.parse(text)
-    const isValid = layout && typeof layout.isOn === 'boolean' && (layout.panes === null || (Array.isArray(layout.panes) && layout.panes.length === paneCount && layout.panes.every(key => key === null || (typeof key === 'string' && key.length > 0 && key.length <= 200))))
+    const isValid = layout && (layout.panes === null || (Array.isArray(layout.panes) && layout.panes.length === paneCount && layout.panes.every(key => key === null || (typeof key === 'string' && key.length > 0 && key.length <= 200))))
 
-    return isValid ? { isOn: layout.isOn, panes: layout.panes } : null
+    return isValid ? { isOn: layout.choice === 'on' ? true : layout.choice === 'off' ? false : null, panes: layout.panes } : null
   } catch {
     return null
   }
@@ -52,6 +54,6 @@ export function readSplitLayout() {
 
 export function writeSplitLayout(layout) {
   try {
-    localStorage.setItem(SPLIT_SETTING, JSON.stringify(layout))
+    localStorage.setItem(SPLIT_SETTING, JSON.stringify({ choice: layout.isOn === null ? null : layout.isOn ? 'on' : 'off', panes: layout.panes }))
   } catch {}
 }

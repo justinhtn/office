@@ -1440,11 +1440,11 @@ export default function App() {
   const personTeam = person && teams.find(team => team.members.some(member => member.id === person.id))
   const focus = place || (person?.isAssistant ? 'office' : person && active.some(other => other.id === person.id) ? personTeam?.lead.id || 'lounge' : null)
 
-  // An iPad opens in split view until the person turns it off there.
   // Touch screens, the iPad and the phone, open in split view until the person turns it off there.
-  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: isTouchDevice, panes: null })
+  const [splitLayout, setSplitLayout] = useState(() => readSplitLayout() ?? { isOn: null, panes: null })
   useEffect(() => writeSplitLayout(splitLayout), [splitLayout])
-  const isSplit = splitLayout.isOn && !isShowing && active.length > 0
+  const isSplitOn = splitLayout.isOn ?? isTouchDevice
+  const isSplit = isSplitOn && !isShowing && active.length > 0
   const panes = splitLayout.panes ?? firstPanes(teams)
   const isPhone = useIsPhone()
   const [isPanelOpen, setIsPanelOpen] = useState(false)
@@ -1457,11 +1457,9 @@ export default function App() {
   useEffect(() => {
     if (isSplit && !splitLayout.panes && teams.length) setPanes(firstPanes(teams))
   }, [isSplit, splitLayout.panes, teams])
-  const toggleSplit = () => setSplitLayout(layout => ({ isOn: !layout.isOn, panes: layout.panes ?? firstPanes(teams) }))
+  const toggleSplit = () => setSplitLayout(layout => ({ isOn: !isSplitOn, panes: layout.panes ?? firstPanes(teams) }))
   // On a phone the panel covers the panes, so it closes once a team is dropped.
   const [drag, dragFromPane] = useTeamDrag(isSplit, mapHost, sceneHandle, teams, (key, index) => { setPanes(placeTeam(panes, key, index)); if (isPhone) setIsPanelOpen(false) })
-  // Picking someone shows their card, which lives in the panel.
-  useEffect(() => { if (isPhone && selected) setIsPanelOpen(true) }, [isPhone, selected])
 
   function goToPlace(key) {
     setIsPresenting(false)
@@ -1489,6 +1487,8 @@ export default function App() {
     }
     setIsPresenting(false)
     const target = everyone.find(other => other.id === id)
+    // On a phone their card lives in the folded panel, so every pick opens it, even of the person already picked.
+    if (isPhone) setIsPanelOpen(true)
     setSelected(id)
     setPlace(null)
     setTab('outputs')
