@@ -1651,9 +1651,15 @@ function cullForPane(spot){
   actors.forEach(a=>{const at=a.g.position;if(a.g.visible&&!nearRoom({min:at,max:at},spot)){a.g.visible=false;shown.push(a.g)}})
   return shown
 }
+// The shadow map is drawn by whichever render comes first in a frame, so it gets one of its own, before any pane hides anything.
+// This camera looks at nothing, so only the shadow pass costs anything.
+const shadowOnly=new THREE.PerspectiveCamera(1,1,.1,.2);shadowOnly.position.set(0,-1000,0);shadowOnly.lookAt(0,-2000,0)
 function drawPanes(){
   const w=stage.clientWidth,h=stage.clientHeight,clear=renderer.getClearColor(new THREE.Color()),clearAlpha=renderer.getClearAlpha()
-  renderer.setClearColor(SPLIT_GAP_COLOR,1);renderer.clear();renderer.setClearColor(clear,clearAlpha)
+  renderer.setScissorTest(true)
+  if(sun.shadow.needsUpdate){renderer.setViewport(0,0,1,1);renderer.setScissor(0,0,1,1);renderer.render(scene,shadowOnly)}
+  // Clears that pixel too.
+  renderer.setScissorTest(false);renderer.setClearColor(SPLIT_GAP_COLOR,1);renderer.clear();renderer.setClearColor(clear,clearAlpha)
   renderer.setScissorTest(true)
   panesShown().forEach(pane=>{
     placePane(pane)
@@ -1692,9 +1698,8 @@ function paneDown(e){
   if(!paneGesture)paneGesture={pane,pointers:new Map(),isTap:true,start:{x:e.clientX,y:e.clientY,at:performance.now()},tag:e.target.closest?.('.tag')??null,pair:null}
   else paneGesture.isTap=false
   paneGesture.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY})
-  if(paneGesture.pointers.size===2)paneGesture.pair=pairOf(paneGesture.pointers)
+  if(paneGesture.pointers.size===2)paneGesture.pair=fingers(paneGesture.pointers)
 }
-function pairOf(pointers){const [a,b]=[...pointers.values()];return {dist:Math.hypot(a.x-b.x,a.y-b.y),angle:Math.atan2(b.y-a.y,b.x-a.x),x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
 function paneMove(e){
   const gesture=paneGesture,finger=gesture?.pointers.get(e.pointerId)
   if(!finger){if(e.pointerType==='mouse'){const pane=paneUnder(e.clientX,e.clientY);canvas.style.cursor=pane&&personUnder(paneRay(pane,e.clientX,e.clientY))?'pointer':''}return}
@@ -1704,7 +1709,7 @@ function paneMove(e){
     if(Math.hypot(e.clientX-gesture.start.x,e.clientY-gesture.start.y)>TOUCH_SLOP)gesture.isTap=false
     if(!gesture.isTap)adjustPane(gesture.pane,-dx*.005,dy*.004,0)
   }else if(gesture.pointers.size===2&&gesture.pair){
-    const now=pairOf(gesture.pointers),turn=Math.atan2(Math.sin(now.angle-gesture.pair.angle),Math.cos(now.angle-gesture.pair.angle))
+    const now=fingers(gesture.pointers),turn=Math.atan2(Math.sin(now.angle-gesture.pair.angle),Math.cos(now.angle-gesture.pair.angle))
     adjustPane(gesture.pane,turn-(now.x-gesture.pair.x)*.005,(now.y-gesture.pair.y)*.004,(gesture.pair.dist-now.dist)*TOUCH_PINCH)
     gesture.pair=now
   }
@@ -1713,11 +1718,12 @@ function paneUp(e){
   const gesture=paneGesture
   if(!gesture?.pointers.delete(e.pointerId))return
   if(e.pointerType==='touch')lastTouchUp=performance.now()
-  gesture.pair=gesture.pointers.size===2?pairOf(gesture.pointers):null
+  gesture.pair=gesture.pointers.size===2?fingers(gesture.pointers):null
   if(gesture.pointers.size)return
   paneGesture=null
   const {pane}=gesture,now=performance.now()
-  if(!gesture.isTap||now-gesture.start.at>=TOUCH_TAP_MS)return
+  // A finger held still is a press, not a tap. A mouse click counts however slow.
+  if(!gesture.isTap||(e.pointerType==='touch'&&now-gesture.start.at>=TOUCH_TAP_MS))return
   if(now-pane.lastTap<PANE_DOUBLE_TAP_MS){pane.lastTap=0;pane.turn=pane.tilt=pane.zoom=0;return}
   pane.lastTap=now
   if(gesture.tag){if(e.pointerType==='touch'){clickingTag=true;gesture.tag.click();clickingTag=false}return}
@@ -1953,8 +1959,8 @@ function tapAt(e){const r=canvas.getBoundingClientRect(),ray=new THREE.Raycaster
 // One finger pans, and a short still touch is a tap. Two fingers pinch to zoom, and twist or drag to rotate.
 const touches=new Map()
 let touchIsTap=false,touchStart=null,twoFingers=null,touchTag=null,clickingTag=false,lastTouchUp=-Infinity
-function fingers(){
-  const [a,b]=[...touches.values()]
+function fingers(pointers=touches){
+  const [a,b]=[...pointers.values()]
   return {dist:Math.hypot(a.x-b.x,a.y-b.y),angle:Math.atan2(b.y-a.y,b.x-a.x),x:(a.x+b.x)/2,y:(a.y+b.y)/2}
 }
 function touchDown(e){
@@ -2021,7 +2027,8 @@ function loop(){const t=clock.getElapsedTime()
   if(!isManual){
     const spot=focusKey&&spots[focusKey],ease=.09
     // From the end of the desks, low down, so both rows' faces clear the monitors.
-    const goal=spot?{...roomGoal(spot,camera.aspect),d:Math.min(home.roomLimit,roomGoal(spot,camera.aspect).d)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
+    const framed=spot&&roomGoal(spot,camera.aspect)
+    const goal=spot?{...framed,d:Math.min(home.roomLimit,framed.d)}:{x:home.center.x,y:home.center.y,z:home.center.z,az:home.az,el:home.el,d:home.dist}
     const talker=speaker&&actors.find(a=>a.p.id===speaker)
     // Whoever speaks may be anywhere, even with their back to the view, so go round to their front.
     // Someone can be away from their team's table, on a break or in a meeting, so go to them.
