@@ -88,15 +88,56 @@ function clip(sex, pose) {
 
 const PORTRAIT_SIZE = 192
 let portraitRenderer = null
+// The room's own renderer, once there is one. Faces are drawn with it, so a phone never needs a second WebGL context,
+// which iOS Safari may refuse or take back, leaving a face blank.
+let roomRenderer = null
 const portraits = new Map()
+
+function drawPortrait(stage, lens) {
+  if (roomRenderer) {
+    // A lost context draws nothing and reads back zeros, which would be kept as a blank face, so it fails and is tried again later.
+    if (roomRenderer.getContext().isContextLost()) throw new Error("The room's WebGL context is lost.")
+    // A renderer made before the room existed isn't needed any more, and its context counts against the phone's limit.
+    if (portraitRenderer) {
+      portraitRenderer.dispose()
+      portraitRenderer.forceContextLoss()
+      portraitRenderer = null
+    }
+    const target = new THREE.WebGLRenderTarget(PORTRAIT_SIZE, PORTRAIT_SIZE)
+    const before = roomRenderer.getRenderTarget()
+    const pixels = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4)
+    try {
+      roomRenderer.setRenderTarget(target)
+      roomRenderer.render(stage, lens)
+      roomRenderer.readRenderTargetPixels(target, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, pixels)
+    } finally {
+      roomRenderer.setRenderTarget(before)
+      target.dispose()
+    }
+    // WebGL's rows run bottom up, a picture's top down.
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = PORTRAIT_SIZE
+    const drawing = canvas.getContext('2d')
+    const image = drawing.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE)
+    const row = PORTRAIT_SIZE * 4
+    for (let y = 0; y < PORTRAIT_SIZE; y++) image.data.set(pixels.subarray((PORTRAIT_SIZE - 1 - y) * row, (PORTRAIT_SIZE - y) * row), y * row)
+    drawing.putImageData(image, 0, 0)
+
+    return canvas.toDataURL()
+  }
+  if (!portraitRenderer) {
+    portraitRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+    portraitRenderer.setSize(PORTRAIT_SIZE, PORTRAIT_SIZE, false)
+  }
+  portraitRenderer.render(stage, lens)
+
+  return portraitRenderer.domElement.toDataURL()
+}
+
 export function portrait(p) {
   const id = castOf(p), key = `${id}|${uniformOf(p.project)}`
   if (!portraits.has(key)) {
     portraits.set(key, template(id).then(async source => {
-      if (!portraitRenderer) {
-        portraitRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
-        portraitRenderer.setSize(PORTRAIT_SIZE, PORTRAIT_SIZE, false)
-      }
       const stage = new THREE.Scene()
       stage.background = new THREE.Color(uniformOf(p.project)).lerp(new THREE.Color(0xffffff), .7)
       stage.add(new THREE.AmbientLight(0xffffff, .75))
@@ -107,8 +148,16 @@ export function portrait(p) {
       const lens = new THREE.PerspectiveCamera(28, 1, .01, 20)
       lens.position.set(head.x + .12, head.y + .08, head.z + .95); lens.lookAt(head.x, head.y + .06, head.z)
       await new Promise(resolve => setTimeout(resolve, 400))
-      portraitRenderer.render(stage, lens)
-      return portraitRenderer.domElement.toDataURL()
+      try {
+        return drawPortrait(stage, lens)
+      } finally {
+        // Each clone has its own bones, whose texture would otherwise stay on the GPU. Geometry and materials are the template's.
+        model.traverse(o => { if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose() })
+      }
+    }).catch(failure => {
+      // Not remembered, so the face is tried again the next time it's shown.
+      portraits.delete(key)
+      throw failure
     }))
   }
   return portraits.get(key)
@@ -123,6 +172,7 @@ export function createScene(stage, canvas, tagsEl, onPick, onSpace = () => {}) {
 const home={center:new THREE.Vector3(0,1.5,0),dist:30,az:.12,el:.15}
 let lastReflections=0,lightsOut=false,lighting=new THREE.Group(),lastDaylight=0,boardFont='Inter,sans-serif',speaker=null,usage=null,usageScreen=null,directory=null,modalTv=null,speakerView=null,awayView=null,focusKey=null,spots={},floors=[],teamVolumes=[],isManual=false,drawingKey=null
 const renderer = new THREE.WebGLRenderer({canvas, antialias:true})
+roomRenderer = renderer
 renderer.setPixelRatio(TEST_MODE?TEST_PIXEL_RATIO:Math.min(window.devicePixelRatio||1,TOUCH_MODE?TOUCH_PIXEL_RATIO:2))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -2125,6 +2175,6 @@ return {
     boards.forEach(drawBoard);drawDirectory();drawModal();drawUsage();actors.forEach(a=>{if(a.screen)a.screen.drawn=''})
   },
   map,
-  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();renderer.dispose();map.remove()},
+  dispose(){window.removeEventListener('keydown',onSpaceDown);window.removeEventListener('keyup',onSpaceUp);window.removeEventListener('blur',onSpaceLost);clearInterval(timer);observer.disconnect();if(roomRenderer===renderer)roomRenderer=null;renderer.dispose();map.remove()},
 }
 }
