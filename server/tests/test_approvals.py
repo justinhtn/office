@@ -183,6 +183,16 @@ class Cards(unittest.TestCase):
             self.assertEqual(self.card()["status"], "expired")
         self.assertEqual(self.github.merged, [])
 
+    def test_a_merge_cut_off_by_a_restart_isnt_tried_again(self):
+        self.request()
+        state = self.cards.state()
+        state["cards"][0]["status"] = "approving"
+        self.cards.save(state)
+        self.cards.recover()
+        self.assertEqual(self.card()["status"], "failed")
+        self.assertIn("Check the pull request on GitHub", self.card()["result"])
+        self.assertEqual(self.github.merged, [])
+
     def test_declining_tells_the_lead(self):
         self.request()
         self.cards.decline(self.card()["id"], "dev1")

@@ -114,6 +114,17 @@ class Approvals:
         with self.log_path.open("a") as log:
             log.write(json.dumps(entry) + "\n")
 
+    def recover(self):
+        """At start: a merge that was under way when the office stopped may or may not have happened, so it isn't tried again."""
+        with self.lock:
+            state = self.state()
+            stuck = [card for card in state["cards"] if card["status"] == "approving"]
+            for card in stuck:
+                card.update(status="failed", result="The office restarted before it finished. Check the pull request on GitHub.")
+                self.log(card, "interrupted", card.get("device"))
+            if stuck:
+                self.save(state)
+
     def view(self):
         with self.lock:
             state = self.expire(self.state())

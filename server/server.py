@@ -2457,6 +2457,7 @@ if __name__ == "__main__":
     threading.Thread(target=sync_telegram_mia, daemon=True).start()
     threading.Thread(target=OFFICE.watch, daemon=True).start()
     threading.Thread(target=MIA_CHAT.keep_running, daemon=True).start()
+    APPROVALS.recover()
     threading.Thread(target=take_approval_requests, daemon=True).start()
 
     def stop_chat_mia(*_):
