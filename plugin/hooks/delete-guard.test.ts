@@ -8,6 +8,7 @@ const LINKS: Record<string, string> = {
   '/tmp/links/sub': `${HOME}/.claude/projects/sub`,
   '/tmp/links-to-theirs': `${PROJECT}/.claude/worktrees/theirs`,
   [`${PROJECT}/.claude/worktrees/mine/lnk`]: `${PROJECT}/.claude/worktrees/theirs/sub`,
+  [`${HOME}/linked`]: '/Volumes/data/linked',
 }
 
 // The root is where the session belongs, which a shell cd doesn't move. Without one given, it's the session's folder.
@@ -404,13 +405,11 @@ const ALLOWED: [string, string][] = [
   ['a pipe into a shell without a delete', 'cat setup.sh | sh'],
   ['a variable program with other flags', '"$PY" -m pytest'],
   ['a variable program with no flags', '"$VENV/bin/python" x.py'],
-  ['a recursive copy in unreadable syntax', '((1)); cp -r a b'],
   ['find with xargs and no delete', `find . -name '*.py' -print0 | xargs wc -l`],
   ['find piped to a program', `find . -name '*.py' -print | python3 x.py`],
   ['a compiler with a pattern', 'gcc *.c -fPIC -o x'],
   ['curl with a variable', 'curl "$URL" -fsSL -o y'],
   ['curl with a question mark', "curl 'https://x/y?a=1' -fsS"],
-  ['tar with a variable folder', 'tar -C "$D" -xf a.tar'],
   ['pytest with rm-like flags', 'pytest tests/test_*.py -rf'],
   ['a url that says soft-delete', 'curl https://x/soft-delete'],
   ['a test of a file beside a program', '[ -f /tmp/a ] && make'],
@@ -532,7 +531,9 @@ grep -n "isOn" web/src/App.jsx | sed -n '1,40p' | grep -iv "voice\\|isOn &&\\|!i
 
 for (const [why, command] of ALLOWED) {
   test(`allows ${why}`, async ($, on) => {
-    const { ran, deny } = await bash($, on, command)
+    // A command that starts by going into a worktree came from the session that owns it.
+    const root = /^cd (\/\S+\/\.claude\/worktrees\/[^/\s]+)/.exec(command)?.[1]
+    const { ran, deny } = await bash($, on, command, { root })
     expect(deny).toBeUndefined()
     expect(ran).toEqual([command])
   })
@@ -989,5 +990,198 @@ for (const [why, command] of ONE_SHOT_REFUSED) {
     const { ran, deny } = await bash($, on, command)
     expect(ran).toEqual([])
     expect(deny).toMatch(/trash folder/)
+  })
+}
+
+// Moving, overwriting or discarding work in another session's worktree loses it as surely as a delete, so it's refused
+// whether or not the line deletes anything. The session's own worktree works as usual.
+const CHANGE_REFUSED: [string, string][] = [
+  ['a move out of another worktree', `mv ${OTHER}/notes.txt /tmp/guard-test/`],
+  ['a move into another worktree', `mv /tmp/guard-test/notes.txt ${OTHER}/notes.txt`],
+  ['a move of another whole worktree', `mv ${OTHER} /tmp/guard-test/old`],
+  ['a move to a target folder in another worktree', `mv -t ${OTHER} notes.txt`],
+  ['a move with an attached target folder', `mv -t${OTHER} notes.txt`],
+  ['a relative move out through ..', 'mv ../theirs/notes.txt .'],
+  ['a relative move after a cd into another worktree', `cd ${OTHER} && mv notes.txt /tmp/guard-test/`],
+  ['a move through a link and ..', `mv ${OWN}/lnk/../notes.txt /tmp/guard-test/`],
+  ['a move of a pattern in another worktree', `mv ${OTHER}/*.txt /tmp/guard-test/`],
+  ['a move from a variable when the line names a worktree', `W=${OTHER}; mv "$W/notes.txt" /tmp/guard-test/`],
+  ['a move after a cd it can\'t follow', `cd -q ${OTHER} && mv notes.txt /tmp/guard-test/`],
+  ['a copy over a file in another worktree', `cp /tmp/guard-test/notes.txt ${OTHER}/notes.txt`],
+  ['a recursive copy into another worktree', `cp -R /tmp/guard-test/build ${OTHER}/`],
+  ['a copy to a target folder in another worktree', `cp -t ${OTHER} /tmp/guard-test/a.txt`],
+  ['an rsync into another worktree', `rsync -a /tmp/guard-test/ ${OTHER}/`],
+  ['output written into another worktree', `echo x > ${OTHER}/notes.txt`],
+  ['output appended in another worktree', `printf x >> ${OTHER}/notes.txt`],
+  ['git reset --hard in another worktree', `git -C ${OTHER} reset --hard`],
+  ['git reset --hard after a cd into another worktree', `cd ${OTHER} && git reset --hard HEAD`],
+  ['git checkout -- . in another worktree', `git -C ${OTHER} checkout -- .`],
+  ['git checkout -f in another worktree', `git -C ${OTHER} checkout -f main`],
+  ['git restore in another worktree', `git -C ${OTHER} restore src/app.ts`],
+  ['git restore of the worktree in another worktree', `git -C ${OTHER} restore --staged --worktree .`],
+  ['git stash drop in another worktree', `git -C ${OTHER} stash drop`],
+  ['git stash clear in another worktree', `git -C ${OTHER} stash clear`],
+  ['git switch -f in another worktree', `git -C ${OTHER} switch -f main`],
+  ['git switch --discard-changes in another worktree', `git -C ${OTHER} switch --discard-changes main`],
+  ['git rm in another worktree', `git -C ${OTHER} rm notes.txt`],
+  ['git worktree remove of another worktree', `git worktree remove --force ${OTHER}`],
+  ['git with a relative -C into another worktree', 'git -C ../theirs reset --hard'],
+  ['git with -C in two steps into another worktree', `git -C ${PROJECT} -C .claude/worktrees/theirs reset --hard`],
+  ['git with its work tree in another worktree', `git --work-tree=${OTHER} checkout -- .`],
+  ['git with -C from a variable when the line names a worktree', `W=${OTHER}; git -C "$W" reset --hard`],
+  // Now refused: copying out or unstaging still changes the session's view of another worktree, or its index.
+  ['a copy out of another worktree', `cp ${OTHER}/notes.txt /tmp/guard-test/`],
+  ['git restore --staged in another worktree', `git -C ${OTHER} restore --staged notes.txt`],
+  ['a copy in a line it can\'t read', '((1)); cp -r a b'],
+  ['tar extracting into a folder from a variable', 'tar -C "$D" -xf a.tar'],
+  // From the first review: wrappers, shells and git's own variables.
+  ['command in front of git', `command git -C ${OTHER} reset --hard`],
+  ['env in front of git', `env git -C ${OTHER} reset --hard`],
+  ['time in front of git', `time git -C ${OTHER} reset --hard`],
+  ['sudo in front of mv', `sudo mv ${OTHER}/notes.txt /tmp/`],
+  ['nohup in front of mv', `nohup mv ${OTHER}/notes.txt /tmp/`],
+  ['git through bash -c', `bash -c "git -C ${OTHER} reset --hard"`],
+  ['mv through sh -c', `sh -c 'mv ${OTHER}/notes.txt /tmp/'`],
+  ['xargs filling git -C', `echo ${OTHER} | xargs -I{} git -C {} reset --hard`],
+  ['GIT_DIR and GIT_WORK_TREE', `GIT_DIR=${OTHER}/.git GIT_WORK_TREE=${OTHER} git reset --hard`],
+  ['an exported GIT_WORK_TREE', `export GIT_WORK_TREE=${OTHER}; git reset --hard`],
+  ["git's own folder for another worktree", `git --git-dir=${PROJECT}/.git/worktrees/theirs reset --hard`],
+  // Every spelling git accepts, and the commands that change work without being on any list.
+  ['a shortened --hard', `git -C ${OTHER} reset --har`],
+  ['grouped checkout flags', `git -C ${OTHER} checkout -fB main`],
+  ['a shortened --worktree', `git -C ${OTHER} restore --staged --work f`],
+  ['grouped switch flags', `git -C ${OTHER} switch -fc x`],
+  ['a shortened --force', `git -C ${OTHER} checkout --forc main`],
+  ['checkout of a path with no --', `git -C ${OTHER} checkout HEAD notes.txt`],
+  ['git stash in another worktree', `git -C ${OTHER} stash`],
+  ['git mv in another worktree', `git -C ${OTHER} mv a.txt b.txt`],
+  ['a git alias from -c', `git -C ${OTHER} -c alias.nuke='reset --hard' nuke`],
+  ['git worktree move of another worktree', `git worktree move ${OTHER} /tmp/x`],
+  ['tar extracting into another worktree', `tar -C ${OTHER} -xf /tmp/a.tar`],
+  ['dd writing into another worktree', `dd if=/tmp/a of=${OTHER}/notes.txt`],
+  // Patterns and braces in the worktree's name.
+  ['a pattern for the worktree, relatively', 'mv ../the*/notes.txt /tmp/'],
+  ['a pattern for the worktree by full path', `mv ${PROJECT}/.claude/worktrees/the*/notes.txt /tmp/`],
+  ['a brace for the worktree', `mv ${PROJECT}/.claude/worktrees/{theirs,x}/notes.txt /tmp/`],
+  ['git -C with a pattern for the worktree', 'git -C ../the* reset --hard'],
+  ['output to a pattern for the worktree', `echo x > ${PROJECT}/.claude/worktrees/the*/notes.txt`],
+  ['a pattern from above that reaches .claude', `mv ${PROJECT}/.cl*/worktrees/theirs/notes.txt /tmp/`],
+  // cd forms that aren't the first word, and CDPATH.
+  ['a cd in an if', `if cd ${OTHER}; then git reset --hard; fi`],
+  ['a cd in a group', `{ cd ${OTHER}; } && git reset --hard`],
+  ['builtin cd', `builtin cd ${OTHER} && git reset --hard`],
+  ['an assignment before cd', `X=1 cd ${OTHER} && git reset --hard`],
+  ['CDPATH before cd', `CDPATH=${PROJECT}/.claude/worktrees cd theirs && git reset --hard`],
+  ['an exported CDPATH', `export CDPATH=${PROJECT}/.claude/worktrees; cd theirs && git reset --hard`],
+  // Variables that lead in without naming a worktree.
+  ['-C from a variable built with ..', 'W=$PWD/../theirs; git -C "$W" reset --hard'],
+  ['-C from dirname', 'git -C "$(dirname $PWD)/theirs" reset --hard'],
+  ['a program from a substitution', `"$(echo mv)" ${OTHER}/notes.txt /tmp/`],
+  // Lines the reader can't split.
+  ['a discard in a line with arithmetic', 'cd ../theirs && git reset --hard; echo $((1+1))'],
+  // Destinations that the old parsing misread.
+  ['rsync -t, which means --times', `rsync -t /tmp/x ${OTHER}/notes.txt`],
+  ['rsync -tr', `rsync -tr /tmp/src/ ${OTHER}/`],
+  ['rsync with a flag after the destination', `rsync -a /tmp/src/ ${OTHER}/ --exclude foo`],
+  ['cp with a grouped -t', `gcp -vt ${OTHER} /tmp/a.txt`],
+  ['mv with a shortened --target', `gmv --target=${OTHER} notes.txt`],
+  // The stash is shared by every worktree.
+  ['git stash clear from its own worktree', 'git stash clear'],
+  ['git stash drop of the newest stash from its own worktree', 'git stash drop'],
+  // From the second review: readers made to run a program, flags with paths joined, and unreadable languages.
+  ['git grep -O running a program', `git -C ${OTHER} grep -O/tmp/x/evil.sh x`],
+  ['git grep --open-files-in-pager', `git -C ${OTHER} grep --open-files-in-pager=/tmp/x/evil.sh x`],
+  ['GIT_EXTERNAL_DIFF in front of git diff', `GIT_EXTERNAL_DIFF='git checkout -- .; true' git -C ${OTHER} diff`],
+  ['git config in the environment', `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=/tmp/x/evil.sh git -C ${OTHER} status`],
+  ['git fetch --upload-pack', `git -C ${OTHER} fetch --upload-pack=/tmp/x/evil.sh .`],
+  ['git fetch, which can move a checked-out branch', `git -C ${OTHER} fetch origin +main:main --update-head-ok`],
+  ['rg --pre running a program', `rg --pre /tmp/x/evil.sh x ${OTHER}`],
+  ['sort -o with a relative path joined', 'sort -o../theirs/notes.txt /tmp/x'],
+  ['cp -t with a relative path joined', 'gcp -t../theirs /tmp/a.txt'],
+  ['tar -C.. joined', 'tar -xf /tmp/a.tar -C.. theirs/notes.txt'],
+  ['python in a line it can\'t read', `echo $((1)); python3 -c "import shutil; shutil.move('../theirs/a', '/tmp/a')"`],
+  ['a copy to a path built from pwd', 'D=$(pwd); cp /tmp/x "${D%/*}/theirs/notes.txt"'],
+  ['a copy to a path from git worktree list', `R=$(git worktree list --porcelain | awk 'NR==5{print $2}'); cp /tmp/x "$R/notes.txt"`],
+  ['a copy onto a bare name that links into another worktree', 'cp /tmp/guard-test/a.txt lnk'],
+  ['output written through a bare name that links into another worktree', 'echo x > lnk'],
+  // From the third review: git grep runs a program through -O in a cluster or a shortened --open-files-in-pager.
+  ['git grep with -O in a cluster', `git -C ${OTHER} grep -nO'git reset --hard; true' x`],
+  ['git grep with a shortened --open-files-in-pager', `git -C ${OTHER} grep --open='git reset --hard; true' x`],
+  ['git grep -iO after a cd', `cd ${OTHER} && git grep -iO'git reset --hard; true' x`],
+  ['git grep in another worktree', `git -C ${OTHER} grep -n TODO`],
+  // Process substitution and arithmetic are read now, rather than refused as unreadable.
+  ['output from process substitution into another worktree', `cat <(echo x) > ${OTHER}/notes.txt`],
+  ['a move inside process substitution', `cat <(mv ${OTHER}/notes.txt /tmp/x)`],
+  ['a substitution inside arithmetic', `echo $(( $(git -C ${OTHER} reset --hard >/dev/null; echo 1) ))`],
+  ['python in a line it still can\'t read', `((1)); python3 -c "import os, shutil; os.chdir(os.pardir); shutil.move('theirs' + chr(47) + 'a', 'x')"`],
+]
+
+for (const [why, command] of CHANGE_REFUSED) {
+  test(`refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/another session's worktree|another session's\./)
+  })
+}
+
+test('its own worktree is still its own when its folder is reached through a link', async ($, on) => {
+  const linked = `${HOME}/linked/app/.claude/worktrees/mine`
+  const { deny } = await bash($, on, `mv a.txt b.txt && cp a.txt ${linked}/c.txt`, { cwd: linked })
+  expect(deny).toBeUndefined()
+})
+
+test("git reset --hard is refused when the shell is in another session's worktree", async ($, on) => {
+  const { ran, deny } = await bash($, on, 'git reset --hard', { cwd: OTHER, root: OWN })
+  expect(ran).toEqual([])
+  expect(deny).toMatch(/another session's worktree/)
+})
+
+const CHANGE_ALLOWED: [string, string][] = [
+  ['a move in its own worktree', 'mv notes.txt old-notes.txt'],
+  ['a move into its own worktree', `mv /tmp/guard-test/notes.txt ${OWN}/notes.txt`],
+  ['a move out of its own worktree', `mv ${OWN}/notes.txt /tmp/guard-test/`],
+  ['a move up to its own worktree from a subfolder', 'cd web && mv old.js ../old.js'],
+  ['a move of a pattern in its own worktree', 'mv *.log logs/'],
+  ['a move with a variable when no worktree is named', 'for f in a b; do mv "$f.txt" "$f.md"; done'],
+  ['a copy into its own worktree', `cp /tmp/guard-test/a.txt ${OWN}/`],
+  ['an rsync into its own worktree', `rsync -a /tmp/guard-test/ ${OWN}/build/`],
+  ['an rsync to another machine', `rsync -a ${OWN}/build/ host:/srv/build/`],
+  ['output written into its own worktree', 'echo x > notes.txt'],
+  ['output to /dev/null and a descriptor', 'ls 2>/dev/null >&2'],
+  ['git reset --hard in its own worktree', 'git reset --hard HEAD'],
+  ['git checkout -- . in its own worktree', `git -C ${OWN} checkout -- .`],
+  ['git status in another worktree', `git -C ${OTHER} status`],
+  ['git log in another worktree', `git -C ${OTHER} log --oneline -5`],
+  ['git checkout of a branch in its own worktree', 'git checkout -b feature'],
+  ['git stash list in another worktree', `git -C ${OTHER} stash list`],
+  // Readers can look anywhere, and the session's own worktree works as usual.
+  ['reading files in another worktree', `cat ${OTHER}/notes.txt && grep -rn x ${OTHER}/src | head`],
+  ['git diff and show in another worktree', `git -C ${OTHER} diff && git -C ${OTHER} show HEAD`],
+  ['a search in another worktree written to a file outside it', `grep -rn x ${OTHER} > /tmp/guard-test/found.txt`],
+  ['git stash and pop in its own worktree', 'git stash && git stash pop'],
+  ['git stash drop of a named stash', 'git stash drop stash@{0}'],
+  ['a restore from a subfolder of its own worktree', 'cd web && git restore ../a.txt'],
+  ['cd .. back to its own worktree, then a checkout', 'cd web && npm run build && cd .. && git checkout -- package-lock.json'],
+  ['an rsync into its own worktree with an exclude', `rsync -a /tmp/guard-test/ ${OWN}/build/ --exclude x`],
+  ['a recursive copy in its own worktree', 'cp -R src /tmp/guard-test/src'],
+  ['output to a variable log', 'npm test > "$log" 2>&1'],
+  ['a rename loop', 'for f in a b; do mv "$f.txt" "$f.md"; done'],
+  ['a relative pattern in its own worktree', 'cp *.json /tmp/guard-test/'],
+  ['a commit whose message names another worktree', `git commit -m "$(cat <<'EOF'\nDon't touch ${OTHER}\nEOF\n)"`],
+  ['a cd to the top of its own checkout', 'cd "$(git rev-parse --show-toplevel)" && npm test'],
+  ['a cd to a new temporary folder', 'cd "$(mktemp -d)" && git init'],
+  ['adding a new worktree', `git worktree add ${PROJECT}/.claude/worktrees/new -b new`],
+  ['plain grep in another worktree', `grep -rn TODO ${OTHER}/src`],
+  ['arithmetic before a read', 'END=$((10+40)); sed -n "10,${END}p" src/app.ts'],
+  ['diff with process substitution', 'diff <(git show main:src/a.ts) src/a.ts'],
+  ['arithmetic written to a file', 'echo $((1+2)) > /tmp/guard-test/sum.txt'],
+  ['git diff in another worktree, written to a file outside it', `git -C ${OTHER} diff > /tmp/guard-test/their.diff`],
+]
+
+for (const [why, command] of CHANGE_ALLOWED) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
   })
 }

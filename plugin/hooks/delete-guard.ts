@@ -6,7 +6,7 @@ type Word = { text: string; isDynamic: boolean; globAt: number }
 // A command's words, with its own source text, the heredocs and here-strings fed to it, whether a pipe feeds it,
 // whether what's fed to it holds a variable or substitution, whether it runs inside a group, subshell or loop,
 // which passes on whatever is fed to the group, and whether it sends its output to a file.
-type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean }
+type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean; outputs: Word[] }
 // The whole command as sent, its commands, whether any of them is fed by a pipe, heredoc or here-string, and the
 // spellings of the one office-review it trusts.
 type Line = { text: string; commands: Command[]; isFed: boolean; trusted: string[] }
@@ -37,7 +37,7 @@ const MENTIONS_DELETE = /(?<![\w.]|[\w.]-)g?rm(?![\w.-])|(?<![\w.]|[\w.]-)trash(
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
 const newCommand = (): Command =>
-  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false, writesFile: false })
+  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false, writesFile: false, outputs: [] as Word[] })
 // Syntax this reader doesn't model, which makes a command it was checking a refusal.
 const unsure = (what: string) => new Error(`can't read ${what}`)
 
@@ -76,8 +76,20 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
   const readDollar = (word: Word, isQuoted: boolean) => {
     const start = i
     const after = src[i + 1] ?? ''
-    if (after === '(') {
-      if (src[i + 2] === '(') throw unsure('arithmetic')
+    if (after === '(' && src[i + 2] === '(') {
+      // Arithmetic is a value, but substitutions inside it still run.
+      let depth = 0
+      let end = i + 3
+      for (; ; end++) {
+        if (end >= src.length) throw unsure('unclosed arithmetic')
+        if (src[end] === '(') depth++
+        else if (src[end] === ')' && depth > 0) depth--
+        else if (src[end] === ')') break
+      }
+      if (src[end + 1] !== ')') throw unsure('arithmetic')
+      out.push(...lex(src.slice(i + 3, end), nesting + 1, true))
+      i = end + 2
+    } else if (after === '(') {
       i += 2
       run(')')
     } else if (after === '{') {
@@ -169,8 +181,11 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
     const endWord = () => {
       if (word && isHereString) feed(fedCommands(), word.text, word.isDynamic)
       // Output to a file descriptor or /dev/null leaves nothing for another program to run.
-      if (word && isOutput) {
-        for (const owner of fedCommands()) owner.writesFile ||= word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text)
+      if (word && isOutput && (word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text))) {
+        for (const owner of fedCommands()) {
+          owner.writesFile = true
+          owner.outputs.push(word)
+        }
       }
       if (word && !skipsWord) {
         if (!word.isDynamic && cmd.every(each => BEFORE_PROGRAM.has(each.text))) {
@@ -240,11 +255,18 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
         if (c === '(') parens++
         else if (parens > 0) parens--
         i++
+      } else if ((c === '<' || c === '>') && src[i + 1] === '(') {
+        // Process substitution: its commands run, and the word is a file name the shell makes up.
+        const w = current()
+        const from = i
+        i += 2
+        run(')')
+        w.text += src.slice(from, i)
+        w.isDynamic = true
       } else if (c === '<' || c === '>' || (c === '&' && src[i + 1] === '>')) {
         // A redirect's target isn't an argument, and a file descriptor before it isn't either.
         if (word && /^[0-9]+$/.test(word.text) && !word.isDynamic) word = undefined
         endWord()
-        if (src[i + 1] === '(') throw unsure('process substitution')
         if (src.startsWith('<<<', i)) {
           i += 3
           skipsWord = isHereString = true
@@ -905,6 +927,233 @@ function refuseStoredProgram(commands: Command[] | undefined, command: string) {
   return undefined
 }
 
+// The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
+// worktree can't make it look like its own. Relative names count from where the shell is. Without its folder, a
+// session has no worktree of its own and no base for relative names.
+async function sessionScope($: EngineInterface, home: string): Promise<Scope> {
+  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
+  const root = await Promise.resolve($.session.root()).catch(() => undefined)
+
+  return { home, base: cwd ? normalize(cwd) : undefined, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
+}
+
+// Another session's worktree is changed only by that session. Listing the commands that change files always leaves
+// some out, so this works like the delete check: when any part of a line reaches another session's worktree, or could
+// and it can't tell, the line runs only if every command in it only reads.
+const leaveAlone = (shown: string) =>
+  `Agent Office blocked this command because \`${shown}\` reaches another session's worktree, and only that session changes it. Commands that only read, such as git status or cat, can run there. If something there must change, ask the person.`
+const cantTell = (shown: string) =>
+  `Agent Office blocked this command because it can't tell whether \`${shown}\` reaches another session's worktree, and the line changes something. Use a full literal path, with no variable, pattern, CDPATH, ~-, ~+, +N or -N.`
+const sharedStash = (shown: string) =>
+  `Agent Office blocked \`${shown}\` because every worktree of a repo shares one stash, so it could throw away another session's. Drop a stash you made by naming it, as in git stash drop stash@{0}.`
+
+// git commands that only read the worktree, the index and the refs.
+// fetch isn't one, since it can move a checked-out branch with --update-head-ok. Nor is grep, which runs a program to
+// open files in, through -O in any cluster of flags or any start of --open-files-in-pager.
+const GIT_READERS = /^(status|log|diff|show|rev-parse|ls-files|ls-tree|cat-file|blame|describe|shortlog|rev-list|merge-base|for-each-ref|show-ref|whatchanged|count-objects|check-ignore|name-rev)$/
+// Variables that make git, a pager or gh run a program of the line's choosing, such as GIT_EXTERNAL_DIFF for git
+// diff and GIT_CONFIG_KEY_0 with its value, which is -c in the environment.
+const RUNS_FROM_ENVIRONMENT = /^(GIT_\w+|PAGER|EDITOR|VISUAL|SSH_ASKPASS|LESS\w*|GH_\w+|BROWSER)\+?=/
+
+function gitReads(args: Word[]) {
+  // Config given on the command line, an output file, or a program to open files in can make even a reader change things.
+  if (args.some(arg => /^(-c|--config-env|--exec-path|--output|-O|--open-files-in-pager)/.test(arg.text))) return false
+  const at = gitCommandAt(args)
+  const command = args[at]?.text ?? ''
+  const rest = args.slice(at + 1)
+  const onlyFlags = (flags: RegExp) => rest.every(word => flags.test(word.text))
+  if (GIT_READERS.test(command)) return true
+  if (command === 'branch') return onlyFlags(/^(-a|--all|-r|--remotes|-v|-vv|--list|--show-current)$/)
+  if (command === 'remote') return onlyFlags(/^(-v|--verbose)$/) || /^(show|get-url)$/.test(rest[0]?.text ?? '')
+  if (command === 'stash') return /^(list|show)$/.test(rest[0]?.text ?? '')
+  // Adding a worktree makes a new folder, and git won't add one where a worktree already is.
+  if (command === 'worktree') return /^(list|add)$/.test(rest[0]?.text ?? '')
+  if (command === 'config') return rest.some(word => /^(--get|--get-all|--get-regexp|--list|-l)$/.test(word.text))
+  if (command === 'tag') return onlyFlags(/^(-l|--list|-n\d*)$/)
+
+  return false
+}
+
+const programAt = (words: Word[]) => words.findIndex(word => !ASSIGNMENT.test(word.text) && !BEFORE_PROGRAM.has(word.text) && !/^(builtin|command)$/.test(word.text))
+
+// Whether a command only reads. Its own output to a file is judged where it lands.
+function isReader(words: Command, trusted: string[] = []) {
+  const at = programAt(words)
+  if (at < 0) return true
+  const name = nameOf(words[at])
+  const args = words.slice(at + 1)
+  // The main checkout's office-review reads its body file and posts it, and writes nothing here.
+  if (trusted.includes(words[at].text)) return true
+  if (words[at].isDynamic) return false
+  // A program it's told to run, by a flag or a variable in front of it, could do anything.
+  if (args.some(arg => RUNS_A_PROGRAM.test(arg.text)) || words.slice(0, at).some(word => RUNS_FROM_ENVIRONMENT.test(word.text))) return false
+  if (/^(cd|pushd|popd|chdir)$/.test(name)) return true
+  if (name === 'git') return gitReads(args)
+  if (/^g?find$/.test(name)) return !args.some(arg => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(arg.text))
+
+  return isReadOnly(Object.assign([...words], words, { writesFile: false }))
+}
+
+// git stash clear, or a drop that doesn't name its stash, which takes the newest from a stash every worktree shares.
+function dropsSharedStash(words: Word[]) {
+  const at = programAt(words)
+  if (at < 0 || nameOf(words[at]) !== 'git') return false
+  const args = words.slice(at + 1)
+  const command = gitCommandAt(args)
+  const rest = args.slice(command + 1)
+
+  return args[command]?.text === 'stash' && (rest[0]?.text === 'clear' || (rest[0]?.text === 'drop' && !rest.slice(1).some(word => /^stash@\{\d+\}$/.test(word.text))))
+}
+
+// Words that name a place to work in: a cd target, git's -C, --git-dir and --work-tree, and git's and the shell's
+// variables for them. A variable or substitution there could lead anywhere.
+const LOCATION_FLAGS = /^(-C|--git-dir|--work-tree)$/
+const LOCATION_ASSIGNMENT = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_COMMON_DIR|CDPATH|cdpath)\+?=/
+// Substitutions whose place is known: the top of the shell's own git checkout, and a new temporary folder.
+const SAFE_PLACE = /^\$\((?:(git rev-parse --show-toplevel)|mktemp -d(?: -t [\w.-]+)?)\)$/
+// Programs that change the paths they're given, so a variable among them could name anything.
+const PATH_CHANGERS = /^(g?mv|g?cp|rsync|ln|install|ditto|tar|unzip|dd|touch|truncate|tee|g?sed|patch|chmod|chown)$/
+
+async function refuseWorktreeChange($: EngineInterface, commands: Command[] | undefined, command: string) {
+  if (!commands) {
+    // Any path, or a program that might change files, could reach one. A language can move files itself.
+    const mayChange = /\b(mv|cp|rsync|git|cd|ln|tar|install|ditto|unzip|dd|tee|touch)\b|[>/~]|\.\.|worktrees/.test(command) || command.split(/[\s;&|()]+/).some(word => LANGUAGES.test(word))
+
+    return mayChange ? cantTell('a line the safety check could not read') : undefined
+  }
+  const stash = commands.find(dropsSharedStash)
+  if (stash) return sharedStash(stash.text.trim())
+  // A line of readers can't change anything, wherever it looks.
+  const home = await Promise.resolve($.env.get('HOME')).catch(() => undefined)
+  const trusted = trustedReview(home)
+  if (commands.every(words => isReader(words, trusted) && !words.writesFile)) return undefined
+
+  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
+  const root = await Promise.resolve($.session.root()).catch(() => undefined)
+  const seen = new Map<string, string | undefined>()
+  const real = async (path: string) => {
+    if (!seen.has(path)) seen.set(path, (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath)
+
+    return seen.get(path)
+  }
+  // A path as the file system follows it: one folder at a time, each link before the .. after it.
+  const follow = async (path: string) => {
+    let followed = '/'
+    for (const part of path.split('/').filter(each => each && each !== '.')) {
+      followed = resolve(`${followed}/${part}`, '/')
+      followed = (await real(followed)) ?? followed
+    }
+
+    return followed
+  }
+  // The session's own worktree, as written and with links followed, and the folder that holds every worktree.
+  const rootPath = root ? normalize(root) : undefined
+  const owned = rootPath ? [worktreeOf(rootPath), worktreeOf(fold(await follow(rootPath)))].filter(Boolean) : []
+  const repo = rootPath && (owned[0] ? owned[0].replace(/\/\.claude\/worktrees\/[^/]+$/, '') : fold(rootPath))
+  const ownName = owned[0]?.split('/').pop()
+  const isOther = (path: string) => {
+    const p = fold(path)
+    const tree = WORKTREE.exec(p)?.[1]
+    const admin = /\/\.git\/worktrees\/([^/]+)(\/|$)/.exec(p)?.[1]
+
+    // The folder holding every worktree, and the repo's .claude around it, reach them all.
+    return (tree && !owned.includes(tree)) || (admin && admin !== ownName) || /\/\.claude\/worktrees$/.test(p) || Boolean(repo && p === `${repo}/.claude`)
+  }
+  // What a pattern can reach: anything below the start before its first wildcard or brace.
+  // From a folder above the worktrees, it gets down to them only through ** or a name starting with a dot, as .claude.
+  const patternReaches = (prefix: string, rest: string) => {
+    const p = fold(prefix).replace(/\/+$/, '') || '/'
+    const worktrees = repo && `${repo}/.claude/worktrees`
+    const isAbove = Boolean(worktrees && worktrees.startsWith(`${p === '/' ? '' : p}/`))
+
+    return isOther(p) || worktrees === p || (isAbove && /\*\*|(^|\/|\{|,)\./.test(rest))
+  }
+
+  let base = cwd ? normalize(cwd) : undefined
+  let hasCdpath = false
+  let reached: string | undefined
+  let unclear: string | undefined
+  let isAllReading = true
+  // Where a word leads, if it's another session's worktree, or 'unclear' when it can't tell.
+  const reaches = async (token: string) => {
+    const text = home ? expandHome(token, home) : token
+    if (/^~/.test(text)) return 'unclear'
+    const glob = text.search(/[*?[{]/)
+    const literal = glob >= 0 ? text.slice(0, glob).replace(/[^/]*$/, '') : text
+    if (!literal.startsWith('/') && !base) return 'unclear'
+    const written = literal.startsWith('/') ? literal : `${base}/${literal}`
+    if (glob >= 0) {
+      const rest = text.slice(literal.length)
+
+      return patternReaches(resolve(written, '/'), rest) || patternReaches(await follow(written), rest) ? 'other' : undefined
+    }
+    const plain = isOther(resolve(written, '/'))
+
+    // A bare name is followed too, since it can be a link into another worktree.
+    return plain || isOther(await follow(written)) ? 'other' : undefined
+  }
+
+  for (const words of commands) {
+    const at = programAt(words)
+    const name = at < 0 ? '' : nameOf(words[at])
+    const isChanger = PATH_CHANGERS.test(name)
+    let writesThere = false
+    for (const [k, word] of [...words, ...words.outputs].entries()) {
+      const isOutput = k >= words.length
+      const previous = words[k - 1]?.text ?? ''
+      hasCdpath ||= /^(export\s+)?(CDPATH|cdpath)\+?=/.test(word.text)
+      if (word.isDynamic) {
+        // The top of the shell's own git checkout, and a new temporary folder, are places it knows.
+        if (SAFE_PLACE.test(word.text)) continue
+        const isLocation = LOCATION_FLAGS.test(previous) || /^--(git-dir|work-tree)=/.test(word.text) || LOCATION_ASSIGNMENT.test(word.text) || (k > at && /^(cd|pushd|chdir)$/.test(name))
+        // Elsewhere, as a file to write or move, a variable is unclear only when the line also reaches up or names a
+        // worktree for it to lead to, so rename loops and output to "$log" still run.
+        const mayLeadThere = /\.\.|worktree|\$\{?(PWD|OLDPWD)\b|\bpwd\b|dirname|rev-parse|%\//.test(command)
+        if (isLocation || ((isOutput || isChanger) && mayLeadThere)) {
+          unclear ??= word.text
+          writesThere ||= isOutput
+        }
+        continue
+      }
+      for (const token of word.text.split(/[\s'"`;&|()<>=,:]+/)) {
+        // A flag can carry a path joined to it, as in -t/folder.
+        // A flag can carry a path joined to its letters, as in -t/folder, -o../x or -C.., so every ending after the
+        // flag's first letter is read too.
+        const paths = token.startsWith('-') && !isOutput ? [...token.slice(2)].map((_, n) => token.slice(2 + n)).filter(each => /[/.~]/.test(each)) : [token]
+        for (const path of paths) {
+          const where = await reaches(path)
+          if (where === 'other') reached ??= word.text
+          if (where === 'unclear' && (isOutput || isChanger || k > at)) unclear ??= word.text
+          writesThere ||= Boolean(where) && isOutput
+        }
+      }
+    }
+    isAllReading &&= isReader(words, trusted) && !writesThere
+    // Follow a cd as the shell would. One it can't place, or any after CDPATH is set, leaves the folder unclear.
+    if (/^(cd|pushd|popd|chdir)$/.test(name)) {
+      const args = words.slice(at + 1)
+      const targets = args.filter(word => !/^(-[LP]+|--)$/.test(word.text))
+      const target = targets[0]
+      const isClear = name !== 'popd' && targets.length <= 1 && args.every(word => !word.text.startsWith('-') || /^(-[LP]+|--)$/.test(word.text))
+      const safe = target && SAFE_PLACE.exec(target.text)
+      if (!target && isClear && name !== 'pushd') base = home ? normalize(home) : undefined
+      // The top of the checkout the shell is in is its worktree, if it's in one. Elsewhere it can't be placed.
+      else if (isClear && safe?.[1]) base = base && WORKTREE.exec(base)?.[1]
+      else if (isClear && safe) base = '/private/tmp/new-temporary-folder'
+      else if (!isClear || !target || target.isDynamic || target.globAt >= 0 || UNCLEAR_PLACE.test(target.text.replace(/(^|\/)\.\.(\/|$)/g, '$1x$2')) || (hasCdpath && !target.text.startsWith('/'))) base = undefined
+      else {
+        const text = home ? expandHome(target.text, home) : target.text
+        base = text.startsWith('/') || base ? await follow(text.startsWith('/') ? text : `${base}/${text}`) : undefined
+      }
+    }
+  }
+  if (isAllReading) return undefined
+  if (reached) return leaveAlone(reached)
+  if (unclear) return cantTell(unclear)
+
+  return undefined
+}
+
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
   const commands = read(command)
@@ -913,16 +1162,12 @@ export async function refuseDelete($: EngineInterface, command: string): Promise
   const reviewHome = /office-review/i.test(command) ? await $.env.get('HOME') : undefined
   const review = refuseOfficeReview(commands, command, reviewHome)
   if (review) return review
-  if (!anyMentionDelete(commands, command, trustedReview(reviewHome))) return undefined
+  // A line with no delete still mustn't change another session's worktree. A delete is checked as one first, so it's
+  // refused with the reason that fits it.
+  if (!anyMentionDelete(commands, command, trustedReview(reviewHome))) return refuseWorktreeChange($, commands, command)
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
-  // Without its folder, a session has no worktree of its own and no base for relative names.
-  // The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
-  // worktree can't make it look like its own. Relative names still count from where the shell is.
-  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
-  const root = await Promise.resolve($.session.root()).catch(() => undefined)
-  const base = cwd ? normalize(cwd) : undefined
-  const scope: Scope = { home, base, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
+  const scope = await sessionScope($, home)
   const targets: Target[] = []
   for (const words of commands ?? lex(command)) {
     const refusal = checkCommand(words, scope, targets)
@@ -945,5 +1190,5 @@ export async function refuseDelete($: EngineInterface, command: string): Promise
     }
   }
 
-  return undefined
+  return refuseWorktreeChange($, commands, command)
 }
