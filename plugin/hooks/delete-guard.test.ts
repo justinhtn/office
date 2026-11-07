@@ -991,3 +991,85 @@ for (const [why, command] of ONE_SHOT_REFUSED) {
     expect(deny).toMatch(/trash folder/)
   })
 }
+
+// Moving, overwriting or discarding work in another session's worktree loses it as surely as a delete, so it's refused
+// whether or not the line deletes anything. The session's own worktree works as usual.
+const CHANGE_REFUSED: [string, string][] = [
+  ['a move out of another worktree', `mv ${OTHER}/notes.txt /tmp/guard-test/`],
+  ['a move into another worktree', `mv /tmp/guard-test/notes.txt ${OTHER}/notes.txt`],
+  ['a move of another whole worktree', `mv ${OTHER} /tmp/guard-test/old`],
+  ['a move to a target folder in another worktree', `mv -t ${OTHER} notes.txt`],
+  ['a move with an attached target folder', `mv -t${OTHER} notes.txt`],
+  ['a relative move out through ..', 'mv ../theirs/notes.txt .'],
+  ['a relative move after a cd into another worktree', `cd ${OTHER} && mv notes.txt /tmp/guard-test/`],
+  ['a move through a link and ..', `mv ${OWN}/lnk/../notes.txt /tmp/guard-test/`],
+  ['a move of a pattern in another worktree', `mv ${OTHER}/*.txt /tmp/guard-test/`],
+  ['a move from a variable when the line names a worktree', `W=${OTHER}; mv "$W/notes.txt" /tmp/guard-test/`],
+  ['a move after a cd it can\'t follow', `cd -q ${OTHER} && mv notes.txt /tmp/guard-test/`],
+  ['a copy over a file in another worktree', `cp /tmp/guard-test/notes.txt ${OTHER}/notes.txt`],
+  ['a recursive copy into another worktree', `cp -R /tmp/guard-test/build ${OTHER}/`],
+  ['a copy to a target folder in another worktree', `cp -t ${OTHER} /tmp/guard-test/a.txt`],
+  ['an rsync into another worktree', `rsync -a /tmp/guard-test/ ${OTHER}/`],
+  ['output written into another worktree', `echo x > ${OTHER}/notes.txt`],
+  ['output appended in another worktree', `printf x >> ${OTHER}/notes.txt`],
+  ['git reset --hard in another worktree', `git -C ${OTHER} reset --hard`],
+  ['git reset --hard after a cd into another worktree', `cd ${OTHER} && git reset --hard HEAD`],
+  ['git checkout -- . in another worktree', `git -C ${OTHER} checkout -- .`],
+  ['git checkout -f in another worktree', `git -C ${OTHER} checkout -f main`],
+  ['git restore in another worktree', `git -C ${OTHER} restore src/app.ts`],
+  ['git restore of the worktree in another worktree', `git -C ${OTHER} restore --staged --worktree .`],
+  ['git stash drop in another worktree', `git -C ${OTHER} stash drop`],
+  ['git stash clear in another worktree', `git -C ${OTHER} stash clear`],
+  ['git switch -f in another worktree', `git -C ${OTHER} switch -f main`],
+  ['git switch --discard-changes in another worktree', `git -C ${OTHER} switch --discard-changes main`],
+  ['git rm in another worktree', `git -C ${OTHER} rm notes.txt`],
+  ['git worktree remove of another worktree', `git worktree remove --force ${OTHER}`],
+  ['git with a relative -C into another worktree', 'git -C ../theirs reset --hard'],
+  ['git with -C in two steps into another worktree', `git -C ${PROJECT} -C .claude/worktrees/theirs reset --hard`],
+  ['git with its work tree in another worktree', `git --work-tree=${OTHER} checkout -- .`],
+  ['git with -C from a variable when the line names a worktree', `W=${OTHER}; git -C "$W" reset --hard`],
+]
+
+for (const [why, command] of CHANGE_REFUSED) {
+  test(`refuses ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(ran).toEqual([])
+    expect(deny).toMatch(/another session's worktree/)
+  })
+}
+
+test("git reset --hard is refused when the shell is in another session's worktree", async ($, on) => {
+  const { ran, deny } = await bash($, on, 'git reset --hard', { cwd: OTHER, root: OWN })
+  expect(ran).toEqual([])
+  expect(deny).toMatch(/another session's worktree/)
+})
+
+const CHANGE_ALLOWED: [string, string][] = [
+  ['a move in its own worktree', 'mv notes.txt old-notes.txt'],
+  ['a move into its own worktree', `mv /tmp/guard-test/notes.txt ${OWN}/notes.txt`],
+  ['a move out of its own worktree', `mv ${OWN}/notes.txt /tmp/guard-test/`],
+  ['a move up to its own worktree from a subfolder', 'cd web && mv old.js ../old.js'],
+  ['a move of a pattern in its own worktree', 'mv *.log logs/'],
+  ['a move with a variable when no worktree is named', 'for f in a b; do mv "$f.txt" "$f.md"; done'],
+  ['a copy out of another worktree, which only reads it', `cp ${OTHER}/notes.txt /tmp/guard-test/`],
+  ['a copy into its own worktree', `cp /tmp/guard-test/a.txt ${OWN}/`],
+  ['an rsync into its own worktree', `rsync -a /tmp/guard-test/ ${OWN}/build/`],
+  ['an rsync to another machine', `rsync -a ${OWN}/build/ host:/srv/build/`],
+  ['output written into its own worktree', 'echo x > notes.txt'],
+  ['output to /dev/null and a descriptor', 'ls 2>/dev/null >&2'],
+  ['git reset --hard in its own worktree', 'git reset --hard HEAD'],
+  ['git checkout -- . in its own worktree', `git -C ${OWN} checkout -- .`],
+  ['git restore --staged in another worktree, which only unstages', `git -C ${OTHER} restore --staged notes.txt`],
+  ['git status in another worktree', `git -C ${OTHER} status`],
+  ['git log in another worktree', `git -C ${OTHER} log --oneline -5`],
+  ['git checkout of a branch in its own worktree', 'git checkout -b feature'],
+  ['git stash list in another worktree', `git -C ${OTHER} stash list`],
+]
+
+for (const [why, command] of CHANGE_ALLOWED) {
+  test(`allows ${why}`, async ($, on) => {
+    const { ran, deny } = await bash($, on, command, { cwd: OWN })
+    expect(deny).toBeUndefined()
+    expect(ran).toEqual([command])
+  })
+}

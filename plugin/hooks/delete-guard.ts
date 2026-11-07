@@ -6,7 +6,7 @@ type Word = { text: string; isDynamic: boolean; globAt: number }
 // A command's words, with its own source text, the heredocs and here-strings fed to it, whether a pipe feeds it,
 // whether what's fed to it holds a variable or substitution, whether it runs inside a group, subshell or loop,
 // which passes on whatever is fed to the group, and whether it sends its output to a file.
-type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean }
+type Command = Word[] & { text: string; stdin: string; isPiped: boolean; isFedDynamic: boolean; isNested: boolean; writesFile: boolean; outputs: Word[] }
 // The whole command as sent, its commands, whether any of them is fed by a pipe, heredoc or here-string, and the
 // spellings of the one office-review it trusts.
 type Line = { text: string; commands: Command[]; isFed: boolean; trusted: string[] }
@@ -37,7 +37,7 @@ const MENTIONS_DELETE = /(?<![\w.]|[\w.]-)g?rm(?![\w.-])|(?<![\w.]|[\w.]-)trash(
 const isBlank = (c: string) => c === ' ' || c === '\t'
 const newWord = (text = ''): Word => ({ text, isDynamic: false, globAt: -1 })
 const newCommand = (): Command =>
-  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false, writesFile: false })
+  Object.assign([] as Word[], { text: '', stdin: '', isPiped: false, isFedDynamic: false, isNested: false, writesFile: false, outputs: [] as Word[] })
 // Syntax this reader doesn't model, which makes a command it was checking a refusal.
 const unsure = (what: string) => new Error(`can't read ${what}`)
 
@@ -169,8 +169,11 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
     const endWord = () => {
       if (word && isHereString) feed(fedCommands(), word.text, word.isDynamic)
       // Output to a file descriptor or /dev/null leaves nothing for another program to run.
-      if (word && isOutput) {
-        for (const owner of fedCommands()) owner.writesFile ||= word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text)
+      if (word && isOutput && (word.isDynamic || !/^([0-9]+|-|\/dev\/null)$/.test(word.text))) {
+        for (const owner of fedCommands()) {
+          owner.writesFile = true
+          owner.outputs.push(word)
+        }
       }
       if (word && !skipsWord) {
         if (!word.isDynamic && cmd.every(each => BEFORE_PROGRAM.has(each.text))) {
@@ -905,24 +908,133 @@ function refuseStoredProgram(commands: Command[] | undefined, command: string) {
   return undefined
 }
 
+// The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
+// worktree can't make it look like its own. Relative names count from where the shell is. Without its folder, a
+// session has no worktree of its own and no base for relative names.
+async function sessionScope($: EngineInterface, home: string): Promise<Scope> {
+  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
+  const root = await Promise.resolve($.session.root()).catch(() => undefined)
+
+  return { home, base: cwd ? normalize(cwd) : undefined, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
+}
+
+// Changes to another session's worktree that lose its work as surely as a delete: moving files out of it or into it,
+// copying or writing over its files, and git commands there that throw away changes. They're refused whether or not
+// the line deletes anything.
+const MOVERS = /^g?mv$/
+const COPIERS = /^(g?cp|rsync)$/
+const leaveAlone = (shown: string) =>
+  `Agent Office blocked this command because \`${shown}\` is in another session's worktree, and only that session changes it. If something there must change, ask the person.`
+const cantTell = (shown: string) =>
+  `Agent Office blocked this command because it can't tell whether \`${shown}\` is in another session's worktree. Use a full literal path, with no variable, .. or ~-, ~+, +N or -N.`
+
+// git commands that throw away a worktree's changes, given the words after the subcommand.
+function gitDiscards(command: string, rest: Word[]) {
+  const has = (flags: RegExp) => rest.some(word => flags.test(word.text))
+  if (command === 'reset') return has(/^--hard$/)
+  if (command === 'checkout') return has(/^(--|-f|--force|\.|--ours|--theirs|-p|--patch)$/)
+  if (command === 'restore') return !has(/^(-S|--staged)$/) || has(/^(-W|--worktree)$/)
+  if (command === 'clean') return !isDryRun(rest)
+  if (command === 'stash') return /^(drop|clear)$/.test(rest[0]?.text ?? '')
+  if (command === 'switch') return has(/^(-f|--force|--discard-changes)$/)
+  if (command === 'worktree') return rest[0]?.text === 'remove'
+
+  return command === 'rm'
+}
+
+// The places a command changes in a way that matters here: a mover's every path, a copier's destination, the folder
+// a discarding git command runs in, and any file its output is sent to.
+function changedPlaces(words: Command) {
+  const at = words.findIndex(word => !ASSIGNMENT.test(word.text) && !BEFORE_PROGRAM.has(word.text))
+  const places: Word[] = [...words.outputs]
+  if (at < 0) return places
+  const name = nameOf(words[at])
+  const args = words.slice(at + 1)
+  const paths: Word[] = []
+  let target: Word | undefined
+  let isPastFlags = false
+  // A path is any word that isn't a flag, except a suffix's value. The target folder can be given with -t.
+  for (const [k, word] of args.entries()) {
+    const previous = isPastFlags ? '' : (args[k - 1]?.text ?? '')
+    if (!isPastFlags && word.text === '--') isPastFlags = true
+    else if (!isPastFlags && word.text.startsWith('--target-directory=')) target = { ...word, text: word.text.slice(19) }
+    else if (!isPastFlags && /^-t./.test(word.text)) target = { ...word, text: word.text.slice(2) }
+    else if (!isPastFlags && word.text.startsWith('-')) continue
+    else if (/^(-t|--target-directory)$/.test(previous)) target = word
+    else if (!/^(-S|--suffix)$/.test(previous)) paths.push(word)
+  }
+  if (MOVERS.test(name)) places.push(...paths, ...(target ? [target] : []))
+  // A copy only changes its destination, and rsync's remote one isn't on this Mac.
+  const destination = target ?? paths.at(-1)
+  if (COPIERS.test(name) && destination && !(name === 'rsync' && /^[^/]*:/.test(destination.text))) places.push(destination)
+  if (name === 'git') {
+    // git -C moves where it runs, one step at a time, and --git-dir and --work-tree point it elsewhere.
+    const command = gitCommandAt(args)
+    const before = args.slice(0, command < 0 ? args.length : command)
+    if (command >= 0 && gitDiscards(args[command].text, args.slice(command + 1))) {
+      let dir = newWord('.')
+      for (const [k, word] of before.entries()) {
+        const value = word.text.includes('=') ? { ...word, text: word.text.split('=').slice(1).join('=') } : before[k + 1]
+        if (word.text === '-C' && value) dir = value.text.startsWith('/') || value.isDynamic ? value : { ...value, text: `${dir.text}/${value.text}` }
+        if (/^--(git-dir|work-tree)(=|$)/.test(word.text) && value) places.push(value)
+      }
+      places.push(dir)
+    }
+  }
+
+  return places
+}
+
+async function refuseWorktreeChange($: EngineInterface, commands: Command[] | undefined, command: string) {
+  if (!commands) {
+    return /\.claude\/worktrees/.test(command) ? cantTell(command.slice(0, 60)) : undefined
+  }
+  if (!commands.some(words => changedPlaces(words).length)) return undefined
+  const home = await Promise.resolve($.env.get('HOME')).catch(() => undefined)
+  const scope = await sessionScope($, home ?? '')
+  const real = async (path: string) => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath
+  const namesWorktrees = /\.claude\/worktrees/.test(command)
+  for (const words of commands) {
+    for (const place of changedPlaces(words)) {
+      // A variable can only lead somewhere this can't see if the line names a worktree for it to reach.
+      if (place.isDynamic) {
+        if (namesWorktrees) return cantTell(place.text)
+        continue
+      }
+      const text = home ? expandHome(place.text, home) : place.text
+      if (/^(~|[+-]\d|-$)/.test(text) || (!text.startsWith('/') && !scope.base)) return cantTell(place.text)
+      // A pattern is read up to its first wildcard, which is the folder it can reach.
+      const literal = place.globAt >= 0 ? text.slice(0, place.globAt).replace(/[^/]*$/, '') || '.' : text
+      const written = literal.startsWith('/') ? literal : `${scope.base}/${literal}`
+      // A path is read both as written and as the file system follows it: one folder at a time, each link before
+      // the .. after it.
+      let followed = '/'
+      for (const part of written.split('/').filter(each => each && each !== '.')) {
+        followed = part === '..' ? resolve(`${followed}/..`, '/') : resolve(`${followed}/${part}`, '/')
+        followed = (await real(followed)) ?? followed
+      }
+      if ([resolve(written, '/'), followed].some(path => otherWorktree(fold(path), scope, false))) return leaveAlone(place.text)
+    }
+    followCd(words, scope)
+  }
+
+  return undefined
+}
+
 // The reason to refuse a Bash command, or nothing if it may run. Throws if a command that mentions a delete can't be read.
 export async function refuseDelete($: EngineInterface, command: string): Promise<string | undefined> {
   const commands = read(command)
   const stored = refuseStoredProgram(commands, command)
   if (stored) return stored
+  const change = await refuseWorktreeChange($, commands, command)
+  if (change) return change
   const reviewHome = /office-review/i.test(command) ? await $.env.get('HOME') : undefined
   const review = refuseOfficeReview(commands, command, reviewHome)
   if (review) return review
   if (!anyMentionDelete(commands, command, trustedReview(reviewHome))) return undefined
   const home = await $.env.get('HOME')
   if (!home) throw unsure('a command with no home folder')
-  // Without its folder, a session has no worktree of its own and no base for relative names.
-  // The worktree a session owns comes from its root, which a shell cd doesn't move, so a cd into another session's
-  // worktree can't make it look like its own. Relative names still count from where the shell is.
-  const cwd = await Promise.resolve($.session.cwd()).catch(() => undefined)
-  const root = await Promise.resolve($.session.root()).catch(() => undefined)
-  const base = cwd ? normalize(cwd) : undefined
-  const scope: Scope = { home, base, ownWorktree: root ? worktreeOf(normalize(root)) : undefined }
+  const scope = await sessionScope($, home)
   const targets: Target[] = []
   for (const words of commands ?? lex(command)) {
     const refusal = checkCommand(words, scope, targets)
