@@ -76,8 +76,20 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
   const readDollar = (word: Word, isQuoted: boolean) => {
     const start = i
     const after = src[i + 1] ?? ''
-    if (after === '(') {
-      if (src[i + 2] === '(') throw unsure('arithmetic')
+    if (after === '(' && src[i + 2] === '(') {
+      // Arithmetic is a value, but substitutions inside it still run.
+      let depth = 0
+      let end = i + 3
+      for (; ; end++) {
+        if (end >= src.length) throw unsure('unclosed arithmetic')
+        if (src[end] === '(') depth++
+        else if (src[end] === ')' && depth > 0) depth--
+        else if (src[end] === ')') break
+      }
+      if (src[end + 1] !== ')') throw unsure('arithmetic')
+      out.push(...lex(src.slice(i + 3, end), nesting + 1, true))
+      i = end + 2
+    } else if (after === '(') {
       i += 2
       run(')')
     } else if (after === '{') {
@@ -243,11 +255,18 @@ function lex(src: string, nesting = 0, isText = false): Command[] {
         if (c === '(') parens++
         else if (parens > 0) parens--
         i++
+      } else if ((c === '<' || c === '>') && src[i + 1] === '(') {
+        // Process substitution: its commands run, and the word is a file name the shell makes up.
+        const w = current()
+        const from = i
+        i += 2
+        run(')')
+        w.text += src.slice(from, i)
+        w.isDynamic = true
       } else if (c === '<' || c === '>' || (c === '&' && src[i + 1] === '>')) {
         // A redirect's target isn't an argument, and a file descriptor before it isn't either.
         if (word && /^[0-9]+$/.test(word.text) && !word.isDynamic) word = undefined
         endWord()
-        if (src[i + 1] === '(') throw unsure('process substitution')
         if (src.startsWith('<<<', i)) {
           i += 3
           skipsWord = isHereString = true
@@ -929,8 +948,9 @@ const sharedStash = (shown: string) =>
   `Agent Office blocked \`${shown}\` because every worktree of a repo shares one stash, so it could throw away another session's. Drop a stash you made by naming it, as in git stash drop stash@{0}.`
 
 // git commands that only read the worktree, the index and the refs.
-// fetch isn't one, since it can move a checked-out branch with --update-head-ok.
-const GIT_READERS = /^(status|log|diff|show|rev-parse|ls-files|ls-tree|cat-file|blame|grep|describe|shortlog|rev-list|merge-base|for-each-ref|show-ref|whatchanged|count-objects|check-ignore|name-rev)$/
+// fetch isn't one, since it can move a checked-out branch with --update-head-ok. Nor is grep, which runs a program to
+// open files in, through -O in any cluster of flags or any start of --open-files-in-pager.
+const GIT_READERS = /^(status|log|diff|show|rev-parse|ls-files|ls-tree|cat-file|blame|describe|shortlog|rev-list|merge-base|for-each-ref|show-ref|whatchanged|count-objects|check-ignore|name-rev)$/
 // Variables that make git, a pager or gh run a program of the line's choosing, such as GIT_EXTERNAL_DIFF for git
 // diff and GIT_CONFIG_KEY_0 with its value, which is -c in the environment.
 const RUNS_FROM_ENVIRONMENT = /^(GIT_\w+|PAGER|EDITOR|VISUAL|SSH_ASKPASS|LESS\w*|GH_\w+|BROWSER)\+?=/
@@ -997,7 +1017,7 @@ const PATH_CHANGERS = /^(g?mv|g?cp|rsync|ln|install|ditto|tar|unzip|dd|touch|tru
 async function refuseWorktreeChange($: EngineInterface, commands: Command[] | undefined, command: string) {
   if (!commands) {
     // Any path, or a program that might change files, could reach one. A language can move files itself.
-    const mayChange = /\b(mv|cp|rsync|git|cd|ln|tar|install|ditto|unzip|dd|tee|touch)\b|[>/~]|\.\.|worktrees/.test(command) || LANGUAGES.test(command)
+    const mayChange = /\b(mv|cp|rsync|git|cd|ln|tar|install|ditto|unzip|dd|tee|touch)\b|[>/~]|\.\.|worktrees/.test(command) || command.split(/[\s;&|()]+/).some(word => LANGUAGES.test(word))
 
     return mayChange ? cantTell('a line the safety check could not read') : undefined
   }

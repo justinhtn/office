@@ -1104,6 +1104,16 @@ const CHANGE_REFUSED: [string, string][] = [
   ['a copy to a path from git worktree list', `R=$(git worktree list --porcelain | awk 'NR==5{print $2}'); cp /tmp/x "$R/notes.txt"`],
   ['a copy onto a bare name that links into another worktree', 'cp /tmp/guard-test/a.txt lnk'],
   ['output written through a bare name that links into another worktree', 'echo x > lnk'],
+  // From the third review: git grep runs a program through -O in a cluster or a shortened --open-files-in-pager.
+  ['git grep with -O in a cluster', `git -C ${OTHER} grep -nO'git reset --hard; true' x`],
+  ['git grep with a shortened --open-files-in-pager', `git -C ${OTHER} grep --open='git reset --hard; true' x`],
+  ['git grep -iO after a cd', `cd ${OTHER} && git grep -iO'git reset --hard; true' x`],
+  ['git grep in another worktree', `git -C ${OTHER} grep -n TODO`],
+  // Process substitution and arithmetic are read now, rather than refused as unreadable.
+  ['output from process substitution into another worktree', `cat <(echo x) > ${OTHER}/notes.txt`],
+  ['a move inside process substitution', `cat <(mv ${OTHER}/notes.txt /tmp/x)`],
+  ['a substitution inside arithmetic', `echo $(( $(git -C ${OTHER} reset --hard >/dev/null; echo 1) ))`],
+  ['python in a line it still can\'t read', `((1)); python3 -c "import os, shutil; os.chdir(os.pardir); shutil.move('theirs' + chr(47) + 'a', 'x')"`],
 ]
 
 for (const [why, command] of CHANGE_REFUSED) {
@@ -1161,7 +1171,10 @@ const CHANGE_ALLOWED: [string, string][] = [
   ['a cd to the top of its own checkout', 'cd "$(git rev-parse --show-toplevel)" && npm test'],
   ['a cd to a new temporary folder', 'cd "$(mktemp -d)" && git init'],
   ['adding a new worktree', `git worktree add ${PROJECT}/.claude/worktrees/new -b new`],
-  ['git grep in another worktree', `git -C ${OTHER} grep -n TODO`],
+  ['plain grep in another worktree', `grep -rn TODO ${OTHER}/src`],
+  ['arithmetic before a read', 'END=$((10+40)); sed -n "10,${END}p" src/app.ts'],
+  ['diff with process substitution', 'diff <(git show main:src/a.ts) src/a.ts'],
+  ['arithmetic written to a file', 'echo $((1+2)) > /tmp/guard-test/sum.txt'],
   ['git diff in another worktree, written to a file outside it', `git -C ${OTHER} diff > /tmp/guard-test/their.diff`],
 ]
 
