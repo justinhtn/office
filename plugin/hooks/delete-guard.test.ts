@@ -1088,6 +1088,22 @@ const CHANGE_REFUSED: [string, string][] = [
   // The stash is shared by every worktree.
   ['git stash clear from its own worktree', 'git stash clear'],
   ['git stash drop of the newest stash from its own worktree', 'git stash drop'],
+  // From the second review: readers made to run a program, flags with paths joined, and unreadable languages.
+  ['git grep -O running a program', `git -C ${OTHER} grep -O/tmp/x/evil.sh x`],
+  ['git grep --open-files-in-pager', `git -C ${OTHER} grep --open-files-in-pager=/tmp/x/evil.sh x`],
+  ['GIT_EXTERNAL_DIFF in front of git diff', `GIT_EXTERNAL_DIFF='git checkout -- .; true' git -C ${OTHER} diff`],
+  ['git config in the environment', `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=/tmp/x/evil.sh git -C ${OTHER} status`],
+  ['git fetch --upload-pack', `git -C ${OTHER} fetch --upload-pack=/tmp/x/evil.sh .`],
+  ['git fetch, which can move a checked-out branch', `git -C ${OTHER} fetch origin +main:main --update-head-ok`],
+  ['rg --pre running a program', `rg --pre /tmp/x/evil.sh x ${OTHER}`],
+  ['sort -o with a relative path joined', 'sort -o../theirs/notes.txt /tmp/x'],
+  ['cp -t with a relative path joined', 'gcp -t../theirs /tmp/a.txt'],
+  ['tar -C.. joined', 'tar -xf /tmp/a.tar -C.. theirs/notes.txt'],
+  ['python in a line it can\'t read', `echo $((1)); python3 -c "import shutil; shutil.move('../theirs/a', '/tmp/a')"`],
+  ['a copy to a path built from pwd', 'D=$(pwd); cp /tmp/x "${D%/*}/theirs/notes.txt"'],
+  ['a copy to a path from git worktree list', `R=$(git worktree list --porcelain | awk 'NR==5{print $2}'); cp /tmp/x "$R/notes.txt"`],
+  ['a copy onto a bare name that links into another worktree', 'cp /tmp/guard-test/a.txt lnk'],
+  ['output written through a bare name that links into another worktree', 'echo x > lnk'],
 ]
 
 for (const [why, command] of CHANGE_REFUSED) {
@@ -1142,6 +1158,11 @@ const CHANGE_ALLOWED: [string, string][] = [
   ['a rename loop', 'for f in a b; do mv "$f.txt" "$f.md"; done'],
   ['a relative pattern in its own worktree', 'cp *.json /tmp/guard-test/'],
   ['a commit whose message names another worktree', `git commit -m "$(cat <<'EOF'\nDon't touch ${OTHER}\nEOF\n)"`],
+  ['a cd to the top of its own checkout', 'cd "$(git rev-parse --show-toplevel)" && npm test'],
+  ['a cd to a new temporary folder', 'cd "$(mktemp -d)" && git init'],
+  ['adding a new worktree', `git worktree add ${PROJECT}/.claude/worktrees/new -b new`],
+  ['git grep in another worktree', `git -C ${OTHER} grep -n TODO`],
+  ['git diff in another worktree, written to a file outside it', `git -C ${OTHER} diff > /tmp/guard-test/their.diff`],
 ]
 
 for (const [why, command] of CHANGE_ALLOWED) {

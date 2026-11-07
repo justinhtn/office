@@ -929,11 +929,15 @@ const sharedStash = (shown: string) =>
   `Agent Office blocked \`${shown}\` because every worktree of a repo shares one stash, so it could throw away another session's. Drop a stash you made by naming it, as in git stash drop stash@{0}.`
 
 // git commands that only read the worktree, the index and the refs.
-const GIT_READERS = /^(status|log|diff|show|rev-parse|ls-files|ls-tree|cat-file|blame|grep|describe|shortlog|rev-list|merge-base|for-each-ref|show-ref|whatchanged|count-objects|check-ignore|name-rev|fetch)$/
+// fetch isn't one, since it can move a checked-out branch with --update-head-ok.
+const GIT_READERS = /^(status|log|diff|show|rev-parse|ls-files|ls-tree|cat-file|blame|grep|describe|shortlog|rev-list|merge-base|for-each-ref|show-ref|whatchanged|count-objects|check-ignore|name-rev)$/
+// Variables that make git, a pager or gh run a program of the line's choosing, such as GIT_EXTERNAL_DIFF for git
+// diff and GIT_CONFIG_KEY_0 with its value, which is -c in the environment.
+const RUNS_FROM_ENVIRONMENT = /^(GIT_\w+|PAGER|EDITOR|VISUAL|SSH_ASKPASS|LESS\w*|GH_\w+|BROWSER)\+?=/
 
 function gitReads(args: Word[]) {
-  // Config given on the command line or an output file can make even a reader change things.
-  if (args.some(arg => /^(-c|--config-env|--exec-path|--output)/.test(arg.text))) return false
+  // Config given on the command line, an output file, or a program to open files in can make even a reader change things.
+  if (args.some(arg => /^(-c|--config-env|--exec-path|--output|-O|--open-files-in-pager)/.test(arg.text))) return false
   const at = gitCommandAt(args)
   const command = args[at]?.text ?? ''
   const rest = args.slice(at + 1)
@@ -942,7 +946,8 @@ function gitReads(args: Word[]) {
   if (command === 'branch') return onlyFlags(/^(-a|--all|-r|--remotes|-v|-vv|--list|--show-current)$/)
   if (command === 'remote') return onlyFlags(/^(-v|--verbose)$/) || /^(show|get-url)$/.test(rest[0]?.text ?? '')
   if (command === 'stash') return /^(list|show)$/.test(rest[0]?.text ?? '')
-  if (command === 'worktree') return rest[0]?.text === 'list'
+  // Adding a worktree makes a new folder, and git won't add one where a worktree already is.
+  if (command === 'worktree') return /^(list|add)$/.test(rest[0]?.text ?? '')
   if (command === 'config') return rest.some(word => /^(--get|--get-all|--get-regexp|--list|-l)$/.test(word.text))
   if (command === 'tag') return onlyFlags(/^(-l|--list|-n\d*)$/)
 
@@ -960,6 +965,8 @@ function isReader(words: Command, trusted: string[] = []) {
   // The main checkout's office-review reads its body file and posts it, and writes nothing here.
   if (trusted.includes(words[at].text)) return true
   if (words[at].isDynamic) return false
+  // A program it's told to run, by a flag or a variable in front of it, could do anything.
+  if (args.some(arg => RUNS_A_PROGRAM.test(arg.text)) || words.slice(0, at).some(word => RUNS_FROM_ENVIRONMENT.test(word.text))) return false
   if (/^(cd|pushd|popd|chdir)$/.test(name)) return true
   if (name === 'git') return gitReads(args)
   if (/^g?find$/.test(name)) return !args.some(arg => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(arg.text))
@@ -982,12 +989,15 @@ function dropsSharedStash(words: Word[]) {
 // variables for them. A variable or substitution there could lead anywhere.
 const LOCATION_FLAGS = /^(-C|--git-dir|--work-tree)$/
 const LOCATION_ASSIGNMENT = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_COMMON_DIR|CDPATH|cdpath)\+?=/
+// Substitutions whose place is known: the top of the shell's own git checkout, and a new temporary folder.
+const SAFE_PLACE = /^\$\((?:(git rev-parse --show-toplevel)|mktemp -d(?: -t [\w.-]+)?)\)$/
 // Programs that change the paths they're given, so a variable among them could name anything.
 const PATH_CHANGERS = /^(g?mv|g?cp|rsync|ln|install|ditto|tar|unzip|dd|touch|truncate|tee|g?sed|patch|chmod|chown)$/
 
 async function refuseWorktreeChange($: EngineInterface, commands: Command[] | undefined, command: string) {
   if (!commands) {
-    const mayChange = /\b(mv|cp|rsync|git|cd|ln|tar|install|ditto|unzip|dd|tee|touch)\b|>|worktrees/.test(command)
+    // Any path, or a program that might change files, could reach one. A language can move files itself.
+    const mayChange = /\b(mv|cp|rsync|git|cd|ln|tar|install|ditto|unzip|dd|tee|touch)\b|[>/~]|\.\.|worktrees/.test(command) || LANGUAGES.test(command)
 
     return mayChange ? cantTell('a line the safety check could not read') : undefined
   }
@@ -1058,9 +1068,9 @@ async function refuseWorktreeChange($: EngineInterface, commands: Command[] | un
       return patternReaches(resolve(written, '/'), rest) || patternReaches(await follow(written), rest) ? 'other' : undefined
     }
     const plain = isOther(resolve(written, '/'))
-    // Following links costs a look at each folder, so only a word with a / in it is followed.
 
-    return plain || (text.includes('/') && isOther(await follow(written))) ? 'other' : undefined
+    // A bare name is followed too, since it can be a link into another worktree.
+    return plain || isOther(await follow(written)) ? 'other' : undefined
   }
 
   for (const words of commands) {
@@ -1073,10 +1083,12 @@ async function refuseWorktreeChange($: EngineInterface, commands: Command[] | un
       const previous = words[k - 1]?.text ?? ''
       hasCdpath ||= /^(export\s+)?(CDPATH|cdpath)\+?=/.test(word.text)
       if (word.isDynamic) {
+        // The top of the shell's own git checkout, and a new temporary folder, are places it knows.
+        if (SAFE_PLACE.test(word.text)) continue
         const isLocation = LOCATION_FLAGS.test(previous) || /^--(git-dir|work-tree)=/.test(word.text) || LOCATION_ASSIGNMENT.test(word.text) || (k > at && /^(cd|pushd|chdir)$/.test(name))
         // Elsewhere, as a file to write or move, a variable is unclear only when the line also reaches up or names a
         // worktree for it to lead to, so rename loops and output to "$log" still run.
-        const mayLeadThere = /\.\.|worktrees|\$\{?(PWD|OLDPWD)\b|dirname/.test(command)
+        const mayLeadThere = /\.\.|worktree|\$\{?(PWD|OLDPWD)\b|\bpwd\b|dirname|rev-parse|%\//.test(command)
         if (isLocation || ((isOutput || isChanger) && mayLeadThere)) {
           unclear ??= word.text
           writesThere ||= isOutput
@@ -1085,12 +1097,15 @@ async function refuseWorktreeChange($: EngineInterface, commands: Command[] | un
       }
       for (const token of word.text.split(/[\s'"`;&|()<>=,:]+/)) {
         // A flag can carry a path joined to it, as in -t/folder.
-        const path = token.startsWith('-') && !isOutput ? token.slice(Math.max(token.indexOf('/'), 0)) : token
-        if (!path || (path.startsWith('-') && !isOutput)) continue
-        const where = await reaches(path)
-        if (where === 'other') reached ??= word.text
-        if (where === 'unclear' && (isOutput || isChanger || k > at)) unclear ??= word.text
-        writesThere ||= Boolean(where) && isOutput
+        // A flag can carry a path joined to its letters, as in -t/folder, -o../x or -C.., so every ending after the
+        // flag's first letter is read too.
+        const paths = token.startsWith('-') && !isOutput ? [...token.slice(2)].map((_, n) => token.slice(2 + n)).filter(each => /[/.~]/.test(each)) : [token]
+        for (const path of paths) {
+          const where = await reaches(path)
+          if (where === 'other') reached ??= word.text
+          if (where === 'unclear' && (isOutput || isChanger || k > at)) unclear ??= word.text
+          writesThere ||= Boolean(where) && isOutput
+        }
       }
     }
     isAllReading &&= isReader(words, trusted) && !writesThere
@@ -1100,7 +1115,11 @@ async function refuseWorktreeChange($: EngineInterface, commands: Command[] | un
       const targets = args.filter(word => !/^(-[LP]+|--)$/.test(word.text))
       const target = targets[0]
       const isClear = name !== 'popd' && targets.length <= 1 && args.every(word => !word.text.startsWith('-') || /^(-[LP]+|--)$/.test(word.text))
+      const safe = target && SAFE_PLACE.exec(target.text)
       if (!target && isClear && name !== 'pushd') base = home ? normalize(home) : undefined
+      // The top of the checkout the shell is in is its worktree, if it's in one. Elsewhere it can't be placed.
+      else if (isClear && safe?.[1]) base = base && WORKTREE.exec(base)?.[1]
+      else if (isClear && safe) base = '/private/tmp/new-temporary-folder'
       else if (!isClear || !target || target.isDynamic || target.globAt >= 0 || UNCLEAR_PLACE.test(target.text.replace(/(^|\/)\.\.(\/|$)/g, '$1x$2')) || (hasCdpath && !target.text.startsWith('/'))) base = undefined
       else {
         const text = home ? expandHome(target.text, home) : target.text
